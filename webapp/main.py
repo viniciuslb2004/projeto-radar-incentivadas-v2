@@ -703,6 +703,7 @@ try:
         buscar_rapido,
         buscar_rapido_com_vetor,
         gerar_narrativa,
+        preparar_texto_enriquecido,
         refinar_resultados,
     )
     # Aliases: editais_search.py TAMBEM exporta montar_prompt_refino (com uma
@@ -774,6 +775,20 @@ try:
         navegador gerar o vetor com o MESMO texto que o modo local sempre embutiu --
         sem isso o resultado nao seria comparavel. So string processing, sem modelo."""
         return {"query_expandida": _expandir_query(q)}
+
+    @app.get("/api/busca/preparar_enriquecido")
+    def busca_preparar_enriquecido(q: str = Query(..., min_length=3)):
+        """So usado no modo hospedado: equivalente ao bloco de enriquecimento via web
+        que buscar_rapido() faz sozinho no modo local -- so que aqui o embedding roda
+        no navegador, entao o cliente precisa de 2 idas e vindas: 1a chamada (POST
+        /api/busca) volta com confianca_baixa=True, o navegador chama esta rota para
+        pesquisar `q` na web (buscar_atividade_empresa, so requests puro -- nunca
+        chama get_model()/SentenceTransformer aqui) e reembute o texto devolvido antes
+        de chamar POST /api/busca de novo. Ver o retry em webapp/static/js/busca.js."""
+        try:
+            return preparar_texto_enriquecido(q)
+        except Exception as e:
+            return {"erro": f"enriquecimento indisponivel no momento: {e}"}
 
     @app.post("/api/busca")
     def busca_com_vetor(body: dict):
@@ -854,6 +869,10 @@ except ImportError as e:
 
     @app.get("/api/busca/preparar")
     def busca_preparar_indisponivel(q: str = ""):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+    @app.get("/api/busca/preparar_enriquecido")
+    def busca_preparar_enriquecido_indisponivel(q: str = ""):
         return {"erro": f"motor de busca ainda nao configurado: {e}"}
 
     @app.get("/api/busca/refinar")
@@ -1177,7 +1196,7 @@ try:
                 return {
                     "hospedado": True, "cache": False, "precisa_gerar": True,
                     "prompt": prep["prompt"], "modelo": prep["modelo"], "opcoes": prep["opcoes"],
-                    "fallback": prep["fallback"],
+                    "fallback": prep["fallback"], "prefixo": prep.get("prefixo", ""),
                 }
             return resumir_edital(edital_id, forcar=forcar)
         except Exception as e:

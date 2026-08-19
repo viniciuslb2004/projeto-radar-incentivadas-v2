@@ -115,6 +115,49 @@ def _melhor_match(documentos: list, padrao: str):
     return candidatos[0]
 
 
+def extrair_dados_estruturados(texto: str) -> dict:
+    """Pre-extrai, via regex, os dois pontos do Anexo 1 que o modelo local (3B,
+    quantizado) mais erra quando tem que garimpar num texto corrido de 15-25k chars:
+    as linhas tematicas (o texto costuma ter varias, ex "Linha 1: ...", e o modelo as
+    vezes ignora todas e inventa "temas" a partir do titulo do edital) e o valor
+    minimo/maximo solicitado (item "5. Valor Solicitado", em prosa simples -- mas o
+    modelo por vezes confunde com os numeros da tabela de contrapartida do item
+    seguinte, que sao faixas de RECEITA da empresa, nao valor de projeto).
+
+    So cobre esses dois pontos porque sao os unicos com um padrao textual estavel o
+    suficiente pra extrair com confianca (testado contra editais reais do programa
+    "Mais Inovacao Brasil"/Subvencao em Fluxo Continuo). A tabela de contrapartida em
+    si (item 6) NAO e parseada aqui -- a extracao de texto do PDF quebra as colunas da
+    tabela em uma ordem diferente da visual (numeros de porte/percentual saem
+    embaralhados), e um parser regex arriscaria produzir um numero errado com a MESMA
+    aparencia de confiavel que o problema que estamos corrigindo. Mais seguro deixar
+    esse pedaco por conta do prompt (ver montar_prompt_resumo em editais_search.py),
+    com instrucao para o modelo ser conservador quando a tabela parecer fora de ordem."""
+    if not texto:
+        return {"linhas_tematicas": [], "valor_simples": None, "valor_rede": None}
+
+    linhas = []
+    for numero, titulo in re.findall(r"Linha\s+(\d+)\s*[:\-–]?\s*([^\n]+)", texto):
+        titulo = titulo.strip().rstrip(":")
+        if titulo and len(titulo) < 200:
+            linhas.append(f"Linha {numero}: {titulo}")
+
+    def _valor(rotulo: str):
+        m = re.search(
+            rf"Arranjo {rotulo}:\s*entre o m[ií]nimo de ([^\n]+?)\s+e o m[aá]ximo de ([^\n(]+)",
+            texto,
+        )
+        if not m:
+            return None
+        return f"mínimo {m.group(1).strip()}, máximo {m.group(2).strip()}"
+
+    return {
+        "linhas_tematicas": linhas,
+        "valor_simples": _valor("Simples"),
+        "valor_rede": _valor("em Rede"),
+    }
+
+
 def montar_texto_documento_chave(documentos: list) -> str:
     """Acha o Regulamento e o Anexo 1 (as fontes reais de linhas tematicas, valores e
     contrapartida) entre os documentos do edital, baixa os PDFs e extrai o texto,

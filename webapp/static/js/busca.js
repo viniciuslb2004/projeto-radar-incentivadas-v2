@@ -59,6 +59,9 @@ function renderResultados(data) {
   if (data.confianca_baixa) {
     html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${data.query}" na base do BNDES/FINEP. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round(data.melhor_score * 100)}%).</div>`;
   }
+  if (data.enriquecido_via_web) {
+    html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${data.query_original || data.query}" na web, para tentar entender melhor do que se trata.</div>`;
+  }
 
   const prob = data.probabilidade_aprovacao;
   if (prob) {
@@ -293,6 +296,29 @@ async function runBusca(q) {
   if (data.erro) {
     container.innerHTML = `<p class="empty-state">${data.erro}</p>`;
     return;
+  }
+
+  // Modo HOSPEDADO: a 1a passada ja veio com confianca baixa (nome de empresa/termo
+  // que a base nao conhece, ex: "Quicksoft") -- tenta UMA 2a passada pesquisando `q` na
+  // web (equivalente ao que buscar_rapido() ja faz sozinho no modo local, ver
+  // search.py) e reembute com o texto descoberto. So substitui o resultado original se
+  // o novo melhor_score vier melhor; qualquer falha aqui so mantem o resultado original
+  // (nunca deixa a busca sem resposta por causa de um enriquecimento que nao deu certo).
+  if (window.MODO_HOSPEDADO && data.confianca_baixa) {
+    try {
+      const prepEnriquecido = await fetchJSON("/api/busca/preparar_enriquecido?" + qs({ q }), 10000);
+      if (!prepEnriquecido.erro && prepEnriquecido.enriquecido_via_web && prepEnriquecido.query_expandida) {
+        const vetorEnriquecido = await embutirQuery(prepEnriquecido.query_expandida);
+        const dataEnriquecida = await postJSON("/api/busca", { q, vetor: vetorEnriquecido });
+        if (!dataEnriquecida.erro && dataEnriquecida.melhor_score > data.melhor_score) {
+          dataEnriquecida.query_original = q;
+          dataEnriquecida.enriquecido_via_web = true;
+          data = dataEnriquecida;
+        }
+      }
+    } catch (e) {
+      // enriquecimento opcional -- se falhar, so mantem o resultado original.
+    }
   }
 
   renderResultados(data);

@@ -240,7 +240,12 @@ async function openEditalDetalhe(id) {
         } catch (e) {
           texto = null;
         }
-        const textoFinal = (texto && texto.trim()) || resp.fallback;
+        // resp.prefixo (linhas tematicas + valor, ja extraidos pelo backend por regex,
+        // ver extrair_dados_estruturados em editais_documentos.py) e montado ANTES do
+        // texto gerado pela IA local -- nao pedimos pra IA reescrever essa parte porque
+        // um modelo local pequeno regularmente ignora dados prontos e reinventa esses
+        // dois itens a partir do titulo do edital.
+        const textoFinal = texto && texto.trim() ? (resp.prefixo || "") + texto.trim() : resp.fallback;
         btnResumo.textContent = "Salvando para todo mundo...";
         const salvo = await postJSON(`/api/editais/${id}/resumo`, { resumo: textoFinal }, 15000);
         renderResumoIA(resumoContainer, salvo && !salvo.erro ? salvo : { resumo: textoFinal });

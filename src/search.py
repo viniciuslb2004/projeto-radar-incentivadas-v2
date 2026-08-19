@@ -8,6 +8,7 @@ import requests
 
 from db import get_connection
 from embeddings import EMB_PATH, get_model
+from empresa_lookup import buscar_atividade_empresa
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2:3b-instruct-q4_K_M"
@@ -56,6 +57,71 @@ EXPANSAO_TERMOS = {
     "saas": "empresa de software como servico, tecnologia da informacao",
 }
 
+# Diferente do EXPANSAO_TERMOS acima (jargao que NAO aparece no corpus e precisa ser
+# traduzido), estes sao termos que aparecem no corpus mas em MAIS DE UM SENTIDO --
+# palavras genuinamente ambiguas onde o embedding "gruda" no sentido errado por causa
+# da raiz textual parecida. Confirmado empiricamente (nao e hipotetico): buscar
+# "empresa de cabo de fibra otica" devolvia como top resultados empresas TEXTEIS
+# (score 0.54, ACIMA do CONFIANCA_MINIMA, ou seja sem nenhum aviso de baixa
+# confianca) porque "fibra otica" (telecom) e "fibra" textil/sintetica partilham
+# a mesma raiz. Mesmo padrao testado e confirmado para "planta" (industrial vs
+# botanica) e "celula" (biologia vs celulose/papel) -- ver comentarios por bloco.
+TERMOS_AMBIGUOS = {
+    # "fibra optica"/"cabo optico" (telecom, rede de dados) tem a mesma raiz textual
+    # de "fibra" textil/sintetica (fiacao, tecelagem) -- o setor mais proximo no
+    # corpus por pura semelhanca de palavra, mas um setor completamente diferente.
+    # Cobre as 4 grafias correntes (com/sem acento, com/sem "p", pois BNDES/FINEP
+    # nao usa "banda larga"/"fibra optica" como segmento -- usamos vocabulario que
+    # de fato aparece: "TELECOMUNICACOES POR FIO", "CONSTRUCAO DE ESTACOES E REDES
+    # DE TELECOMUNICACOES", "PROVEDORES DE ACESSO AS REDES DE COMUNICACOES").
+    "fibra otica": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "fibra ótica": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "fibra optica": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "fibra óptica": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabo otico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabo ótico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabo optico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabo óptico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabeamento otico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabeamento ótico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabeamento optico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+    "cabeamento óptico": "telecomunicacoes, redes de telecomunicacoes por fio, construcao de redes de telecomunicacoes, provedores de acesso a redes de comunicacoes, infraestrutura de internet e banda larga, equipamentos de telecomunicacoes",
+
+    # "planta" no sentido de unidade fabril colide com "planta" no sentido botanico --
+    # o corpus tem muito mais floricultura/agricultura/"florestas plantadas" do que
+    # descricoes industriais usando a palavra "planta" (CNAE usa "fabrica", "usina",
+    # "unidade industrial"). Sem isso, "expansao de planta industrial" caia em
+    # empresas de sementes/flores/defensivos agricolas em vez de industria de verdade
+    # (confirmado: score 0.49, sem aviso de baixa confianca).
+    "planta industrial": "expansao de unidade fabril, ampliacao de capacidade produtiva industrial, nova linha de producao, planta fabril, unidade de manufatura",
+    "expansao de planta": "expansao de unidade fabril, ampliacao de capacidade produtiva industrial, nova linha de producao, planta fabril, unidade de manufatura",
+    "expansao da planta": "expansao de unidade fabril, ampliacao de capacidade produtiva industrial, nova linha de producao, planta fabril, unidade de manufatura",
+    "ampliacao de planta": "expansao de unidade fabril, ampliacao de capacidade produtiva industrial, nova linha de producao, planta fabril, unidade de manufatura",
+    "ampliacao da planta": "expansao de unidade fabril, ampliacao de capacidade produtiva industrial, nova linha de producao, planta fabril, unidade de manufatura",
+
+    # "celula"/"celulas" (biologia -- celulas-tronco, banco de celulas e tecidos) tem
+    # raiz textual quase identica a "celulose" (papel e celulose, um dos maiores
+    # setores do corpus BNDES/FINEP) e o modelo confunde as duas: "cultura de
+    # celulas-tronco" virava um ranking de fabricantes de celulose e papel (score
+    # 0.55+, sem aviso). NAO mexemos na palavra "celula" sozinha porque ela tambem
+    # aparece em "celula fotovoltaica/solar" (energia), que ja funciona bem e nao
+    # deve ser afetado -- so as chaves abaixo, especificas do sentido biologico.
+    # Limitacao conhecida: a expansao melhora bastante o ranking mas nao elimina de
+    # todo a interferencia da celulose para a frase mais curta e nua ("cultura de
+    # celulas-tronco"), onde a raiz textual da propria query (nao so o vocabulario
+    # do corpus) ja pesa muito na direcao errada -- ver nota no relatorio de teste.
+    "cultura de celulas": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "cultura de células": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "banco de celulas": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "banco de células": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "celulas-tronco": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "células-tronco": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "celulas tronco": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "células tronco": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "celulas humanas": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+    "células humanas": "medicina regenerativa, terapia celular, celulas-tronco, criobiologia, banco de celulas e tecidos humanos, laboratorio de biotecnologia em saude, pesquisa biomedica, servicos de saude humana",
+}
+
 _emb_cache = None
 
 
@@ -95,9 +161,15 @@ def warmup_hospedado():
 def _expandir_query(query: str) -> str:
     q_lower = query.lower()
     extras = [expansao for termo, expansao in EXPANSAO_TERMOS.items() if termo in q_lower]
+    extras += [expansao for termo, expansao in TERMOS_AMBIGUOS.items() if termo in q_lower]
     if not extras:
         return query
-    return query + " | " + " | ".join(extras)
+    # dict.fromkeys em vez de set() para nao embaralhar a ordem -- varias chaves de
+    # TERMOS_AMBIGUOS (ex.: "fibra otica"/"fibra ótica"/"fibra optica") sao so
+    # variantes de grafia do mesmo termo e batem ao mesmo tempo, apontando para o
+    # MESMO texto de expansao; sem isso ele entraria duplicado na query expandida.
+    extras_unicos = list(dict.fromkeys(extras))
+    return query + " | " + " | ".join(extras_unicos)
 
 
 def _parse_date(s: str) -> datetime.date:
@@ -599,11 +671,34 @@ def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
     Em vez de um top-K fixo, devolve TODAS as operacoes com similaridade acima do
     limiar de relevancia (ate max_resultados, que e so uma protecao de seguranca,
     nao um limite pratico) -- assim uma busca especifica traz todas as operacoes
-    parecidas que existem, nao so uma amostra arbitraria."""
+    parecidas que existem, nao so uma amostra arbitraria.
+
+    Se a 1a passada vier com confianca_baixa (ex: nome de empresa que nunca pegou
+    credito incentivado, como "Quicksoft"), tenta UMA 2a passada: pesquisa `query` na
+    web (buscar_atividade_empresa, ver empresa_lookup.py) para descobrir o que a
+    empresa/termo faz e reembute a query com esse reforco. So substitui o resultado
+    original se o novo melhor_score for de fato melhor -- e so paga o custo da busca
+    web quando a 1a passada ja falhou, entao uma busca normal (confianca_baixa=False)
+    nao tem nenhuma latencia extra."""
     query_expandida = _expandir_query(query)
     model = get_model()
     query_vec = model.encode([query_expandida], normalize_embeddings=True)[0]
-    return _buscar_rapido_nucleo(query, query_expandida, query_vec, max_resultados)
+    resultado = _buscar_rapido_nucleo(query, query_expandida, query_vec, max_resultados)
+    resultado["query_original"] = query
+    resultado["enriquecido_via_web"] = False
+
+    if resultado["confianca_baixa"]:
+        descricao = buscar_atividade_empresa(query)
+        if descricao:
+            query_enriquecida = f"{query_expandida} | {descricao}"
+            vec_enriquecido = model.encode([query_enriquecida], normalize_embeddings=True)[0]
+            candidato = _buscar_rapido_nucleo(query, query_enriquecida, vec_enriquecido, max_resultados)
+            if candidato["melhor_score"] > resultado["melhor_score"]:
+                candidato["query_original"] = query
+                candidato["enriquecido_via_web"] = True
+                resultado = candidato
+
+    return resultado
 
 
 def buscar_rapido_com_vetor(query: str, query_vec, max_resultados: int = 3000) -> dict:
@@ -620,6 +715,21 @@ def buscar_rapido_com_vetor(query: str, query_vec, max_resultados: int = 3000) -
     if norma > 0:
         vetor = vetor / norma
     return _buscar_rapido_nucleo(query, query_expandida, vetor, max_resultados)
+
+
+def preparar_texto_enriquecido(query: str) -> dict:
+    """Equivalente hospedado do bloco de enriquecimento dentro de buscar_rapido():
+    o embedding roda no NAVEGADOR nesse modo, entao este servidor so pode fazer a
+    parte que nao envolve modelo -- a busca web (buscar_atividade_empresa, requests
+    puro, sem custo de RAM) -- e devolver o texto para o navegador reembutir e
+    chamar POST /api/busca de novo. So deve ser chamado pelo cliente DEPOIS que a
+    1a chamada a POST /api/busca ja voltou com confianca_baixa=True (ver rota
+    /api/busca/preparar_enriquecido em webapp/main.py e o retry em busca.js)."""
+    descricao = buscar_atividade_empresa(query)
+    if not descricao:
+        return {"query_expandida": _expandir_query(query), "enriquecido_via_web": False}
+    query_enriquecida = f"{_expandir_query(query)} | {descricao}"
+    return {"query_expandida": query_enriquecida, "enriquecido_via_web": True}
 
 
 def buscar(query: str, max_resultados: int = 3000) -> dict:

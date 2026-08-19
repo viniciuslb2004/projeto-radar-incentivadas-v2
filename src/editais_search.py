@@ -9,6 +9,7 @@ import numpy as np
 import requests
 
 from db import get_connection
+from editais_documentos import extrair_dados_estruturados
 from editais_embeddings import EMB_PATH, build_editais_embeddings
 from embeddings import get_model
 
@@ -339,47 +340,18 @@ def resumir_edital(edital_id: int, forcar: bool = False) -> dict:
         fallback = _template_resumo_elegibilidade(edital)
         resumo = fallback
         try:
-            publicos_txt = ", ".join(edital.get("publico_alvo") or []) or "não informado"
-            documento_chave = edital.get("documento_chave_texto")
-            if documento_chave:
-                fonte_label = "Texto extraído do Regulamento e do Anexo 1 deste edital"
-                fonte_texto = documento_chave
-            else:
-                fonte_label = "Descrição resumida do edital (Regulamento/Anexo 1 não puderam ser lidos automaticamente)"
-                fonte_texto = (edital.get("descricao_texto") or "")[:3000]
-
-            prompt = (
-                "Voce e um analista resumindo um edital/chamada publica da FINEP para uma empresa que quer "
-                "saber rapidamente se pode se candidatar e em quais condicoes.\n\n"
-                f"Titulo: {edital['titulo']}\n"
-                f"Tema: {edital.get('tema_principal') or 'nao informado'}\n"
-                f"Publico-alvo (chaves brutas): {publicos_txt}\n"
-                f"Tipo de oportunidade: {edital.get('tipo_oportunidade') or 'nao informado'}\n"
-                f"Contrapartida (categoria declarada pela FINEP): {edital.get('contrapartida') or 'nao informada'}\n"
-                f"Regiao: {edital.get('regiao') or 'nao informada'}\n"
-                f"{_fmt_prazo(edital).capitalize()}.\n\n"
-                f"{fonte_label}:\n{fonte_texto}\n\n"
-                "Com base SOMENTE no texto acima, responda em portugues, em 4 topicos curtos e objetivos:\n"
-                "1) Linhas tematicas: liste cada linha tematica ou grupo de concorrencia mencionado e o tema/foco "
-                "de cada uma (se so houver uma linha, descreva-a).\n"
-                "2) Valor: o valor minimo e maximo que pode ser solicitado, com os numeros exatos do texto "
-                "(diferencie por tipo de arranjo se o texto fizer essa distincao).\n"
-                "3) Quem pode pleitear: que tipo de empresa/arranjo e elegivel (porte, parcerias/ICTs exigidas, "
-                "restricoes).\n"
-                "4) Contrapartida: o percentual ou tipo de contrapartida exigido.\n"
-                "Se alguma dessas informacoes NAO aparecer no texto acima, escreva 'nao informado no documento' "
-                "para aquele item -- NUNCA invente numeros, percentuais ou linhas que nao estao no texto. "
-                "Responda direto com os 4 topicos -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
-                "sem repetir estas instrucoes."
-            )
+            # Mesmo prompt do modo hospedado (montar_prompt_resumo, mais abaixo) --
+            # nao duplicar aqui evita que uma correcao no prompt (ex: extracao
+            # estruturada de linhas tematicas/valor) valha so para um dos dois modos.
+            prep = montar_prompt_resumo(edital)
             resp = requests.post(
                 OLLAMA_URL,
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.1}},
-                timeout=OLLAMA_TIMEOUT_RESUMO if documento_chave else OLLAMA_TIMEOUT,
+                json={"model": prep["modelo"], "prompt": prep["prompt"], "stream": False, "options": prep["opcoes"]},
+                timeout=OLLAMA_TIMEOUT_RESUMO if edital.get("documento_chave_texto") else OLLAMA_TIMEOUT,
             )
             resp.raise_for_status()
             texto = resp.json().get("response", "").strip()
-            resumo = texto or fallback
+            resumo = (prep.get("prefixo", "") + texto) if texto else fallback
         except Exception:
             resumo = fallback
 
@@ -419,6 +391,74 @@ def montar_prompt_resumo(edital: dict) -> dict:
         fonte_label = "Descrição resumida do edital (Regulamento/Anexo 1 não puderam ser lidos automaticamente)"
         fonte_texto = (edital.get("descricao_texto") or "")[:3000]
 
+    # Pre-extrai linhas tematicas e valor min/max por regex (ver docstring de
+    # extrair_dados_estruturados) em vez de pedir pro modelo local (3B, quantizado)
+    # garimpar isso sozinho num texto corrido de 15-25k chars. Testado na pratica: MESMO
+    # recebendo esses dados ja prontos e claramente rotulados no prompt, o modelo por
+    # vezes ainda os ignora e inventa "linhas tematicas"/valores por conta propria a
+    # partir do titulo do edital -- ou seja, so avisar o modelo nao e confiavel o
+    # suficiente. Por isso, quando a extracao funciona, os itens 1 e 2 do resumo final
+    # sao montados de forma DETERMINISTICA (sem passar pelo modelo) e o prompt pede so
+    # os itens 3 e 4 (que exigem leitura/interpretacao, nao apenas copiar numeros).
+    dados_extraidos = extrair_dados_estruturados(documento_chave) if documento_chave else None
+    tem_dados_confiaveis = bool(dados_extraidos and (dados_extraidos["linhas_tematicas"] or dados_extraidos["valor_simples"]))
+
+    prefixo = ""
+    if tem_dados_confiaveis:
+        partes_prefixo = ["1) Linhas temáticas:"]
+        if dados_extraidos["linhas_tematicas"]:
+            partes_prefixo.extend(f"- {l}" for l in dados_extraidos["linhas_tematicas"])
+        else:
+            partes_prefixo.append("- não informado no documento")
+        partes_prefixo.append("")
+        partes_prefixo.append("2) Valor:")
+        if dados_extraidos["valor_simples"]:
+            partes_prefixo.append(f"- Arranjo Simples: {dados_extraidos['valor_simples']}")
+        if dados_extraidos["valor_rede"]:
+            partes_prefixo.append(f"- Arranjo em Rede: {dados_extraidos['valor_rede']}")
+        if not dados_extraidos["valor_simples"] and not dados_extraidos["valor_rede"]:
+            partes_prefixo.append("- não informado no documento")
+        prefixo = "\n".join(partes_prefixo) + "\n\n"
+
+    if tem_dados_confiaveis:
+        instrucoes_itens = (
+            "Com base SOMENTE no texto acima, responda em portugues, em 2 topicos curtos e objetivos "
+            "(as linhas tematicas e o valor ja foram extraidos e NAO devem ser repetidos por voce):\n"
+            "3) Quem pode pleitear: que tipo de empresa/arranjo e elegivel (porte, parcerias/ICTs exigidas, "
+            "restricoes).\n"
+            "4) Contrapartida: o percentual ou faixa de percentual de contrapartida exigido. ATENCAO: o "
+            "texto de origem geralmente traz isso como uma TABELA que a extracao de PDF pode ter "
+            "embaralhado (numeros podem aparecer fora da ordem visual original, com o percentual de uma "
+            "linha proximo do valor de receita de outra). Se nao conseguir ter certeza de qual percentual "
+            "corresponde a qual porte de empresa/tipo de arranjo, NAO tente adivinhar o pareamento -- "
+            "responda so com a faixa geral (ex: 'varia de X% a Y% dependendo do porte da empresa e do tipo "
+            "de arranjo, ver tabela completa no regulamento para o percentual exato aplicavel'), usando os "
+            "menores e maiores percentuais que aparecerem de fato no texto.\n"
+            "Se alguma dessas informacoes NAO aparecer no texto acima, escreva 'nao informado no documento' "
+            "para aquele item -- NUNCA invente numeros ou percentuais que nao estao no texto. Responda "
+            "direto com os 2 topicos, numerados 3) e 4) -- sem introducoes tipo 'aqui esta', sem comentar "
+            "a tarefa, sem repetir estas instrucoes."
+        )
+    else:
+        instrucoes_itens = (
+            "Com base SOMENTE no texto acima, responda em portugues, em 4 topicos curtos e objetivos:\n"
+            "1) Linhas tematicas: liste cada linha tematica ou grupo de concorrencia mencionado e o tema/foco "
+            "de cada uma (se so houver uma linha, descreva-a).\n"
+            "2) Valor: o valor minimo e maximo que pode ser solicitado, com os numeros exatos do texto "
+            "(diferencie por tipo de arranjo se o texto fizer essa distincao). CUIDADO: nao confunda isso "
+            "com os valores de FAIXA DE RECEITA da tabela de contrapartida (item 6/'Politica de "
+            "Contrapartida') -- sao numeros diferentes com finalidade diferente.\n"
+            "3) Quem pode pleitear: que tipo de empresa/arranjo e elegivel (porte, parcerias/ICTs exigidas, "
+            "restricoes).\n"
+            "4) Contrapartida: o percentual ou faixa de percentual de contrapartida exigido. Se o texto "
+            "trouxer isso como uma tabela e voce nao tiver certeza de qual percentual corresponde a qual "
+            "porte/arranjo, NAO tente adivinhar o pareamento -- responda so com a faixa geral.\n"
+            "Se alguma dessas informacoes NAO aparecer no texto acima, escreva 'nao informado no documento' "
+            "para aquele item -- NUNCA invente numeros, percentuais ou linhas que nao estao no texto. "
+            "Responda direto com os 4 topicos -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
+            "sem repetir estas instrucoes."
+        )
+
     prompt = (
         "Voce e um analista resumindo um edital/chamada publica da FINEP para uma empresa que quer "
         "saber rapidamente se pode se candidatar e em quais condicoes.\n\n"
@@ -430,24 +470,14 @@ def montar_prompt_resumo(edital: dict) -> dict:
         f"Regiao: {edital.get('regiao') or 'nao informada'}\n"
         f"{_fmt_prazo(edital).capitalize()}.\n\n"
         f"{fonte_label}:\n{fonte_texto}\n\n"
-        "Com base SOMENTE no texto acima, responda em portugues, em 4 topicos curtos e objetivos:\n"
-        "1) Linhas tematicas: liste cada linha tematica ou grupo de concorrencia mencionado e o tema/foco "
-        "de cada uma (se so houver uma linha, descreva-a).\n"
-        "2) Valor: o valor minimo e maximo que pode ser solicitado, com os numeros exatos do texto "
-        "(diferencie por tipo de arranjo se o texto fizer essa distincao).\n"
-        "3) Quem pode pleitear: que tipo de empresa/arranjo e elegivel (porte, parcerias/ICTs exigidas, "
-        "restricoes).\n"
-        "4) Contrapartida: o percentual ou tipo de contrapartida exigido.\n"
-        "Se alguma dessas informacoes NAO aparecer no texto acima, escreva 'nao informado no documento' "
-        "para aquele item -- NUNCA invente numeros, percentuais ou linhas que nao estao no texto. "
-        "Responda direto com os 4 topicos -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
-        "sem repetir estas instrucoes."
+        f"{instrucoes_itens}"
     )
     return {
         "prompt": prompt,
         "modelo": OLLAMA_MODEL,
         "opcoes": {"temperature": 0.1},
         "fallback": _template_resumo_elegibilidade(edital),
+        "prefixo": prefixo,
     }
 
 
