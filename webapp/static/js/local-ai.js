@@ -81,6 +81,18 @@ function abrirModalIALocal() {
   const overlay = document.getElementById("ia-local-modal-overlay");
   if (!overlay) return;
 
+  // O link do script precisa apontar pro backend certo -- localmente e a
+  // mesma origem da pagina, mas no deploy hospedado o frontend (Vercel) e o
+  // backend (Render) ficam em dominios separados, entao usamos a mesma regra
+  // de API_BASE_URL que o resto do app ja usa (ver common.js/_urlCompleta).
+  const linkScript = document.getElementById("ia-local-script-link");
+  if (linkScript && typeof _urlCompleta === "function") {
+    linkScript.href = _urlCompleta("/api/config/instalar-ia.ps1");
+  }
+
+  // Fallback manual (instrucoes antigas, para quem preferir nao rodar o
+  // script baixado ou estiver em Mac/Linux) continua disponivel, so
+  // escondido por padrao -- ver <details> no index.html.
   document.getElementById("ia-local-comando-origens").textContent =
     `setx OLLAMA_ORIGINS "${origem}"`;
   document.getElementById("ia-local-comando-mac-linux").textContent =

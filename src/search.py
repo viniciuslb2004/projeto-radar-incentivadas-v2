@@ -74,8 +74,21 @@ def warmup():
 
     Sem isso, a primeira busca de cada reinicio do servidor demora ~20-30s
     (carregamento do sentence-transformers), o que parece uma trava para
-    quem esta usando o site. Chame isso uma vez no startup do FastAPI."""
+    quem esta usando o site. Chame isso uma vez no startup do FastAPI.
+
+    So para o modo LOCAL (desktop) -- ver warmup_hospedado() para o modo hospedado."""
     get_model()
+    _load_embeddings()
+
+
+def warmup_hospedado():
+    """Versao leve do warmup() para o modo HOSPEDADO (Render, free tier, 512MB de RAM):
+    carrega so o .npz de vetores do corpus (numpy, poucos MB) -- NUNCA chama
+    get_model()/SentenceTransformer, que carregaria o sentence-transformers/torch na
+    memoria e estouraria esse limite (ver DEPLOY.md). O embedding da query e calculado
+    no NAVEGADOR de quem esta usando (transformers.js, ver webapp/static/js/
+    embeddings-client.js); o servidor so faz o produto escalar contra estes vetores
+    precalculados (buscar_rapido_com_vetor / buscar_por_termo_com_vetor abaixo)."""
     _load_embeddings()
 
 
@@ -215,50 +228,64 @@ def _template_narrativa(query: str, tendencia_segmento: dict, tendencia_setor: d
     return " ".join(partes)
 
 
+def montar_prompt_narrativa(query_expandida: str, tendencia_segmento: dict, tendencia_setor: dict, resultados: list, confianca_baixa: bool = False) -> dict:
+    """Mesmo prompt de gerar_narrativa(), devolvido em vez de enviado ao Ollama --
+    usado no modo HOSPEDADO (ver POST /api/busca/narrativa em webapp/main.py)."""
+    fallback = _template_narrativa(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
+    if not resultados:
+        return {"prompt": None, "fallback": fallback}
+
+    exemplos = "\n".join(
+        f"- {r['cliente']} | agência: {r['agencia']} | segmento: {r['segmento'] or 'nao classificado'} | "
+        f"valor: {_fmt_brl(r['valor_contratado'] or 0)} | data: {r['data_contratacao']} | "
+        f"projeto: {(r['descricao_projeto'] or '').strip()[:140]}"
+        for r in resultados[:6]
+    )
+    tendencia_txt = _tendencia_texto(tendencia_segmento) or _tendencia_texto(tendencia_setor) or "Sem dados de tendência suficientes."
+    aviso_confianca = (
+        "ATENCAO: a similaridade encontrada foi baixa, deixe isso claro logo na primeira frase. "
+        if confianca_baixa else ""
+    )
+    prompt = (
+        "Voce e um analista de credito incentivado (BNDES/FINEP) da Artica Capital Solutions, "
+        "escrevendo para um colega que precisa de uma leitura RAPIDA e ESPECIFICA, nao um resumo generico.\n\n"
+        f'O usuario descreveu: "{query_expandida}"\n\n'
+        f"Operacoes mais parecidas encontradas (use nomes e numeros REAIS destes exemplos):\n{exemplos}\n\n"
+        f"Dado de tendencia (o segmento especifico da busca, ultimos 12 meses vs 12 meses anteriores):\n{tendencia_txt}\n\n"
+        f"{aviso_confianca}"
+        "Escreva um paragrafo de 3-4 frases em portugues, seguindo esta estrutura:\n"
+        "1) Cite pelo menos 2 nomes de empresas reais da lista acima e o que elas fizeram (resuma o projeto).\n"
+        "2) Diga se ESSE SEGMENTO especifico (nao um setor generico) esta em alta ou queda, citando os p.p. e o valor fornecidos.\n"
+        "3) Termine com uma frase de leitura pratica (ex: se e um segmento aquecido, se os cheques sao "
+        "tipicamente grandes ou pequenos, se a base de comparaveis e ampla ou restrita).\n"
+        "Nao use frases genericas como 'isso sugere uma tendencia' sem dizer especificamente qual. "
+        "Nao invente numeros que nao foram fornecidos. "
+        "Responda direto com o paragrafo em si -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
+        "sem repetir estas instrucoes."
+    )
+    return {"prompt": prompt, "modelo": OLLAMA_MODEL, "opcoes": {"temperature": 0.3}, "fallback": fallback}
+
+
 def gerar_narrativa(query_expandida: str, tendencia_segmento: dict, tendencia_setor: dict, resultados: list, confianca_baixa: bool = False) -> str:
     """Chamada LENTA (Ollama, ~5-40s). Chame depois de ja ter mostrado os resultados ao usuario.
 
     O prompt e deliberadamente concreto (exemplos com nome, segmento, valor, data e um
     trecho da descricao do projeto + a tendencia do SEGMENTO especifico, nao do setor
     generico) para que o modelo local (pequeno, 3B) tenha material suficiente pra
-    escrever algo especifico em vez de uma resposta generica de tendencia de setor."""
-    fallback = _template_narrativa(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
+    escrever algo especifico em vez de uma resposta generica de tendencia de setor.
+    Modo LOCAL apenas -- ver montar_prompt_narrativa() para o modo hospedado."""
+    prep = montar_prompt_narrativa(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
+    fallback = prep["fallback"]
+    if not prep.get("prompt"):
+        return fallback
     try:
-        exemplos = "\n".join(
-            f"- {r['cliente']} | agência: {r['agencia']} | segmento: {r['segmento'] or 'nao classificado'} | "
-            f"valor: {_fmt_brl(r['valor_contratado'] or 0)} | data: {r['data_contratacao']} | "
-            f"projeto: {(r['descricao_projeto'] or '').strip()[:140]}"
-            for r in resultados[:6]
-        )
-        tendencia_txt = _tendencia_texto(tendencia_segmento) or _tendencia_texto(tendencia_setor) or "Sem dados de tendência suficientes."
-        aviso_confianca = (
-            "ATENCAO: a similaridade encontrada foi baixa, deixe isso claro logo na primeira frase. "
-            if confianca_baixa else ""
-        )
-        prompt = (
-            "Voce e um analista de credito incentivado (BNDES/FINEP) da Artica Capital Solutions, "
-            "escrevendo para um colega que precisa de uma leitura RAPIDA e ESPECIFICA, nao um resumo generico.\n\n"
-            f'O usuario descreveu: "{query_expandida}"\n\n'
-            f"Operacoes mais parecidas encontradas (use nomes e numeros REAIS destes exemplos):\n{exemplos}\n\n"
-            f"Dado de tendencia (o segmento especifico da busca, ultimos 12 meses vs 12 meses anteriores):\n{tendencia_txt}\n\n"
-            f"{aviso_confianca}"
-            "Escreva um paragrafo de 3-4 frases em portugues, seguindo esta estrutura:\n"
-            "1) Cite pelo menos 2 nomes de empresas reais da lista acima e o que elas fizeram (resuma o projeto).\n"
-            "2) Diga se ESSE SEGMENTO especifico (nao um setor generico) esta em alta ou queda, citando os p.p. e o valor fornecidos.\n"
-            "3) Termine com uma frase de leitura pratica (ex: se e um segmento aquecido, se os cheques sao "
-            "tipicamente grandes ou pequenos, se a base de comparaveis e ampla ou restrita).\n"
-            "Nao use frases genericas como 'isso sugere uma tendencia' sem dizer especificamente qual. "
-            "Nao invente numeros que nao foram fornecidos. "
-            "Responda direto com o paragrafo em si -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
-            "sem repetir estas instrucoes."
-        )
         resp = requests.post(
             OLLAMA_URL,
             json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
+                "model": prep["modelo"],
+                "prompt": prep["prompt"],
                 "stream": False,
-                "options": {"temperature": 0.3},
+                "options": prep["opcoes"],
             },
             timeout=OLLAMA_TIMEOUT,
         )
@@ -278,13 +305,12 @@ _COLS_OPERACAO = [
 ]
 
 
-def _buscar_por_termo(termo: str, ja_incluidos: set, limite: int = 8) -> list:
-    """Busca rapida (embeddings) por um termo extra sugerido pelo LLM, para pegar
-    operacoes relevantes que a busca original pode ter deixado de fora."""
+def _buscar_por_termo_nucleo(vetor, ja_incluidos: set, limite: int = 8) -> list:
+    """Nucleo comum de _buscar_por_termo()/buscar_por_termo_com_vetor() -- so precisa
+    do vetor do termo ja calculado (pelo servidor, modo local, ou pelo navegador, modo
+    hospedado)."""
     ids_emb, vectors = _load_embeddings()
-    model = get_model()
-    qvec = model.encode([termo], normalize_embeddings=True)[0]
-    scores = vectors @ qvec
+    scores = vectors @ vetor
     top_idx = np.argsort(-scores)[:limite * 3]
 
     achados = []
@@ -321,20 +347,40 @@ def _buscar_por_termo(termo: str, ja_incluidos: set, limite: int = 8) -> list:
     return novos
 
 
-def refinar_resultados(query_expandida: str, resultados: list, max_avaliar: int = MAX_AVALIAR_REFINO) -> dict:
-    """3a etapa (chamada LENTA, Ollama): revisa os melhores candidatos da busca por
-    embeddings e (1) remove falsos-positivos que passaram no limiar de similaridade mas
-    nao tem relacao real com a busca, (2) reordena o que sobrou pela relevancia real
-    (nao so a similaridade de texto) e (3) sugere termos correlatos e busca por eles,
-    trazendo operacoes relevantes que a busca original pode ter deixado de fora.
-    Se o Ollama falhar ou a resposta nao vier em JSON valido, devolve a lista original
-    sem mudar nada -- nunca piora o resultado."""
+def _buscar_por_termo(termo: str, ja_incluidos: set, limite: int = 8) -> list:
+    """Busca rapida (embeddings) por um termo extra sugerido pelo LLM, para pegar
+    operacoes relevantes que a busca original pode ter deixado de fora. Modo LOCAL:
+    calcula o embedding do termo no proprio processo (get_model())."""
+    model = get_model()
+    qvec = model.encode([termo], normalize_embeddings=True)[0]
+    return _buscar_por_termo_nucleo(qvec, ja_incluidos, limite)
+
+
+def buscar_por_termo_com_vetor(termo: str, vetor, ja_incluidos, limite: int = 8) -> list:
+    """Mesma logica de _buscar_por_termo(), mas para o modo HOSPEDADO: recebe o vetor
+    do termo ja calculado no navegador (embeddings-client.js) -- usado pela etapa de
+    'termos adicionais' do refino quando rodando no deploy hospedado (ver rota
+    /api/busca/termo em webapp/main.py). `termo` so serve de rotulo aqui (o vetor ja
+    veio pronto); nunca chama get_model()."""
+    vec = np.asarray(vetor, dtype=np.float32)
+    norma = float(np.linalg.norm(vec))
+    if norma > 0:
+        vec = vec / norma
+    incluidos = ja_incluidos if isinstance(ja_incluidos, set) else set(ja_incluidos or [])
+    return _buscar_por_termo_nucleo(vec, incluidos, limite)
+
+
+def montar_prompt_refino(query_expandida: str, resultados: list, max_avaliar: int = MAX_AVALIAR_REFINO) -> dict:
+    """Mesmo prompt de refinar_resultados(), devolvido em vez de enviado ao Ollama --
+    usado no modo HOSPEDADO, onde quem efetivamente gera o texto e o navegador de quem
+    esta usando (ver local-ai.js). A filtragem do JSON de resposta (aplicarRefinoLocal,
+    ver common.js) acontece no proprio navegador -- os 'termos_adicionais' sao tratados
+    a parte (ver buscar_por_termo_com_vetor / rota POST /api/busca/termo), pois tambem
+    precisam de um vetor calculado no navegador."""
     if not resultados:
-        return {"resultados": resultados, "refinado": False, "n_removidos": 0, "n_adicionados": 0}
+        return {"prompt": None, "candidatos_ids": []}
 
     candidatos = resultados[:max_avaliar]
-    restante = resultados[max_avaliar:]
-
     lista = "\n".join(
         f"{r['id']}: empresa={r['cliente']} | segmento={r['segmento'] or 'nao classificado'} | "
         f"valor={_fmt_brl(r['valor_contratado'] or 0)}"
@@ -358,12 +404,36 @@ def refinar_resultados(query_expandida: str, resultados: list, max_avaliar: int 
         "cadeia produtiva relacionada). Deixe a lista vazia se nao houver sugestao boa. "
         "Nao invente IDs que nao estao na lista acima."
     )
+    return {
+        "prompt": prompt,
+        "modelo": OLLAMA_MODEL,
+        "opcoes": {"temperature": 0.1, "format": "json"},
+        "candidatos_ids": [r["id"] for r in candidatos],
+    }
+
+
+def refinar_resultados(query_expandida: str, resultados: list, max_avaliar: int = MAX_AVALIAR_REFINO) -> dict:
+    """3a etapa (chamada LENTA, Ollama): revisa os melhores candidatos da busca por
+    embeddings e (1) remove falsos-positivos que passaram no limiar de similaridade mas
+    nao tem relacao real com a busca, (2) reordena o que sobrou pela relevancia real
+    (nao so a similaridade de texto) e (3) sugere termos correlatos e busca por eles,
+    trazendo operacoes relevantes que a busca original pode ter deixado de fora.
+    Se o Ollama falhar ou a resposta nao vier em JSON valido, devolve a lista original
+    sem mudar nada -- nunca piora o resultado. Modo LOCAL apenas (chama o Ollama
+    diretamente) -- ver montar_prompt_refino() para o modo hospedado."""
+    if not resultados:
+        return {"resultados": resultados, "refinado": False, "n_removidos": 0, "n_adicionados": 0}
+
+    candidatos = resultados[:max_avaliar]
+    restante = resultados[max_avaliar:]
+    prep = montar_prompt_refino(query_expandida, resultados, max_avaliar)
+
     try:
         resp = requests.post(
             OLLAMA_URL,
             json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
+                "model": prep["modelo"],
+                "prompt": prep["prompt"],
                 "stream": False,
                 "format": "json",
                 "options": {"temperature": 0.1},
@@ -458,18 +528,12 @@ def _estimar_probabilidade_aprovacao(conn, melhores: list) -> dict:
     }
 
 
-def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
-    """Chamada RAPIDA (so embeddings + SQLite, sem Ollama) -- retorna resultados quase instantaneamente.
-
-    Em vez de um top-K fixo, devolve TODAS as operacoes com similaridade acima do
-    limiar de relevancia (ate max_resultados, que e so uma protecao de seguranca,
-    nao um limite pratico) -- assim uma busca especifica traz todas as operacoes
-    parecidas que existem, nao so uma amostra arbitraria."""
-    query_expandida = _expandir_query(query)
-
+def _buscar_rapido_nucleo(query: str, query_expandida: str, query_vec, max_resultados: int) -> dict:
+    """Nucleo comum de buscar_rapido()/buscar_rapido_com_vetor() -- so precisa do
+    vetor da query ja calculado (pelo servidor, modo local, ou pelo navegador, modo
+    hospedado) e faz o resto: produto escalar contra o corpus, limiar relativo de
+    similaridade, tendencias de setor/segmento e taxa de aprovacao."""
     ids, vectors = _load_embeddings()
-    model = get_model()
-    query_vec = model.encode([query_expandida], normalize_embeddings=True)[0]
 
     scores = vectors @ query_vec
     ordenado = np.argsort(-scores)
@@ -525,6 +589,37 @@ def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
         "n_resultados": len(resultados),
         "resultados": resultados,
     }
+
+
+def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
+    """Chamada RAPIDA (so embeddings + SQLite, sem Ollama) -- retorna resultados quase
+    instantaneamente. Modo LOCAL (desktop): calcula o embedding da query no proprio
+    processo (get_model()) -- ver buscar_rapido_com_vetor() para o modo hospedado.
+
+    Em vez de um top-K fixo, devolve TODAS as operacoes com similaridade acima do
+    limiar de relevancia (ate max_resultados, que e so uma protecao de seguranca,
+    nao um limite pratico) -- assim uma busca especifica traz todas as operacoes
+    parecidas que existem, nao so uma amostra arbitraria."""
+    query_expandida = _expandir_query(query)
+    model = get_model()
+    query_vec = model.encode([query_expandida], normalize_embeddings=True)[0]
+    return _buscar_rapido_nucleo(query, query_expandida, query_vec, max_resultados)
+
+
+def buscar_rapido_com_vetor(query: str, query_vec, max_resultados: int = 3000) -> dict:
+    """Mesma logica de buscar_rapido(), mas para o modo HOSPEDADO: o vetor da query ja
+    vem calculado no navegador (transformers.js, ver webapp/static/js/embeddings-
+    client.js, contra o texto devolvido por /api/busca/preparar) -- o servidor NUNCA
+    chama get_model()/SentenceTransformer aqui, so faz a matematica (numpy) contra os
+    vetores precalculados do corpus (data/embeddings.npz). E isso que permite rodar no
+    free tier do Render (512MB de RAM): carregar o sentence-transformers no processo
+    estouraria esse limite (ver DEPLOY.md)."""
+    query_expandida = _expandir_query(query)
+    vetor = np.asarray(query_vec, dtype=np.float32)
+    norma = float(np.linalg.norm(vetor))
+    if norma > 0:
+        vetor = vetor / norma
+    return _buscar_rapido_nucleo(query, query_expandida, vetor, max_resultados)
 
 
 def buscar(query: str, max_resultados: int = 3000) -> dict:

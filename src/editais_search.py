@@ -48,7 +48,18 @@ def _load_editais_embeddings():
 
 
 def warmup():
+    """So para o modo LOCAL (desktop) -- ver warmup_hospedado() para o modo hospedado."""
     get_model()
+    _load_editais_embeddings()
+
+
+def warmup_hospedado():
+    """Versao leve do warmup() para o modo HOSPEDADO (Render, free tier, 512MB de RAM):
+    carrega so o .npz de vetores dos editais abertos (numpy, poucos KB) -- NUNCA chama
+    get_model()/SentenceTransformer. O embedding da descricao do usuario e calculado no
+    NAVEGADOR dela (transformers.js, ver webapp/static/js/embeddings-client.js); o
+    servidor so faz o produto escalar contra estes vetores precalculados (ver
+    buscar_editais_por_projeto_com_vetor abaixo)."""
     _load_editais_embeddings()
 
 
@@ -71,15 +82,14 @@ def _montar_edital(row: dict) -> dict:
     return row
 
 
-def buscar_editais_por_projeto(query: str, max_resultados: int = 15) -> dict:
-    """Busca RAPIDA (so embeddings): compara a descricao do usuario contra o titulo/tema/
-    descricao de cada edital ABERTO e devolve os mais aderentes, do mais para o menos."""
+def _buscar_editais_nucleo(query: str, qvec, max_resultados: int = 15) -> dict:
+    """Nucleo comum de buscar_editais_por_projeto()/buscar_editais_por_projeto_com_vetor()
+    -- so precisa do vetor da query ja calculado (pelo servidor, modo local, ou pelo
+    navegador, modo hospedado)."""
     ids, vectors = _load_editais_embeddings()
     if len(ids) == 0:
         return {"query": query, "melhor_score": 0.0, "confianca_baixa": True, "resultados": []}
 
-    model = get_model()
-    qvec = model.encode([query], normalize_embeddings=True)[0]
     scores = vectors @ qvec
     ordenado = np.argsort(-scores)
     melhor_score = float(scores[ordenado[0]])
@@ -113,6 +123,32 @@ def buscar_editais_por_projeto(query: str, max_resultados: int = 15) -> dict:
         "n_resultados": len(resultados),
         "resultados": resultados,
     }
+
+
+def buscar_editais_por_projeto(query: str, max_resultados: int = 15) -> dict:
+    """Busca RAPIDA (so embeddings): compara a descricao do usuario contra o titulo/tema/
+    descricao de cada edital ABERTO e devolve os mais aderentes, do mais para o menos.
+    Modo LOCAL (desktop): calcula o embedding da query no proprio processo (get_model())
+    -- ver buscar_editais_por_projeto_com_vetor() para o modo hospedado."""
+    ids, _ = _load_editais_embeddings()
+    if len(ids) == 0:
+        return {"query": query, "melhor_score": 0.0, "confianca_baixa": True, "resultados": []}
+    model = get_model()
+    qvec = model.encode([query], normalize_embeddings=True)[0]
+    return _buscar_editais_nucleo(query, qvec, max_resultados)
+
+
+def buscar_editais_por_projeto_com_vetor(query: str, query_vec, max_resultados: int = 15) -> dict:
+    """Mesma logica de buscar_editais_por_projeto(), mas para o modo HOSPEDADO: o vetor
+    da query ja vem calculado no navegador (transformers.js, ver webapp/static/js/
+    embeddings-client.js) -- o servidor NUNCA chama get_model()/SentenceTransformer
+    aqui, so faz a matematica (numpy) contra os vetores precalculados
+    (data/editais_embeddings.npz)."""
+    vetor = np.asarray(query_vec, dtype=np.float32)
+    norma = float(np.linalg.norm(vetor))
+    if norma > 0:
+        vetor = vetor / norma
+    return _buscar_editais_nucleo(query, vetor, max_resultados)
 
 
 def refinar_editais(query: str, resultados: list, max_avaliar: int = 25) -> dict:

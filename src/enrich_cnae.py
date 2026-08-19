@@ -51,7 +51,14 @@ def latest_month() -> str:
     return months[-1]
 
 
-def _target_cnpjs(conn) -> set:
+def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
+    """CNPJs que aparecem nas operacoes de credito da FINEP.
+
+    only_unresolved=True (padrao): exclui os que JA estao em cnpj_cnae -- antes disso,
+    o job mensal buscava, do zero, todos os CNPJs ja vistos (inclusive os ja resolvidos
+    em meses anteriores), o que so ficava mais pesado com o tempo. Passe False so se
+    quiser forcar uma atualizacao de CNPJs ja cacheados (ex: reprocessar apos alguma
+    correcao na tabela de-para)."""
     df = pd.read_sql(
         """
         SELECT cnpj_proponente AS cnpj FROM finep_credito_direto_raw
@@ -60,7 +67,11 @@ def _target_cnpjs(conn) -> set:
         """,
         conn,
     )
-    return set(df["cnpj"].dropna().astype(str))
+    alvo = set(df["cnpj"].dropna().astype(str))
+    if only_unresolved:
+        ja_cacheados = pd.read_sql("SELECT cnpj FROM cnpj_cnae", conn)
+        alvo -= set(ja_cacheados["cnpj"].dropna().astype(str))
+    return alvo
 
 
 def _build_divisao_map(conn) -> dict:
@@ -132,13 +143,18 @@ def _scan_zip_for_targets(zip_path: Path, targets: set, found: dict):
                     found[row["cnpj"]] = (row["nome_fantasia"], row["cnae_fiscal_principal"])
 
 
-def enrich(month: str = None, keep_downloads: bool = False) -> int:
+def enrich(month: str = None, keep_downloads: bool = False, targets: set = None) -> int:
+    """targets=None (padrao): resolve automaticamente os CNPJs da FINEP que ainda nao
+    estao em cnpj_cnae (ver _target_cnpjs). Passe um set explicito para escopar a um
+    subconjunto especifico (ex: so os CNPJs que apareceram em linhas novas do ultimo
+    refresh semanal, em vez de todos os pendentes historicos)."""
     conn = get_connection()
     try:
-        targets = _target_cnpjs(conn)
-        print(f"CNPJs alvo (FINEP credito): {len(targets)}")
+        if targets is None:
+            targets = _target_cnpjs(conn)
+        print(f"CNPJs alvo (FINEP credito, ainda sem CNAE no cache): {len(targets)}")
         if not targets:
-            print("Nenhum CNPJ para enriquecer (rode parse_finep.py antes).")
+            print("Nenhum CNPJ pendente para enriquecer.")
             return 0
 
         divisao_map = _build_divisao_map(conn)

@@ -2,6 +2,12 @@
 
 NAO roda o enriquecimento de CNAE da FINEP (enrich_cnae.py) -- esse e um job
 pesado (varios GB) rodado separadamente, uma vez por mes.
+
+Incremental desde 2026-08: BNDES/FINEP republicam o historico INTEIRO do zero a cada
+arquivo, mas o pipeline agora faz o diff em Python (ver incremental.py, unify.py,
+embeddings.py) em vez de dropar e reconstruir bndes_raw/finep_*_raw/operations e
+reembutir tudo toda semana -- so processa o que e realmente novo. de_para_cnae e os
+agregados (agg_*) continuam em reload completo (baratos, sem risco de duplicacao).
 """
 import datetime
 import traceback
@@ -31,11 +37,16 @@ def run_refresh():
 
     try:
         download.download_all()
-        bndes_rows = parse_bndes.parse_bndes()
-        finep_direto_rows, finep_desc_rows = parse_finep.parse_finep()
+        _, bndes_rows = parse_bndes.parse_bndes()
+        _, _, finep_direto_rows, finep_desc_rows = parse_finep.parse_finep()
         parse_finep.parse_finep_nao_aprovados()
-        ops_rows, pendentes = unify.build_operations()
-        embeddings.build_embeddings()
+        resultado_unify = unify.build_operations()
+        ops_rows = resultado_unify["total"]
+        pendentes = resultado_unify["pendentes"]
+        embeddings.build_embeddings(
+            novos_ids=resultado_unify["novos_ids"],
+            reclassificados_ids=resultado_unify["reclassificados_ids"],
+        )
     except Exception:
         status = "erro"
         detalhe = traceback.format_exc()

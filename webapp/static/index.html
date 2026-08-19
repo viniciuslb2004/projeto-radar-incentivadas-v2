@@ -267,6 +267,7 @@
     </div>
     <div class="modal-body">
       <p>As respostas de IA (resumo de elegibilidade dos editais, leitura do endgame) rodam no <strong>seu computador</strong>, não em nenhum servidor -- assim continua grátis e privado para todo mundo. Uma vez configurado, funciona sozinho a partir daqui.</p>
+      <p class="hint" style="margin-top:-4px;"><strong>Resumo:</strong> 1) Instale o Ollama. 2) Baixe e rode este script (duplo-clique). 3) Recarregue esta página.</p>
 
       <div class="detalhe-secao" style="margin:14px 0;">
         <div class="detalhe-secao-titulo">1. Instale o Ollama</div>
@@ -276,24 +277,35 @@
       </div>
 
       <div class="detalhe-secao" style="margin:14px 0;">
-        <div class="detalhe-secao-titulo">2. Baixe o modelo de IA (~2GB, uma vez só)</div>
+        <div class="detalhe-secao-titulo">2. Baixe e rode o script de configuracao (uma vez só)</div>
         <div style="padding:14px;">
-          <code id="ia-local-comando-modelo" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
-          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-modelo" style="margin-top:8px;">Copiar comando</button>
+          <p class="hint" style="margin-top:0;">Este script baixa o modelo de IA (~2GB) e já libera este site para conversar com o Ollama -- tudo em um passo só. Depois de rodar, é só recarregar esta página.</p>
+          <a href="/api/config/instalar-ia.ps1" download="instalar-ia-local.ps1" id="ia-local-script-link" class="resumo-ia-btn" style="display:inline-block; text-decoration:none;">Baixar script de configuração (.ps1)</a>
+          <p class="hint" style="margin-top:10px;">Depois de baixado, dê duplo-clique no arquivo (Windows pode pedir para confirmar em "Mais informações → Executar assim mesmo", pois é um script baixado da internet).</p>
         </div>
       </div>
 
-      <div class="detalhe-secao" style="margin:14px 0;">
-        <div class="detalhe-secao-titulo">3. Libere este site para conversar com o Ollama</div>
-        <div style="padding:14px;">
-          <p class="hint" style="margin-top:0;">Windows (PowerShell, uma vez só -- depois reinicie o Ollama):</p>
-          <code id="ia-local-comando-origens" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
-          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-origens" style="margin-top:8px;">Copiar comando</button>
-          <p class="hint" style="margin-top:14px;">Mac/Linux (rode assim em vez de só "ollama serve"):</p>
-          <code id="ia-local-comando-mac-linux" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
-          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-mac-linux" style="margin-top:8px;">Copiar comando</button>
+      <details style="margin:14px 0;">
+        <summary class="hint" style="cursor:pointer;">Prefiro rodar os comandos manualmente (Mac/Linux ou avançado)</summary>
+        <div class="detalhe-secao" style="margin-top:10px;">
+          <div class="detalhe-secao-titulo">Baixe o modelo de IA</div>
+          <div style="padding:14px;">
+            <code id="ia-local-comando-modelo" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+            <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-modelo" style="margin-top:8px;">Copiar comando</button>
+          </div>
         </div>
-      </div>
+        <div class="detalhe-secao" style="margin-top:10px;">
+          <div class="detalhe-secao-titulo">Libere este site para conversar com o Ollama</div>
+          <div style="padding:14px;">
+            <p class="hint" style="margin-top:0;">Windows (PowerShell, uma vez só -- depois reinicie o Ollama):</p>
+            <code id="ia-local-comando-origens" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+            <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-origens" style="margin-top:8px;">Copiar comando</button>
+            <p class="hint" style="margin-top:14px;">Mac/Linux (rode assim em vez de só "ollama serve"):</p>
+            <code id="ia-local-comando-mac-linux" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+            <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-mac-linux" style="margin-top:8px;">Copiar comando</button>
+          </div>
+        </div>
+      </details>
 
       <button class="resumo-ia-btn" id="ia-local-verificar-btn" style="width:100%;">Verificar novamente</button>
     </div>
@@ -304,6 +316,11 @@
 <script src="/js/vendor/chart.umd.min.js"></script>
 <script src="/js/common.js"></script>
 <script src="/js/local-ai.js"></script>
+<!-- So usado no modo hospedado (calcula o embedding da busca no navegador via
+     transformers.js) -- so faz efeito quando busca.js/editais.js chamam
+     embutirQuery(), o que so acontece com window.MODO_HOSPEDADO === true. No app
+     local (desktop) este arquivo carrega mas nunca baixa nada nem executa nada. -->
+<script type="module" src="/js/embeddings-client.js"></script>
 <script src="/js/consolidado.js"></script>
 <script src="/js/tendencias.js"></script>
 <script src="/js/busca.js"></script>

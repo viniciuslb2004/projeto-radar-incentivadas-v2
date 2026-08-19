@@ -1,13 +1,15 @@
 """API FastAPI do Radar de Credito Incentivado (BNDES + FINEP)."""
 import datetime
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -50,16 +52,188 @@ app.add_middleware(
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+# ============ Instalador da IA local (1 script, um clique) ============
+# O modal "Baixar IA local" (ver webapp/static/js/local-ai.js) precisa que o
+# visitante rode "ollama pull" + "setx OLLAMA_ORIGINS" com a origem CORRETA
+# deste app -- que muda dependendo de onde o app esta rodando (localhost no
+# desktop, dominio da Vercel no deploy hospedado). Por isso a origem nao pode
+# ser fixa no script: descobrimos ela em tempo real a partir do request de
+# quem pediu o download, com fallback pro que ja estiver configurado no
+# ambiente (mesma fonte que o CORS ja usa, ver ALLOWED_ORIGINS acima).
+OLLAMA_MODELO_PADRAO = "llama3.2:3b-instruct-q4_K_M"
+_ORIGEM_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$")
+
+
+def _origem_valida(origem: str) -> bool:
+    return bool(origem) and bool(_ORIGEM_RE.match(origem.strip()))
+
+
+def _detectar_origem_publica(request: Request) -> str:
+    """Descobre a origem (scheme://host[:porta]) de onde este app esta sendo
+    servido para este visitante especifico. Tenta, em ordem: o header Origin
+    do proprio request (o jeito mais confiavel -- e literalmente de onde o
+    navegador fez a chamada), o header Referer, a variavel de ambiente
+    PUBLIC_BASE_URL (se alguem quiser fixar isso no deploy), a primeira
+    entrada nao-localhost de ALLOWED_ORIGINS, e por fim um fallback local.
+    Cada candidato passa por validacao de formato antes de ser aceito -- os
+    headers vem do visitante e vao parar dentro de um script que ele mesmo
+    vai rodar, entao nao da pra confiar neles sem checar."""
+    candidatos = []
+
+    origin_header = request.headers.get("origin")
+    if origin_header:
+        candidatos.append(origin_header.strip())
+
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            candidatos.append(f"{parsed.scheme}://{parsed.netloc}")
+
+    public_base_url = os.environ.get("PUBLIC_BASE_URL", "").strip()
+    if public_base_url:
+        candidatos.append(public_base_url.rstrip("/"))
+
+    for o in [x.strip() for x in _allowed_origins.split(",") if x.strip()]:
+        if "localhost" not in o and "127.0.0.1" not in o:
+            candidatos.append(o)
+
+    candidatos.append("http://127.0.0.1:8001")
+
+    for c in candidatos:
+        if _origem_valida(c):
+            return c
+    return "http://127.0.0.1:8001"
+
+
+_SCRIPT_INSTALAR_IA_TEMPLATE = r"""# ============================================================
+#  Instalador automatico da IA local - Radar de Credito Incentivado
+#  Gerado automaticamente por __ORIGIN__ -- seguro rodar mais de uma vez.
+# ============================================================
+
+function Escrever($msg, $cor = "White") {
+    Write-Host $msg -ForegroundColor $cor
+}
+
+Write-Host ""
+Escrever "=====================================================" "Cyan"
+Escrever " Configurando a IA local para o Radar de Credito Incentivado" "Cyan"
+Escrever "=====================================================" "Cyan"
+Write-Host ""
+
+$origem = "__ORIGIN__"
+$modelo = "__MODEL__"
+
+# 1) Verifica se o Ollama esta instalado
+$ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+if (-not $ollamaCmd) {
+    Escrever "[ERRO] O Ollama nao foi encontrado neste computador." "Red"
+    Escrever "Instale primeiro em https://ollama.com/download e rode este script de novo." "Yellow"
+    Write-Host ""
+    Read-Host "Pressione ENTER para fechar"
+    exit 1
+}
+Escrever "[OK] Ollama encontrado em $($ollamaCmd.Source)" "Green"
+
+# 2) Baixa o modelo de IA (comando idempotente -- se ja tiver, so confirma)
+Write-Host ""
+Escrever "Baixando o modelo de IA ($modelo)... pode demorar alguns minutos na primeira vez." "Cyan"
+& ollama pull $modelo
+if ($LASTEXITCODE -ne 0) {
+    Escrever "[ERRO] Nao foi possivel baixar o modelo. Verifique sua internet e rode o script de novo." "Red"
+    Write-Host ""
+    Read-Host "Pressione ENTER para fechar"
+    exit 1
+}
+Escrever "[OK] Modelo pronto." "Green"
+
+# 3) Libera este site para conversar com o Ollama (OLLAMA_ORIGINS).
+#    Some com origens ja liberadas antes em vez de apagar (script idempotente
+#    e seguro mesmo se voce ja tiver liberado outro endereco antes).
+Write-Host ""
+Escrever "Liberando $origem para acessar a IA local..." "Cyan"
+$atual = [Environment]::GetEnvironmentVariable("OLLAMA_ORIGINS", "User")
+$origensExistentes = @()
+if ($atual) {
+    $origensExistentes = @($atual -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+}
+if ($origensExistentes -notcontains $origem) {
+    $origensExistentes += $origem
+}
+$novoValor = ($origensExistentes -join ",")
+[Environment]::SetEnvironmentVariable("OLLAMA_ORIGINS", $novoValor, "User")
+$env:OLLAMA_ORIGINS = $novoValor
+Escrever "[OK] OLLAMA_ORIGINS = $novoValor" "Green"
+
+# 4) Reinicia o Ollama para a configuracao nova valer de verdade (setx so
+#    afeta processos novos -- por isso derrubamos e subimos de novo aqui,
+#    dentro desta mesma sessao, que ja tem a variavel atualizada).
+Write-Host ""
+Escrever "Reiniciando o Ollama para aplicar a configuracao..." "Cyan"
+$processos = Get-Process -Name "ollama*" -ErrorAction SilentlyContinue
+if ($processos) {
+    $processos | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Escrever "[OK] Processo(s) anterior(es) do Ollama encerrado(s)." "Green"
+} else {
+    Escrever "Nenhum processo do Ollama estava rodando ainda (tudo bem, seguindo em frente)." "Yellow"
+}
+
+$appPath = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama app.exe"
+if (Test-Path $appPath) {
+    Start-Process -FilePath $appPath
+    Escrever "[OK] Ollama reiniciado." "Green"
+} else {
+    Start-Process -FilePath $ollamaCmd.Source -ArgumentList "serve" -WindowStyle Hidden
+    Escrever "[OK] Servidor do Ollama iniciado (ollama serve)." "Green"
+}
+
+Start-Sleep -Seconds 2
+
+Write-Host ""
+Escrever "=====================================================" "Cyan"
+Escrever " Tudo pronto!" "Green"
+Escrever " Volte para a aba do navegador, recarregue a pagina (F5)" "Green"
+Escrever " e a IA local ja deve aparecer ativa." "Green"
+Escrever "=====================================================" "Cyan"
+Write-Host ""
+Read-Host "Pressione ENTER para fechar esta janela"
+"""
+
+
+@app.get("/api/config/instalar-ia.ps1")
+def instalar_ia_script(request: Request):
+    """Devolve um script PowerShell pronto para o visitante rodar (duplo-clique) depois
+    de instalar o Ollama: baixa o modelo, libera este site no OLLAMA_ORIGINS e reinicia
+    o Ollama -- tudo em um unico passo, com a origem certa para ESTE deploy especifico."""
+    origem = _detectar_origem_publica(request)
+    script = _SCRIPT_INSTALAR_IA_TEMPLATE.replace("__ORIGIN__", origem).replace("__MODEL__", OLLAMA_MODELO_PADRAO)
+    return Response(
+        content=script,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="instalar-ia-local.ps1"'},
+    )
+
 
 @app.on_event("startup")
 def _warmup_busca():
     """Carrega o modelo de embeddings no startup do servidor, nao na primeira busca do usuario
-    (sem isso, a primeira busca de cada reinicio parecia travada por ~20-30s)."""
-    try:
-        from search import warmup
+    (sem isso, a primeira busca de cada reinicio parecia travada por ~20-30s).
 
-        warmup()
-        print("Motor de busca pronto (modelo de embeddings carregado).")
+    Modo HOSPEDADO (Render, free tier, 512MB de RAM): NUNCA chama warmup() aqui --
+    carregar o sentence-transformers no processo estouraria esse limite (foi
+    literalmente o que derrubou o deploy antes desta mudanca, ver DEPLOY.md). So
+    carrega os vetores precalculados (.npz); o embedding da query e calculado no
+    navegador de quem esta usando (ver webapp/static/js/embeddings-client.js)."""
+    try:
+        from search import warmup, warmup_hospedado
+
+        if MODO_HOSPEDADO:
+            warmup_hospedado()
+            print("Motor de busca pronto (so vetores do corpus -- modo hospedado, sem modelo carregado no servidor).")
+        else:
+            warmup()
+            print("Motor de busca pronto (modelo de embeddings carregado).")
     except Exception as e:
         print(f"Aviso: motor de busca nao pode ser pre-carregado ({e}).")
 
@@ -523,10 +697,33 @@ def operacao_detalhe(op_id: int):
 
 
 try:
-    from search import buscar_rapido, gerar_narrativa, refinar_resultados
+    from search import (
+        _expandir_query,
+        buscar_por_termo_com_vetor,
+        buscar_rapido,
+        buscar_rapido_com_vetor,
+        gerar_narrativa,
+        refinar_resultados,
+    )
+    # Aliases: editais_search.py TAMBEM exporta montar_prompt_refino (com uma
+    # assinatura/formato de dados completamente diferente -- editais em vez de
+    # operacoes). Sem o alias, o segundo `from editais_search import
+    # montar_prompt_refino` (mais abaixo) sobrescreveria silenciosamente este nome no
+    # namespace do modulo, e as rotas de busca (definidas ANTES, mas resolvidas em
+    # tempo de CHAMADA) passariam a usar por engano a versao de editais -- foi
+    # exatamente esse bug que apareceu ao testar (KeyError: 'titulo').
+    from search import montar_prompt_narrativa as montar_prompt_narrativa_busca
+    from search import montar_prompt_refino as montar_prompt_refino_busca
+
+    # ============ Modo LOCAL (desktop): identico a sempre -- o proprio backend calcula
+    # o embedding (get_model()) e chama o Ollama. Estas rotas GET recusam explicitamente
+    # rodar em modo hospedado (nunca chamam get_model() nesse caso) -- ver as rotas POST
+    # abaixo, que sao as usadas pelo navegador quando MODO_HOSPEDADO=True (busca.js). ============
 
     @app.get("/api/busca")
     def busca(q: str = Query(..., min_length=3)):
+        if MODO_HOSPEDADO:
+            return {"erro": "modo hospedado: use GET /api/busca/preparar + POST /api/busca com o vetor calculado no navegador"}
         try:
             return buscar_rapido(q)
         except Exception as e:
@@ -537,6 +734,8 @@ try:
         """2a etapa (lenta, Ollama): revisa a lista rapida, remove falsos-positivos,
         reordena por relevancia real e busca termos correlatos que podem ter ficado
         de fora. Devolve a lista de resultados ja atualizada."""
+        if MODO_HOSPEDADO:
+            return {"erro": "modo hospedado: use POST /api/busca/refinar com os resultados ja calculados"}
         try:
             r = buscar_rapido(q)
             refinado = refinar_resultados(r["query_expandida"], r["resultados"])
@@ -552,6 +751,8 @@ try:
 
     @app.get("/api/busca/narrativa")
     def busca_narrativa(q: str = Query(..., min_length=3)):
+        if MODO_HOSPEDADO:
+            return {"erro": "modo hospedado: use POST /api/busca/narrativa com os resultados ja calculados"}
         try:
             r = buscar_rapido(q)
             narrativa = gerar_narrativa(
@@ -560,17 +761,119 @@ try:
             return {"narrativa": narrativa}
         except Exception as e:
             return {"erro": f"narrador indisponivel no momento: {e}"}
+
+    # ============ Modo HOSPEDADO: o navegador calcula o embedding (transformers.js, ver
+    # embeddings-client.js) e manda o vetor pronto -- o servidor so faz numpy, nunca
+    # importa/chama sentence_transformers aqui. Ollama tambem roda no navegador (ver
+    # local-ai.js); estas rotas so montam o prompt. ============
+
+    @app.get("/api/busca/preparar")
+    def busca_preparar(q: str = Query(..., min_length=3)):
+        """So usado no modo hospedado: devolve a query ja expandida (ex: 'fintech' ->
+        vocabulario mais proximo do corpus, ver EXPANSAO_TERMOS em search.py) para o
+        navegador gerar o vetor com o MESMO texto que o modo local sempre embutiu --
+        sem isso o resultado nao seria comparavel. So string processing, sem modelo."""
+        return {"query_expandida": _expandir_query(q)}
+
+    @app.post("/api/busca")
+    def busca_com_vetor(body: dict):
+        """Modo hospedado: recebe {q, vetor} com o vetor ja calculado no navegador
+        contra o texto de /api/busca/preparar. So faz a matematica (numpy) contra os
+        vetores precalculados do corpus -- nunca chama get_model()."""
+        q = (body or {}).get("q", "")
+        vetor = (body or {}).get("vetor")
+        if not q or not vetor:
+            return {"erro": "parametros 'q' e 'vetor' sao obrigatorios"}
+        try:
+            return buscar_rapido_com_vetor(q, vetor)
+        except Exception as e:
+            return {"erro": f"motor de busca indisponivel no momento: {e}"}
+
+    @app.post("/api/busca/refinar")
+    def busca_refinar_com_vetor(body: dict):
+        """Modo hospedado: recebe {query_expandida, resultados} (resultados = o que
+        veio de POST /api/busca) e devolve so o PROMPT -- quem gera e o Ollama local de
+        quem esta usando (ver local-ai.js), a filtragem do JSON acontece no navegador."""
+        query_expandida = (body or {}).get("query_expandida", "")
+        resultados = (body or {}).get("resultados", [])
+        try:
+            prep = montar_prompt_refino_busca(query_expandida, resultados)
+            return {
+                "prompt": prep.get("prompt"),
+                "modelo": prep.get("modelo"),
+                "opcoes": prep.get("opcoes"),
+                "candidatos_ids": prep.get("candidatos_ids", []),
+            }
+        except Exception as e:
+            return {"erro": f"refinamento indisponivel no momento: {e}"}
+
+    @app.post("/api/busca/termo")
+    def busca_termo_com_vetor(body: dict):
+        """Modo hospedado: parte do refino -- busca operacoes por um termo correlato
+        sugerido pela IA (o navegador ja calculou o vetor do termo), equivalente ao
+        _buscar_por_termo() do modo local, sem chamar get_model()."""
+        termo = (body or {}).get("termo", "")
+        vetor = (body or {}).get("vetor")
+        ja_incluidos = (body or {}).get("ja_incluidos", []) or []
+        if not vetor:
+            return {"erro": "parametro 'vetor' e obrigatorio"}
+        try:
+            achados = buscar_por_termo_com_vetor(termo, vetor, set(ja_incluidos))
+            return {"resultados": achados}
+        except Exception as e:
+            return {"erro": f"busca por termo indisponivel no momento: {e}"}
+
+    @app.post("/api/busca/narrativa")
+    def busca_narrativa_com_vetor(body: dict):
+        """Modo hospedado: recebe os dados ja calculados (query_expandida, tendencias,
+        resultados finais apos refino) e devolve so o prompt -- o Ollama local de quem
+        esta usando e quem gera o texto (ver local-ai.js)."""
+        query_expandida = (body or {}).get("query_expandida", "")
+        tendencia_segmento = (body or {}).get("tendencia_segmento")
+        tendencia_setor = (body or {}).get("tendencia_setor")
+        resultados = (body or {}).get("resultados", [])
+        confianca_baixa = bool((body or {}).get("confianca_baixa", False))
+        try:
+            prep = montar_prompt_narrativa_busca(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
+            return {
+                "prompt": prep.get("prompt"),
+                "modelo": prep.get("modelo"),
+                "opcoes": prep.get("opcoes"),
+                "fallback": prep.get("fallback"),
+            }
+        except Exception as e:
+            return {"erro": f"narrador indisponivel no momento: {e}"}
 except ImportError as e:
     @app.get("/api/busca")
     def busca_indisponivel(q: str = ""):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+    @app.post("/api/busca")
+    def busca_indisponivel_post(body: dict = None):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+    @app.get("/api/busca/preparar")
+    def busca_preparar_indisponivel(q: str = ""):
         return {"erro": f"motor de busca ainda nao configurado: {e}"}
 
     @app.get("/api/busca/refinar")
     def busca_refinar_indisponivel(q: str = ""):
         return {"erro": f"motor de busca ainda nao configurado: {e}"}
 
+    @app.post("/api/busca/refinar")
+    def busca_refinar_indisponivel_post(body: dict = None):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+    @app.post("/api/busca/termo")
+    def busca_termo_indisponivel(body: dict = None):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
     @app.get("/api/busca/narrativa")
     def busca_narrativa_indisponivel(q: str = ""):
+        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+    @app.post("/api/busca/narrativa")
+    def busca_narrativa_indisponivel_post(body: dict = None):
         return {"erro": f"motor de busca ainda nao configurado: {e}"}
 
 
@@ -709,6 +1012,7 @@ try:
         _COLS_EDITAL,
         _montar_edital,
         buscar_editais_por_projeto,
+        buscar_editais_por_projeto_com_vetor,
         gerar_leitura_elegibilidade,
         montar_prompt_leitura,
         montar_prompt_refino,
@@ -720,11 +1024,19 @@ try:
 
     @app.on_event("startup")
     def _warmup_editais():
+        """Modo HOSPEDADO: so carrega o .npz de vetores dos editais (warmup_hospedado,
+        numpy, barato) -- NUNCA chama get_model() aqui (estouraria a RAM do free tier
+        do Render). Modo local: warmup() completo, como sempre."""
         try:
             from editais_search import warmup as warmup_editais
+            from editais_search import warmup_hospedado as warmup_editais_hospedado
 
-            warmup_editais()
-            print("Motor de busca de editais pronto (embeddings de editais carregados).")
+            if MODO_HOSPEDADO:
+                warmup_editais_hospedado()
+                print("Motor de busca de editais pronto (so vetores -- modo hospedado, sem modelo carregado no servidor).")
+            else:
+                warmup_editais()
+                print("Motor de busca de editais pronto (embeddings de editais carregados).")
         except Exception as e:
             print(f"Aviso: motor de busca de editais nao pode ser pre-carregado ({e}).")
 
@@ -743,8 +1055,26 @@ try:
     # "buscar" como se fosse um edital_id (rota generica registrada primeiro vence).
     @app.get("/api/editais/buscar")
     def editais_buscar(q: str = Query(..., min_length=3)):
+        """Modo local (desktop) apenas -- calcula o embedding no proprio processo
+        (get_model()). Modo hospedado usa POST /api/editais/buscar (vetor do navegador)."""
+        if MODO_HOSPEDADO:
+            return {"erro": "modo hospedado: use POST /api/editais/buscar com o vetor calculado no navegador"}
         try:
             return buscar_editais_por_projeto(q)
+        except Exception as e:
+            return {"erro": f"busca de editais indisponivel no momento: {e}"}
+
+    @app.post("/api/editais/buscar")
+    def editais_buscar_com_vetor(body: dict):
+        """Modo hospedado: recebe {q, vetor} com o vetor ja calculado no navegador
+        (transformers.js, ver embeddings-client.js) -- so faz a matematica (numpy)
+        contra os vetores precalculados dos editais abertos, nunca chama get_model()."""
+        q = (body or {}).get("q", "")
+        vetor = (body or {}).get("vetor")
+        if not q or not vetor:
+            return {"erro": "parametros 'q' e 'vetor' sao obrigatorios"}
+        try:
+            return buscar_editais_por_projeto_com_vetor(q, vetor)
         except Exception as e:
             return {"erro": f"busca de editais indisponivel no momento: {e}"}
 
@@ -754,23 +1084,14 @@ try:
         bateram por semelhanca generica de texto mas nao tem elegibilidade real para o
         que foi descrito. O frontend so mostra os cards depois desta etapa.
 
-        Modo local (desktop): o proprio backend chama o Ollama e ja devolve o
-        resultado filtrado, como sempre.
-        Modo hospedado: nao ha Ollama no servidor -- devolve os resultados AINDA
-        NAO filtrados + o prompt, pro navegador de quem esta usando gerar via o
-        Ollama local dela e filtrar no proprio navegador (ver local-ai.js)."""
+        Modo local (desktop) apenas: o proprio backend roda a busca (get_model()) e
+        chama o Ollama, ja devolve o resultado filtrado, como sempre. Modo hospedado
+        usa POST /api/editais/buscar/refinar (resultados ja vem do POST /api/editais/
+        buscar, calculado com o vetor do navegador)."""
+        if MODO_HOSPEDADO:
+            return {"erro": "modo hospedado: use POST /api/editais/buscar/refinar com os resultados ja calculados"}
         try:
             r = buscar_editais_por_projeto(q)
-            if MODO_HOSPEDADO:
-                prep = montar_prompt_refino(q, r["resultados"])
-                return {
-                    "hospedado": True,
-                    "resultados_sem_filtro": r["resultados"],
-                    "prompt": prep["prompt"],
-                    "modelo": prep["modelo"],
-                    "opcoes": prep["opcoes"],
-                    "candidatos_ids": prep["candidatos_ids"],
-                }
             refino = refinar_editais(q, r["resultados"])
             return {
                 "hospedado": False,
@@ -782,11 +1103,36 @@ try:
         except Exception as e:
             return {"erro": f"refinamento indisponivel no momento: {e}"}
 
+    @app.post("/api/editais/buscar/refinar")
+    def editais_buscar_refinar_com_vetor(body: dict):
+        """Modo hospedado: recebe {q, resultados} (resultados = o que veio de POST
+        /api/editais/buscar) e devolve so o PROMPT -- nao ha Ollama no servidor, quem
+        gera e o navegador de quem esta usando (ver local-ai.js), que tambem faz a
+        filtragem do JSON de resposta (aplicarRefinoLocal, ver common.js)."""
+        q = (body or {}).get("q", "")
+        resultados = (body or {}).get("resultados", [])
+        try:
+            prep = montar_prompt_refino(q, resultados)
+            return {
+                "hospedado": True,
+                "resultados_sem_filtro": resultados,
+                "prompt": prep["prompt"],
+                "modelo": prep["modelo"],
+                "opcoes": prep["opcoes"],
+                "candidatos_ids": prep["candidatos_ids"],
+            }
+        except Exception as e:
+            return {"erro": f"refinamento indisponivel no momento: {e}"}
+
     @app.get("/api/editais/buscar/leitura")
     def editais_buscar_leitura(q: str = Query(..., min_length=3), ids: str = None):
         """Gera a leitura em texto a partir de uma lista de editais ja refinada (ids
         vem do resultado de /buscar/refinar) -- evita rodar o refino de novo so para
-        montar o texto. Mesma logica local x hospedado do /buscar/refinar acima."""
+        montar o texto. Mesma logica local x hospedado do /buscar/refinar acima.
+
+        Em modo hospedado, 'ids' e sempre informado pelo navegador (a lista ja
+        refinada) -- o fallback abaixo (buscar_editais_por_projeto(q), que chamaria
+        get_model()) so roda em modo local, quando 'ids' nao vem."""
         try:
             if ids:
                 id_list = [int(i) for i in ids.split(",") if i.strip().lstrip("-").isdigit()]
@@ -800,6 +1146,8 @@ try:
                     conn.close()
                 by_id = {r[0]: _edital_row_to_dict(r) for r in rows}
                 resultados = [by_id[i] for i in id_list if i in by_id]
+            elif MODO_HOSPEDADO:
+                return {"erro": "modo hospedado: informe 'ids' (resultados ja calculados no navegador)"}
             else:
                 resultados = buscar_editais_por_projeto(q)["resultados"]
 
@@ -849,8 +1197,16 @@ except ImportError as e:
     def editais_buscar_indisponivel(q: str = ""):
         return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
 
+    @app.post("/api/editais/buscar")
+    def editais_buscar_indisponivel_post(body: dict = None):
+        return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
+
     @app.get("/api/editais/buscar/refinar")
     def editais_buscar_refinar_indisponivel(q: str = ""):
+        return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
+
+    @app.post("/api/editais/buscar/refinar")
+    def editais_buscar_refinar_indisponivel_post(body: dict = None):
         return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
 
     @app.get("/api/editais/buscar/leitura")

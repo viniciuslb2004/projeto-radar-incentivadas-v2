@@ -56,16 +56,22 @@ def executescript_compat(conn, script: str):
             conn.execute(statement)
 
 
-# Tables that are fully dropped and rebuilt on every weekly refresh
-# (the source files are republished in full each time, so a full reload
-# is simpler and safer than incremental upserts).
+# Tables that are fully dropped and rebuilt on every weekly refresh.
+#
+# ATE 2026-08: bndes_raw/finep_*_raw/operations tambem estavam aqui (drop+reload
+# completo toda semana). Migrado para incremental (ver incremental.py, unify.py,
+# embeddings.py): BNDES/FINEP republicam o historico INTEIRO a cada refresh, mas em
+# vez de jogar tudo fora e reconstruir do zero, agora so inserimos linhas realmente
+# novas (por hash de conteudo da linha, ja que numero_contrato/contrato_finep_agente
+# NAO sao chave unica por linha -- ver commit/PR que introduziu isso). Continuam
+# fazendo drop+rebuild completo apenas as tabelas pequenas/derivadas, onde isso e
+# barato e nao ha problema de duplicacao nem de estabilidade de id:
+# - de_para_cnae: tabela de-para pequena (~60 linhas), republicada inteira pelo
+#   proprio BNDES a cada planilha -- reload completo e simples e correto.
+# - agg_*: agregados pre-calculados, recalculados do zero a partir da `operations`
+#   atual a cada refresh -- barato (poucas linhas de saida) e sem chave natural.
 REBUILD_EACH_REFRESH = [
-    "bndes_raw",
-    "finep_credito_direto_raw",
-    "finep_credito_descentralizado_raw",
-    "finep_nao_aprovados_raw",
     "de_para_cnae",
-    "operations",
     "agg_setor_periodo",
     "agg_uf",
     "agg_porte",
@@ -73,8 +79,14 @@ REBUILD_EACH_REFRESH = [
 
 SCHEMA = """
 -- ============ Staging: raw BNDES sheet, columns kept close to the source ============
+-- row_hash: sha256 do conteudo da linha (ver incremental.py) -- usado para o refresh
+-- incremental saber quais linhas do arquivo baixado (que vem com TODO o historico
+-- de novo a cada vez) ja existem aqui, sem precisar de uma chave natural -- BNDES
+-- publica varias linhas por numero_contrato (uma por desembolso), entao esse campo
+-- sozinho nao serve como chave unica.
 CREATE TABLE IF NOT EXISTS bndes_raw (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_hash TEXT,
     cliente TEXT,
     cnpj TEXT,
     descricao_projeto TEXT,
@@ -114,6 +126,7 @@ CREATE TABLE IF NOT EXISTS bndes_raw (
 -- ============ Staging: FINEP Projetos_Credito_Direto ============
 CREATE TABLE IF NOT EXISTS finep_credito_direto_raw (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_hash TEXT,
     demanda TEXT,
     ref TEXT,
     contrato TEXT,
@@ -148,6 +161,7 @@ CREATE TABLE IF NOT EXISTS finep_credito_direto_raw (
 -- ============ Staging: FINEP Projetos_Credito_Descentralizado ============
 CREATE TABLE IF NOT EXISTS finep_credito_descentralizado_raw (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_hash TEXT,
     data_assinatura TEXT,
     contrato_finep_agente TEXT,
     beneficiario TEXT,
@@ -166,6 +180,7 @@ CREATE TABLE IF NOT EXISTS finep_credito_descentralizado_raw (
 -- Credito Descentralizado nao aparece aqui pois quem decide e o banco parceiro).
 CREATE TABLE IF NOT EXISTS finep_nao_aprovados_raw (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_hash TEXT,
     instrumento TEXT,
     demanda TEXT,
     referencia TEXT,
@@ -235,6 +250,13 @@ CREATE TABLE IF NOT EXISTS operations (
     raw_id INTEGER NOT NULL,
     embedding_text TEXT                  -- text that was embedded (for debugging/inspection)
 );
+
+CREATE INDEX IF NOT EXISTS idx_bndes_raw_hash ON bndes_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_finep_direto_hash ON finep_credito_direto_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_finep_descentralizado_hash ON finep_credito_descentralizado_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_finep_nao_aprovados_hash ON finep_nao_aprovados_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_operations_raw ON operations(raw_table, raw_id);
+CREATE INDEX IF NOT EXISTS idx_operations_setor_origem ON operations(setor_origem);
 
 CREATE INDEX IF NOT EXISTS idx_operations_setor ON operations(setor_bndes);
 CREATE INDEX IF NOT EXISTS idx_operations_segmento ON operations(segmento);
@@ -335,6 +357,14 @@ CREATE TABLE IF NOT EXISTS refresh_editais_log (
 MIGRACOES_COLUNAS = [
     ("editais_raw", "documento_chave_texto", "TEXT"),
     ("editais_raw", "documento_chave_atualizado_em", "TEXT"),
+    # Adicionadas quando bndes_raw/finep_*_raw deixaram de ser drop+reload completo
+    # e passaram a ser incrementais (ver incremental.py) -- bancos ja existentes
+    # precisam do ALTER TABLE explicito, CREATE TABLE IF NOT EXISTS nao adiciona
+    # coluna em tabela que ja existe.
+    ("bndes_raw", "row_hash", "TEXT"),
+    ("finep_credito_direto_raw", "row_hash", "TEXT"),
+    ("finep_credito_descentralizado_raw", "row_hash", "TEXT"),
+    ("finep_nao_aprovados_raw", "row_hash", "TEXT"),
 ]
 
 
@@ -353,8 +383,17 @@ def _aplicar_migracoes(conn):
 def init_db():
     conn = get_connection()
     try:
+        # migracoes ANTES do executescript: em um banco ja existente, o SCHEMA tem
+        # "CREATE TABLE IF NOT EXISTS" (nao-op se a tabela ja existe) mas tambem tem
+        # "CREATE INDEX" sobre colunas novas (ex: row_hash) -- se a coluna so for
+        # adicionada DEPOIS do executescript, o CREATE INDEX quebra achando que a
+        # coluna nao existe. Rodar migracoes antes garante que colunas novas ja
+        # existem quando os indices forem criados.
+        _aplicar_migracoes(conn)
         executescript_compat(conn, SCHEMA)
         conn.commit()
+        # roda de novo: cobre o caso de banco novo (tabelas acabaram de ser criadas
+        # agora pelo executescript acima, entao a chamada anterior foi um no-op).
         _aplicar_migracoes(conn)
     finally:
         conn.close()

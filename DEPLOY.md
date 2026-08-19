@@ -10,16 +10,27 @@ versões usam o mesmo código, controlado por variáveis de ambiente.
 Frontend estático (webapp/static/)  →  Vercel
 Backend (webapp/main.py + src/)     →  Render (ou Railway/Fly.io) -- sempre ligado
 Banco de dados                      →  Turso (compatível com SQLite)
-IA (Ollama)                         →  no computador de CADA visitante, nunca no servidor
+Embedding da busca (transformers.js)→  no navegador de CADA visitante, nunca no servidor
+IA de texto (Ollama)                →  no computador de CADA visitante, nunca no servidor
 ```
 
 Por quê essa divisão: a Vercel não segura processo nem disco entre chamadas (funções
-"dormem"), e este app mantém um modelo de busca semântica carregado na memória o tempo
-todo -- por isso o backend precisa de um serviço sempre ligado. O Ollama simplesmente não
-roda em nenhum serviço hospedado (precisa de CPU/RAM dedicados e um processo de longa
-duração) -- por isso a geração de texto por IA acontece no navegador de cada pessoa,
-contra o Ollama que ELA tem instalado, e só o resultado final é compartilhado (cache no
-banco) entre todo mundo.
+"dormem"). O Ollama simplesmente não roda em nenhum serviço hospedado (precisa de
+CPU/RAM dedicados e um processo de longa duração) -- por isso a geração de texto por IA
+acontece no navegador de cada pessoa, contra o Ollama que ELA tem instalado, e só o
+resultado final é compartilhado (cache no banco) entre todo mundo.
+
+**O free tier do Render tem um teto de 512MB de RAM, e carregar o modelo de embeddings
+(`sentence-transformers`, mesmo com a wheel CPU-only do PyTorch) estoura esse limite e
+derruba o processo** ("Ran out of memory (used over 512MB)" no log de deploy, bem na
+hora de carregar o modelo). Por isso o cálculo do embedding da BUSCA do usuário também
+foi movido para o navegador (`webapp/static/js/embeddings-client.js`, via
+`transformers.js`/ONNX, rodando via WASM -- sem custo de memória nenhum no servidor). O
+backend, no modo hospedado, nunca importa/carrega `sentence_transformers`/`torch` em
+tempo de execução -- só faz a matemática (produto escalar via numpy) contra os vetores
+do corpus já pré-calculados (`data/embeddings.npz`/`data/editais_embeddings.npz`, ver
+próxima seção). O app local (desktop) continua exatamente como antes: embedding
+calculado no próprio processo Python, sem nada disso.
 
 ## Passo 1 -- Criar o banco no Turso
 
@@ -66,9 +77,15 @@ tarefas para rodar direto no serviço do Render via cron job -- o Render tem ess
    - `SITE_PASSWORD` = senha compartilhada com o grupo pequeno de pessoas
    - `ALLOWED_ORIGINS` = o domínio da Vercel do passo 3 (ex: `https://radar-artica.vercel.app`) -- pode
      deixar em branco por enquanto e voltar aqui depois de saber a URL da Vercel
-5. Depois do primeiro deploy, gere os embeddings de busca **direto no Render** (Shell, na
-   aba do serviço): `cd src && python embeddings.py && python editais_embeddings.py`
-   -- esses dois arquivos ficam no disco do próprio serviço (não precisam do Turso).
+5. **NÃO gere os embeddings no Render** (o Shell do serviço tem o mesmo teto de 512MB de
+   RAM do processo web -- rodar `embeddings.py`/`editais_embeddings.py` lá tentaria
+   carregar o `sentence-transformers` e provavelmente estouraria a memória). Gere os
+   embeddings **localmente** (`cd src && ..\.venv\Scripts\python.exe embeddings.py`
+   e `editais_embeddings.py`) e faça commit + push de `data/embeddings.npz` e
+   `data/editais_embeddings.npz` **antes** de configurar o serviço no Render -- o disco
+   do Render é efêmero (recriado a cada deploy), então esses dois arquivos só existem
+   no servidor hospedado se estiverem dentro do próprio repositório Git (ver "Manutenção
+   contínua" abaixo para o fluxo de atualização contínua).
 
 ## Passo 3 -- Frontend na Vercel
 
@@ -100,6 +117,14 @@ tarefas para rodar direto no serviço do Render via cron job -- o Render tem ess
   com as variáveis do Turso setadas (dá pra automatizar isso como um "Cron Job" no
   próprio Render, ou continuar rodando do seu PC -- os dados vão pro banco compartilhado
   de qualquer jeito).
+- **IMPORTANTE -- atualizar os vetores de busca**: `refresh.py`/`refresh_editais.py`
+  também regeram `data/embeddings.npz`/`data/editais_embeddings.npz` localmente. Como
+  o disco do Render é efêmero e esses dois arquivos precisam estar no próprio
+  repositório para o deploy hospedado enxergá-los (ver "Arquitetura" acima), depois de
+  cada refresh é preciso `git add data/embeddings.npz data/editais_embeddings.npz`,
+  commit e `git push` -- sem isso, o próximo redeploy do Render vai continuar servindo
+  os vetores antigos (operações/editais novos não aparecem na busca, embora apareçam
+  nos dashboards, que não dependem desses vetores).
 - **Trocar a senha de acesso**: mudar `SITE_PASSWORD` nas variáveis de ambiente do Render.
 - **Adicionar mais gente ao grupo**: não precisa de conta nem cadastro -- só passar
   usuário/senha pra quem for usar.
@@ -117,3 +142,16 @@ verdade a partir daqui. O que ESTÁ testado localmente:
 O que precisa de confirmação depois que o Turso estiver configurado de verdade: rodar
 `python src/db.py` (cria as tabelas) e depois `python src/refresh.py` uma vez, conferir
 que os dados aparecem certinho.
+
+**Embedding client-side (transformers.js)**: testado no navegador (Chrome) contra o
+backend rodando localmente com `MODO_HOSPEDADO=True` (`TURSO_DATABASE_URL` fake, só
+para virar a flag) -- o modelo `Xenova/paraphrase-multilingual-MiniLM-L12-v2` carrega
+via CDN (jsDelivr) e devolve vetores comparáveis aos do servidor para as queries de
+teste usadas (ver relatório da sessão que implementou isso para os números exatos). O
+que NÃO foi testado: uma conexão real fim-a-fim contra o Turso hospedado de verdade, e
+o comportamento em navegadores além do testado (Safari/Firefox devem funcionar via
+WASM, mas não foram verificados aqui). Se a busca no site hospedado devolver resultados
+estranhos (score baixo em tudo, ranking sem sentido) depois que isso for ao ar, o
+primeiro lugar para olhar é se o pooling/normalização do modelo client-side realmente
+bate com o `model.encode(..., normalize_embeddings=True)` do servidor (ver comentário
+no topo de `webapp/static/js/embeddings-client.js`).

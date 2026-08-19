@@ -138,6 +138,78 @@ function finalizarNarrativa(texto) {
   box.innerHTML = `<div>${texto}</div>`;
 }
 
+// Modo HOSPEDADO: revisao (2a etapa) via o Ollama local de quem esta usando -- o
+// servidor so monta o prompt (montar_prompt_refino em search.py), a filtragem do
+// JSON e a busca por "termos adicionais" acontecem aqui no navegador.
+async function refinarComIAHospedado(data) {
+  const contagem = document.getElementById("busca-contagem");
+  try {
+    const prep = await postJSON("/api/busca/refinar", { query_expandida: data.query_expandida, resultados: ultimosResultados }, 30000);
+    if (prep.erro || !prep.prompt) {
+      if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas`;
+      return;
+    }
+    const disponivel = await verificarOllamaLocal();
+    if (!disponivel) {
+      if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas <span class="hint">(ative a IA local para revisar por relevância real)</span>`;
+      return;
+    }
+
+    let respostaTexto = null;
+    try {
+      respostaTexto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 100000);
+    } catch (e) {
+      respostaTexto = null;
+    }
+    if (!respostaTexto) {
+      if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas`;
+      return;
+    }
+
+    const refinados = aplicarRefinoLocal(ultimosResultados, prep.candidatos_ids, respostaTexto);
+    if (refinados === null) {
+      if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas`;
+      return;
+    }
+    const candidatosSet = new Set(prep.candidatos_ids || []);
+    const restante = ultimosResultados.filter((r) => !candidatosSet.has(r.id));
+    const nRemovidos = (prep.candidatos_ids || []).length - refinados.length;
+
+    // Termos adicionais: cada um precisa de um vetor calculado no navegador tambem.
+    const termosAdicionais = extrairTermosAdicionaisLocal(respostaTexto);
+    let adicionados = [];
+    const jaIncluidosIds = ultimosResultados.map((r) => r.id);
+    for (const termo of termosAdicionais) {
+      try {
+        const vetorTermo = await embutirQuery(termo);
+        const resp = await postJSON(
+          "/api/busca/termo",
+          { termo, vetor: vetorTermo, ja_incluidos: jaIncluidosIds.concat(adicionados.map((a) => a.id)) },
+          15000
+        );
+        if (resp.resultados) adicionados = adicionados.concat(resp.resultados);
+      } catch (e) {
+        // enriquecimento opcional -- se falhar, so nao adiciona esses extras.
+      }
+    }
+
+    ultimosResultados = refinados.concat(adicionados).concat(restante);
+    renderListaResultados();
+    const partes = [`${fmtNum(ultimosResultados.length)} operações parecidas encontradas`];
+    const ajustes = [];
+    if (nRemovidos > 0) ajustes.push(`${nRemovidos} removidas por não serem relevantes`);
+    if (adicionados.length) ajustes.push(`${adicionados.length} adicionadas pela IA`);
+    if (ajustes.length && contagem) {
+      contagem.innerHTML = `${partes[0]} <span class="hint" style="color:var(--positive);">(revisado pela sua IA local: ${ajustes.join(", ")})</span>`;
+    } else if (contagem) {
+      contagem.innerHTML = `${partes[0]} <span class="hint">(revisado pela sua IA local, sem alterações)</span>`;
+    }
+  } catch (e) {
+    if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas`;
+  }
+}
+
+// Modo LOCAL (desktop): igual a sempre -- o proprio backend chama o Ollama.
 async function refinarComIA(q) {
   const contagem = document.getElementById("busca-contagem");
   try {
@@ -162,13 +234,57 @@ async function refinarComIA(q) {
   }
 }
 
+// Modo HOSPEDADO: narrativa via o Ollama local de quem esta usando -- o servidor so
+// monta o prompt (montar_prompt_narrativa em search.py).
+async function narrativaComIAHospedado(data) {
+  try {
+    const prep = await postJSON(
+      "/api/busca/narrativa",
+      {
+        query_expandida: data.query_expandida,
+        tendencia_segmento: data.tendencia_segmento,
+        tendencia_setor: data.tendencia_setor,
+        resultados: ultimosResultados,
+        confianca_baixa: data.confianca_baixa,
+      },
+      30000
+    );
+    if (prep.erro) return prep.erro;
+    if (!prep.prompt) return prep.fallback || "Não foi possível gerar a análise.";
+    const disponivel = await verificarOllamaLocal();
+    if (!disponivel) return prep.fallback || 'Ative a IA local (botão no topo da página) para gerar uma leitura personalizada.';
+    try {
+      const texto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 100000);
+      return (texto && texto.trim()) || prep.fallback;
+    } catch (e) {
+      return prep.fallback || "Não foi possível gerar a análise agora.";
+    }
+  } catch (e) {
+    return "Não foi possível gerar a análise em texto agora, mas os resultados acima continuam válidos.";
+  }
+}
+
 async function runBusca(q) {
   const container = document.getElementById("busca-resultado");
   container.innerHTML = '<p class="empty-state">Buscando operações parecidas...</p>';
 
   let data;
   try {
-    data = await fetchJSON("/api/busca?" + qs({ q }));
+    if (window.MODO_HOSPEDADO) {
+      const prep = await fetchJSON("/api/busca/preparar?" + qs({ q }));
+      if (prep.erro) {
+        container.innerHTML = `<p class="empty-state">${prep.erro}</p>`;
+        return;
+      }
+      const vetor = await embutirQuery(prep.query_expandida, (info) => {
+        if (info && info.status === "progress" && typeof info.progress === "number") {
+          container.innerHTML = `<p class="empty-state">Baixando modelo de busca no seu navegador (${Math.round(info.progress)}%)...</p>`;
+        }
+      });
+      data = await postJSON("/api/busca", { q, vetor });
+    } else {
+      data = await fetchJSON("/api/busca?" + qs({ q }));
+    }
   } catch (e) {
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
     return;
@@ -184,17 +300,27 @@ async function runBusca(q) {
   // Etapa 2 (lenta, Ollama): revisa a lista -- remove falsos-positivos, reordena por
   // relevancia real e acha operacoes correlatas que a busca rapida deixou passar.
   let progressInterval = iniciarProgresso("Revisando resultados com IA local (Ollama, roda no seu computador)...", REFINO_DURACAO_ESTIMADA_MS);
-  await refinarComIA(q);
+  if (window.MODO_HOSPEDADO) {
+    await refinarComIAHospedado(data);
+  } else {
+    await refinarComIA(q);
+  }
   if (progressInterval) clearInterval(progressInterval);
   finalizarProgresso();
 
   // Etapa 3 (lenta, Ollama): gera a leitura em texto.
   progressInterval = iniciarProgresso("Gerando análise com IA local (Ollama, roda no seu computador)...", NARRATIVA_DURACAO_ESTIMADA_MS);
   try {
-    const narrativaResp = await fetchJSON("/api/busca/narrativa?" + qs({ q }), 90000);
+    let textoFinal;
+    if (window.MODO_HOSPEDADO) {
+      textoFinal = await narrativaComIAHospedado(data);
+    } else {
+      const narrativaResp = await fetchJSON("/api/busca/narrativa?" + qs({ q }), 90000);
+      textoFinal = narrativaResp.narrativa || narrativaResp.erro || "Não foi possível gerar a análise.";
+    }
     if (progressInterval) clearInterval(progressInterval);
     finalizarProgresso();
-    finalizarNarrativa(narrativaResp.narrativa || narrativaResp.erro || "Não foi possível gerar a análise.");
+    finalizarNarrativa(textoFinal);
   } catch (e) {
     if (progressInterval) clearInterval(progressInterval);
     finalizarNarrativa("Não foi possível gerar a análise em texto agora, mas os resultados acima continuam válidos.");

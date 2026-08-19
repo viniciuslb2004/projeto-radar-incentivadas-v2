@@ -105,6 +105,48 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
 
+// Modo HOSPEDADO apenas: aplica localmente o mesmo filtro que o backend aplicava
+// (refinar_editais/refinar_resultados no servidor) a partir do texto JSON que o
+// Ollama do proprio visitante gerou (ver local-ai.js/gerarComOllamaLocal) -- devolve
+// null se o texto nao veio num JSON valido (o chamador decide o fallback nesse
+// caso). Usado tanto por busca.js (operações) quanto por editais.js (editais) --
+// funciona em qualquer lista de objetos que tenha um campo `id`.
+function aplicarRefinoLocal(resultadosOriginais, candidatosIds, respostaTexto) {
+  try {
+    const parsed = JSON.parse(respostaTexto);
+    const idsValidos = new Set(candidatosIds);
+    const idsRelevantes = (parsed.relevantes || [])
+      .map((i) => parseInt(i, 10))
+      .filter((n) => !isNaN(n) && idsValidos.has(n));
+    const porId = {};
+    resultadosOriginais.forEach((r) => { porId[r.id] = r; });
+    const vistos = new Set();
+    const refinados = [];
+    idsRelevantes.forEach((id) => {
+      if (!vistos.has(id) && porId[id]) {
+        vistos.add(id);
+        refinados.push(porId[id]);
+      }
+    });
+    return refinados;
+  } catch (e) {
+    return null;
+  }
+}
+
+// So usado pela busca de operacoes (busca.js) -- editais nao tem essa feature. Extrai
+// os "termos_adicionais" (sinonimos/segmentos correlatos sugeridos pela IA) da MESMA
+// resposta JSON que aplicarRefinoLocal ja processou -- devolve [] se nao vier num
+// JSON valido ou se o campo nao existir.
+function extrairTermosAdicionaisLocal(respostaTexto) {
+  try {
+    const parsed = JSON.parse(respostaTexto);
+    return (parsed.termos_adicionais || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 3);
+  } catch (e) {
+    return [];
+  }
+}
+
 async function initFiltersAndTabs() {
   const status = await fetchJSON("/api/status");
   window.MODO_HOSPEDADO = !!status.hospedado;

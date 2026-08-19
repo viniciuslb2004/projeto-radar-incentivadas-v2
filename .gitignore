@@ -3,10 +3,21 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Dados locais (banco SQLite, embeddings, downloads brutos) -- nunca vao pro git.
-# No app local ficam so no seu PC; no deploy hospedado moram no Turso (banco) e
-# sao gerados no primeiro deploy (embeddings), ver DEPLOY.md.
-data/
+# Dados locais (banco SQLite, downloads brutos) -- nunca vao pro git: o banco
+# hospedado mora no Turso (ver DEPLOY.md), e data/raw + data/rfb_tmp sao downloads
+# brutos temporarios que qualquer maquina consegue baixar de novo com o refresh.
+#
+# EXCECAO: data/embeddings.npz e data/editais_embeddings.npz (os vetores
+# precalculados de busca) PRECISAM ir pro git -- o deploy hospedado (Render) tem
+# disco efemero (refeito a cada redeploy) e nao carrega o sentence-transformers em
+# runtime (estouraria os 512MB de RAM do free tier, ver DEPLOY.md), entao esses dois
+# arquivos so existem no servidor hospedado se estiverem no proprio repositorio.
+# Depois de rodar refresh.py/refresh_editais.py localmente, lembre de dar
+# `git add data/embeddings.npz data/editais_embeddings.npz` + commit + push (ver
+# DEPLOY.md, secao "Manutencao continua") para o deploy hospedado pegar a atualizacao.
+data/*
+!data/embeddings.npz
+!data/editais_embeddings.npz
 scratch_*
 
 .claude/

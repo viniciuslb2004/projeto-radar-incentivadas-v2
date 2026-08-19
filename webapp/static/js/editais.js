@@ -289,41 +289,54 @@ function edStatusBoxHTML(mensagem) {
   </div>`;
 }
 
-// So usado no modo hospedado: aplica localmente o mesmo filtro que o backend
-// aplicava (refinar_editais em editais_search.py) a partir do texto que o
-// Ollama do proprio visitante gerou -- devolve null se o texto nao veio num
-// JSON valido (o chamador decide o fallback nesse caso).
-function aplicarRefinoLocal(resultadosOriginais, candidatosIds, respostaTexto) {
-  try {
-    const parsed = JSON.parse(respostaTexto);
-    const idsValidos = new Set(candidatosIds);
-    const idsRelevantes = (parsed.relevantes || [])
-      .map((i) => parseInt(i, 10))
-      .filter((n) => !isNaN(n) && idsValidos.has(n));
-    const porId = {};
-    resultadosOriginais.forEach((r) => { porId[r.id] = r; });
-    const vistos = new Set();
-    const refinados = [];
-    idsRelevantes.forEach((id) => {
-      if (!vistos.has(id) && porId[id]) {
-        vistos.add(id);
-        refinados.push(porId[id]);
-      }
-    });
-    return refinados;
-  } catch (e) {
-    return null;
-  }
-}
+// aplicarRefinoLocal() agora mora em common.js (reaproveitado por busca.js tambem).
 
 async function runEditaisEndgame(q) {
   const container = document.getElementById("editais-endgame-resultado");
-  container.innerHTML = edStatusBoxHTML("Analisando quais editais abertos realmente se aplicam...");
-  let progressInterval = edIniciarProgresso("Analisando quais editais abertos realmente se aplicam...", ED_REFINO_DURACAO_ESTIMADA_MS);
+  container.innerHTML = edStatusBoxHTML("Buscando editais aderentes...");
+  let progressInterval = edIniciarProgresso("Buscando editais aderentes...", ED_REFINO_DURACAO_ESTIMADA_MS);
+
+  // Etapa 1 (rapida): acha os editais mais parecidos por embeddings. Modo hospedado
+  // calcula o vetor da descricao NO NAVEGADOR (transformers.js, ver embeddings-
+  // client.js, unico jeito de nao estourar os 512MB de RAM do free tier do servidor)
+  // e manda pronto; modo local (desktop) continua igual a sempre (get_model() no
+  // proprio backend).
+  let buscaResp;
+  try {
+    if (window.MODO_HOSPEDADO) {
+      const vetor = await embutirQuery(q, (info) => {
+        if (info && info.status === "progress" && typeof info.progress === "number") {
+          const msgEl = document.getElementById("ed-status-mensagem");
+          if (msgEl) msgEl.textContent = `Baixando modelo de busca no seu navegador (${Math.round(info.progress)}%)...`;
+        }
+      });
+      buscaResp = await postJSON("/api/editais/buscar", { q, vetor }, 60000);
+    } else {
+      buscaResp = await fetchJSON("/api/editais/buscar?" + qs({ q }), 60000);
+    }
+  } catch (e) {
+    if (progressInterval) clearInterval(progressInterval);
+    container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
+    return;
+  }
+  if (buscaResp.erro) {
+    if (progressInterval) clearInterval(progressInterval);
+    container.innerHTML = `<p class="empty-state">${buscaResp.erro}</p>`;
+    return;
+  }
+
+  // Etapa 2 (lenta, IA): remove falsos-positivos da busca rapida -- editais que so
+  // bateram por semelhanca generica de texto mas nao tem elegibilidade real.
+  const msgRefino = document.getElementById("ed-status-mensagem");
+  if (msgRefino) msgRefino.textContent = "Analisando quais editais abertos realmente se aplicam...";
 
   let refino;
   try {
-    refino = await fetchJSON("/api/editais/buscar/refinar?" + qs({ q }), 100000);
+    if (window.MODO_HOSPEDADO) {
+      refino = await postJSON("/api/editais/buscar/refinar", { q, resultados: buscaResp.resultados }, 100000);
+    } else {
+      refino = await fetchJSON("/api/editais/buscar/refinar?" + qs({ q }), 100000);
+    }
   } catch (e) {
     if (progressInterval) clearInterval(progressInterval);
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';

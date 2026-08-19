@@ -2,11 +2,16 @@
 
 Escopo (decisao do usuario): so as operacoes de credito, comparaveis ao BNDES.
 Ficam de fora subvencao/nao-reembolsavel/startups/ANCINE.
+
+Incremental (ver incremental.py): a FINEP republica o historico INTEIRO a cada
+vez (nas 3 planilhas -- credito direto, credito descentralizado e nao aprovados),
+entao so inserimos as linhas cujo hash de conteudo ainda nao existe na tabela.
 """
 import pandas as pd
 
 from db import get_connection
 from download import FINEP_NAO_APROVADOS_PATH, FINEP_PATH
+from incremental import backfill_row_hashes, compute_row_hash, existing_hashes, insert_new_rows
 
 NAO_APROVADOS_COLUMNS = {
     "Instrumento": "instrumento",
@@ -72,6 +77,25 @@ def _clean_cnpj(series: pd.Series) -> pd.Series:
     return series.astype(str).str.replace(r"\D", "", regex=True).str.zfill(14)
 
 
+CREDITO_DIRETO_HASH_COLS = list(CREDITO_DIRETO_COLUMNS.values())
+CREDITO_DESCENTRALIZADO_HASH_COLS = list(CREDITO_DESCENTRALIZADO_COLUMNS.values())
+NAO_APROVADOS_HASH_COLS = list(NAO_APROVADOS_COLUMNS.values())
+
+
+def _linhas_novas(conn, table: str, df: pd.DataFrame, hash_cols: list) -> pd.DataFrame:
+    """Backfill de row_hash (bancos ja existentes) + filtra so o que ainda nao esta
+    na tabela, por hash de conteudo da linha (ver incremental.py)."""
+    n_backfill = backfill_row_hashes(conn, table, hash_cols)
+    if n_backfill:
+        print(f"{table}: {n_backfill} linhas existentes tiveram row_hash calculado retroativamente.")
+    hashes_existentes = existing_hashes(conn, table)
+    df = df.copy()
+    df["row_hash"] = compute_row_hash(conn, table, df, hash_cols)
+    novas = df[~df["row_hash"].isin(hashes_existentes)].copy()
+    novas = novas.drop_duplicates(subset=["row_hash"])
+    return novas
+
+
 def parse_finep(path=FINEP_PATH):
     conn = get_connection()
     try:
@@ -84,7 +108,9 @@ def parse_finep(path=FINEP_PATH):
         direto["data_assinatura"] = pd.to_datetime(direto["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
         for col in ["valor_finep", "contrapartida_financeira", "valor_pago"]:
             direto[col] = pd.to_numeric(direto[col], errors="coerce")
-        direto.to_sql("finep_credito_direto_raw", conn, if_exists="append", index=False)
+        total_direto = len(direto)
+        novas_direto = _linhas_novas(conn, "finep_credito_direto_raw", direto, CREDITO_DIRETO_HASH_COLS)
+        insert_new_rows(conn, "finep_credito_direto_raw", novas_direto, CREDITO_DIRETO_HASH_COLS + ["row_hash"])
 
         print(f"Lendo {path} (aba Projetos_Créd__Descentralizado)...")
         descentralizado = pd.read_excel(path, sheet_name="Projetos_Créd__Descentralizado", header=6, engine="openpyxl")
@@ -95,14 +121,27 @@ def parse_finep(path=FINEP_PATH):
         descentralizado["data_assinatura"] = pd.to_datetime(descentralizado["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
         for col in ["valor_financiado", "valor_liberado", "contrapartida", "outros_recursos"]:
             descentralizado[col] = pd.to_numeric(descentralizado[col], errors="coerce")
-        descentralizado.to_sql("finep_credito_descentralizado_raw", conn, if_exists="append", index=False)
+        total_descentralizado = len(descentralizado)
+        novas_descentralizado = _linhas_novas(
+            conn, "finep_credito_descentralizado_raw", descentralizado, CREDITO_DESCENTRALIZADO_HASH_COLS
+        )
+        insert_new_rows(
+            conn, "finep_credito_descentralizado_raw", novas_descentralizado,
+            CREDITO_DESCENTRALIZADO_HASH_COLS + ["row_hash"],
+        )
 
         conn.commit()
+        total_direto_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_direto_raw").fetchone()[0]
+        total_descentralizado_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_descentralizado_raw").fetchone()[0]
     finally:
         conn.close()
 
-    print(f"FINEP credito direto: {len(direto)} operacoes. Credito descentralizado: {len(descentralizado)} operacoes.")
-    return len(direto), len(descentralizado)
+    print(
+        f"FINEP credito direto: {len(novas_direto)} novas (planilha tem {total_direto}, tabela tem {total_direto_agora}). "
+        f"Credito descentralizado: {len(novas_descentralizado)} novas (planilha tem {total_descentralizado}, "
+        f"tabela tem {total_descentralizado_agora})."
+    )
+    return len(novas_direto), len(novas_descentralizado), total_direto_agora, total_descentralizado_agora
 
 
 def parse_finep_nao_aprovados(path=FINEP_NAO_APROVADOS_PATH):
@@ -119,13 +158,16 @@ def parse_finep_nao_aprovados(path=FINEP_NAO_APROVADOS_PATH):
         df["data_entrada"] = pd.to_datetime(df["data_entrada"], errors="coerce").dt.strftime("%Y-%m-%d")
         df["data_indeferimento"] = pd.to_datetime(df["data_indeferimento"], errors="coerce").dt.strftime("%Y-%m-%d")
         df["valor_finep"] = pd.to_numeric(df["valor_finep"], errors="coerce")
-        df.to_sql("finep_nao_aprovados_raw", conn, if_exists="append", index=False)
+        total_planilha = len(df)
+        novas = _linhas_novas(conn, "finep_nao_aprovados_raw", df, NAO_APROVADOS_HASH_COLS)
+        insert_new_rows(conn, "finep_nao_aprovados_raw", novas, NAO_APROVADOS_HASH_COLS + ["row_hash"])
         conn.commit()
+        total_agora = conn.execute("SELECT COUNT(*) FROM finep_nao_aprovados_raw").fetchone()[0]
     finally:
         conn.close()
 
-    print(f"FINEP nao aprovados: {len(df)} projetos gravados.")
-    return len(df)
+    print(f"FINEP nao aprovados: {len(novas)} novos (planilha tem {total_planilha}, tabela tem {total_agora}).")
+    return len(novas), total_agora
 
 
 if __name__ == "__main__":

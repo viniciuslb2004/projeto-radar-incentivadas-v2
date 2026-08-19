@@ -1,8 +1,34 @@
-"""Constroi a tabela unificada `operations` (BNDES + FINEP credito) e os agregados do dashboard."""
+"""Constroi a tabela unificada `operations` (BNDES + FINEP credito) e os agregados do dashboard.
+
+Incremental (ver incremental.py e db.py): bndes_raw/finep_*_raw agora sao append-only,
+entao build_operations() so processa as linhas raw que AINDA NAO tem uma linha
+correspondente em `operations` -- usando raw_table+raw_id (id autoincrement estavel da
+tabela de origem), que ja existia no schema mas antes so servia para drill-down, nao
+como chave de deduplicacao. Isso e o que faz a classificacao de setor da FINEP (o merge
+contra cnpj_cnae) so rodar para as linhas novas a cada refresh, nao para a base inteira.
+
+Alem disso, toda vez que o job mensal de enriquecimento (enrich_cnae.py) adiciona CNPJs
+novos ao cache cnpj_cnae, as operacoes da FINEP que ficaram `setor_origem='pendente'` em
+refreshes anteriores (o CNPJ ainda nao estava no cache na hora em que a linha foi
+unificada) sao re-checadas contra o cache atual e ATUALIZADAS em cima da linha ja
+existente (nunca duplicadas) sempre que resolvem. Sem isso, uma vez que `operations`
+deixa de ser reconstruida do zero toda semana, uma pendencia resolvida no enriquecimento
+mensal nunca mais seria refletida.
+"""
 import pandas as pd
 
 from db import get_connection
 from geo import regiao_de
+from incremental import insert_new_rows
+
+OPERATIONS_COLS = [
+    "agencia", "instrumento", "fonte_id", "cliente", "cnpj", "uf", "municipio",
+    "data_contratacao", "ano", "trimestre", "valor_contratado", "valor_desembolsado",
+    "setor_bndes", "subsetor_bndes", "segmento", "setor_origem", "porte_cliente",
+    "produto", "modalidade_apoio", "indexador", "taxa_juros", "prazo_carencia_meses",
+    "prazo_amortizacao_meses", "descricao_projeto", "agente_financeiro",
+    "raw_table", "raw_id", "embedding_text",
+]
 
 
 def _add_periodo(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
@@ -19,7 +45,11 @@ def _load_cnae_lookup(conn) -> pd.DataFrame:
 
 
 def _build_bndes_ops(conn) -> pd.DataFrame:
-    df = pd.read_sql("SELECT * FROM bndes_raw", conn)
+    # so as linhas de bndes_raw que ainda nao tem uma linha correspondente em operations
+    df = pd.read_sql(
+        "SELECT * FROM bndes_raw WHERE id NOT IN (SELECT raw_id FROM operations WHERE raw_table = 'bndes_raw')",
+        conn,
+    )
     if df.empty:
         return df
     df = _add_periodo(df, "data_contratacao")
@@ -56,7 +86,11 @@ def _build_bndes_ops(conn) -> pd.DataFrame:
 
 
 def _build_finep_direto_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
-    df = pd.read_sql("SELECT * FROM finep_credito_direto_raw", conn)
+    df = pd.read_sql(
+        "SELECT * FROM finep_credito_direto_raw WHERE id NOT IN "
+        "(SELECT raw_id FROM operations WHERE raw_table = 'finep_credito_direto_raw')",
+        conn,
+    )
     if df.empty:
         return df
     df = _add_periodo(df, "data_assinatura")
@@ -95,7 +129,11 @@ def _build_finep_direto_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_finep_descentralizado_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
-    df = pd.read_sql("SELECT * FROM finep_credito_descentralizado_raw", conn)
+    df = pd.read_sql(
+        "SELECT * FROM finep_credito_descentralizado_raw WHERE id NOT IN "
+        "(SELECT raw_id FROM operations WHERE raw_table = 'finep_credito_descentralizado_raw')",
+        conn,
+    )
     if df.empty:
         return df
     df = _add_periodo(df, "data_assinatura")
@@ -179,7 +217,62 @@ def _embedding_text(row) -> str:
     return " | ".join(str(p) for p in parts if p not in (None, "", "nan"))
 
 
+def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame) -> list:
+    """Re-checa as operacoes 'pendente' (FINEP cujo CNPJ nao estava no cache cnpj_cnae
+    na hora em que a linha foi unificada) contra o cache ATUAL, e atualiza em cima da
+    linha ja existente as que agora resolvem -- nunca insere linha nova aqui. Devolve
+    os ids atualizados (para o refresh saber quais precisam de um embedding novo)."""
+    if cnae_lookup.empty:
+        return []
+
+    pendentes = pd.read_sql(
+        "SELECT id, cnpj, produto, modalidade_apoio, indexador, valor_contratado, "
+        "prazo_amortizacao_meses, descricao_projeto, municipio, uf "
+        "FROM operations WHERE setor_origem = 'pendente'",
+        conn,
+    )
+    if pendentes.empty:
+        return []
+
+    resolvidos = pendentes.merge(cnae_lookup, on="cnpj", how="inner")
+    resolvidos = resolvidos[resolvidos["setor_bndes_mapeado"].notna()]
+    if resolvidos.empty:
+        return []
+
+    updates = []
+    for _, row in resolvidos.iterrows():
+        texto = _embedding_text({
+            "setor_bndes": row["setor_bndes_mapeado"],
+            "subsetor_bndes": row["subsetor_bndes_mapeado"],
+            "segmento": row["cnae_descricao"],
+            "produto": row["produto"],
+            "modalidade_apoio": row["modalidade_apoio"],
+            "indexador": row["indexador"],
+            "valor_contratado": row["valor_contratado"],
+            "prazo_amortizacao_meses": row["prazo_amortizacao_meses"],
+            "descricao_projeto": row["descricao_projeto"],
+            "municipio": row["municipio"],
+            "uf": row["uf"],
+        })
+        updates.append((
+            row["setor_bndes_mapeado"], row["subsetor_bndes_mapeado"], row["cnae_descricao"], texto, int(row["id"]),
+        ))
+
+    cur = conn.cursor()
+    cur.executemany(
+        "UPDATE operations SET setor_bndes = ?, subsetor_bndes = ?, segmento = ?, "
+        "setor_origem = 'enriquecido', embedding_text = ? WHERE id = ?",
+        updates,
+    )
+    conn.commit()
+    return [u[-1] for u in updates]
+
+
 def build_operations():
+    """Incremental: so insere operacoes para linhas raw novas + reclassifica pendentes
+    que resolveram desde o ultimo refresh. Devolve um dict (nao so uma tupla) porque o
+    orquestrador do refresh (refresh.py) precisa dos IDS novos/reclassificados para
+    passar pro embeddings incremental (embeddings.py), nao so das contagens."""
     conn = get_connection()
     try:
         cnae_lookup = _load_cnae_lookup(conn)
@@ -189,23 +282,45 @@ def build_operations():
             _build_finep_descentralizado_ops(conn, cnae_lookup),
         ]
         parts = [p for p in parts if p is not None and not p.empty]
-        ops = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        novas = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
-        if not ops.empty:
-            ops["embedding_text"] = ops.apply(_embedding_text, axis=1)
-            ops.to_sql("operations", conn, if_exists="append", index=False)
+        novos_ids = []
+        if not novas.empty:
+            novas["embedding_text"] = novas.apply(_embedding_text, axis=1)
+            insert_new_rows(conn, "operations", novas, OPERATIONS_COLS)
             conn.commit()
+            # recupera os ids autoincrement recem-atribuidos, por (raw_table, raw_id)
+            for raw_table, grupo in novas.groupby("raw_table"):
+                raw_ids = grupo["raw_id"].astype(int).tolist()
+                placeholders = ", ".join("?" * len(raw_ids))
+                rows = conn.execute(
+                    f"SELECT id FROM operations WHERE raw_table = ? AND raw_id IN ({placeholders})",
+                    [raw_table] + raw_ids,
+                ).fetchall()
+                novos_ids.extend(r[0] for r in rows)
+
+        reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup)
 
         _build_aggregates(conn)
         conn.commit()
+
+        total_ops = conn.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
+        n_pendente = conn.execute("SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'").fetchone()[0]
     finally:
         conn.close()
 
-    n_pendente = 0
-    if not ops.empty:
-        n_pendente = int((ops["setor_origem"] == "pendente").sum())
-    print(f"operations: {len(ops)} linhas gravadas ({n_pendente} com setor pendente de enriquecimento).")
-    return len(ops), n_pendente
+    n_novas = len(novas) if not novas.empty else 0
+    print(
+        f"operations: {n_novas} linhas novas, {len(reclassificados_ids)} reclassificadas de "
+        f"pendente -> enriquecido, {total_ops} no total ({n_pendente} ainda pendentes de enriquecimento)."
+    )
+    return {
+        "novas": n_novas,
+        "total": total_ops,
+        "pendentes": n_pendente,
+        "novos_ids": novos_ids,
+        "reclassificados_ids": reclassificados_ids,
+    }
 
 
 def _build_aggregates(conn):
