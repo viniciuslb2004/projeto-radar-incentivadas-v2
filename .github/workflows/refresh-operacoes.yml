@@ -1,0 +1,39 @@
+name: Refresh operações (BNDES + FINEP, semanal)
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # toda segunda 06:00 UTC (03:00 horário de Brasília)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar refresh incremental (BNDES + FINEP)
+        working-directory: src
+        run: python refresh.py
+
+      - name: Commit dos vetores de busca atualizados
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/embeddings.npz
+          git diff --cached --quiet || git commit -m "Atualiza vetores de busca (refresh automático semanal)"
+          git push
