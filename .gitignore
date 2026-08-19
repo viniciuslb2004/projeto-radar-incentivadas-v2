@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dados locais (banco SQLite, embeddings, downloads brutos) -- nunca vao pro git.
+# No app local ficam so no seu PC; no deploy hospedado moram no Turso (banco) e
+# sao gerados no primeiro deploy (embeddings), ver DEPLOY.md.
+data/
+scratch_*
+
+.claude/
+*.local.json
+.env

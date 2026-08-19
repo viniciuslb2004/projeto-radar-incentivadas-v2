@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Radar de Crédito Incentivado</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    Radar de Crédito Incentivado
+    <small>BNDES + FINEP &middot; operações de crédito</small>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" data-view="consolidado">Consolidado</button>
+    <button class="tab-btn" data-view="tendencias">Tendências &amp; Insights</button>
+    <button class="tab-btn" data-view="busca">Busca</button>
+    <button class="tab-btn" data-view="editais">Editais</button>
+  </div>
+  <span class="ia-local-badge" id="ia-local-badge" style="display:none;"></span>
+  <div class="status-pill" id="status-pill">carregando...</div>
+</div>
+
+<div class="filterbar" id="filterbar">
+  <div>
+    <label>Agência</label>
+    <select id="f-agencia"><option value="Todas">Todas</option></select>
+  </div>
+  <div>
+    <label>Setor</label>
+    <select id="f-setor"><option value="Todos">Todos</option></select>
+  </div>
+  <div>
+    <label>UF</label>
+    <select id="f-uf"><option value="Todas">Todas</option></select>
+  </div>
+  <div>
+    <label>De (mês/ano)</label>
+    <div style="display:flex; gap:4px;">
+      <select id="f-mes-ini"></select>
+      <select id="f-ano-ini"></select>
+    </div>
+  </div>
+  <div>
+    <label>Até (mês/ano)</label>
+    <div style="display:flex; gap:4px;">
+      <select id="f-mes-fim"></select>
+      <select id="f-ano-fim"></select>
+    </div>
+  </div>
+</div>
+
+<main>
+
+  <!-- ===================== CONSOLIDADO ===================== -->
+  <section id="view-consolidado" class="view active">
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header">Evolução temporal &mdash; BNDES x FINEP <span class="hint">R$ contratado por trimestre</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-serie"></canvas></div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">Ranking de setores <span class="hint">clique para detalhar</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-setores"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header">Por UF <span class="hint">clique para detalhar</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-uf"></canvas></div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">Por porte do cliente <span class="hint">clique para detalhar</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-porte"></canvas></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TENDENCIAS ===================== -->
+  <section id="view-tendencias" class="view">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header" id="tend-header-alta">Setores em alta</div>
+        <div class="card-body"><ul class="clickable-list" id="lista-alta"></ul></div>
+      </div>
+      <div class="card">
+        <div class="card-header" id="tend-header-queda">Setores em queda</div>
+        <div class="card-body"><ul class="clickable-list" id="lista-queda"></ul></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span>Detalhe por subsetor <span class="hint">clique para detalhar operações</span></span>
+        <select id="subsetor-setor-select" class="header-select"></select>
+      </div>
+      <div class="card-body">
+        <div class="grid-2" style="margin-bottom:0;">
+          <div class="chart-wrap"><canvas id="chart-subsetores"></canvas></div>
+          <div>
+            <div class="subsetor-col-title">Em alta</div>
+            <ul class="clickable-list" id="lista-subsetor-alta"></ul>
+            <div class="subsetor-col-title" style="margin-top:14px;">Em queda</div>
+            <ul class="clickable-list" id="lista-subsetor-queda"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span>Detalhe por segmento (CNAE) <span class="hint">granularidade fina · dentro de</span></span>
+        <select id="segmento-setor-select" class="header-select"></select>
+      </div>
+      <div class="card-body">
+        <div class="grid-2" style="margin-bottom:0;">
+          <div class="chart-wrap tall"><canvas id="chart-segmentos"></canvas></div>
+          <div>
+            <div class="subsetor-col-title">Em alta</div>
+            <ul class="clickable-list" id="lista-segmento-alta"></ul>
+            <div class="subsetor-col-title" style="margin-top:14px;">Em queda</div>
+            <ul class="clickable-list" id="lista-segmento-queda"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header">Destinação de recursos <span class="hint">produto / instrumento</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-produtos"></canvas></div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span>Operações do período <span class="hint">clique para ver detalhe</span></span>
+          <select id="maiores-ordenar" class="header-select">
+            <option value="valor-desc">Maior valor</option>
+            <option value="valor-asc">Menor valor</option>
+            <option value="data-desc">Mais recente</option>
+            <option value="data-asc">Mais antiga</option>
+            <option value="instituicao-asc">Instituição (A-Z)</option>
+          </select>
+        </div>
+        <div class="card-body" style="max-height:340px; overflow-y:auto;">
+          <table class="ops-table" id="tabela-maiores">
+            <thead><tr><th>Cliente</th><th>Agência</th><th>Setor</th><th>Data</th><th>Valor</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== BUSCA ===================== -->
+  <section id="view-busca" class="view">
+    <div class="search-box">
+      <input type="text" id="busca-input" placeholder="Descreva uma empresa ou setor. Ex: fintech de crédito para pequenas empresas do agro no Nordeste">
+      <button id="busca-btn">Buscar</button>
+    </div>
+    <div class="example-chips">
+      <span class="chip" data-q="empresa de hospitais em SP">empresa de hospitais em SP</span>
+      <span class="chip" data-q="indústria no Nordeste">indústria no Nordeste</span>
+      <span class="chip" data-q="microcrédito para pessoas físicas">microcrédito para pessoas físicas</span>
+    </div>
+    <div id="busca-resultado"></div>
+  </section>
+
+  <!-- ===================== EDITAIS (FINEP Oportunidades) ===================== -->
+  <section id="view-editais" class="view">
+    <div class="filterbar" id="editais-filterbar" style="margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius);">
+      <div>
+        <label>Situação</label>
+        <select id="ed-f-situacao">
+          <option value="aberta" selected>Só abertos</option>
+          <option value="">Todos</option>
+          <option value="encerrada">Encerrados</option>
+        </select>
+      </div>
+      <div>
+        <label>Só para empresas</label>
+        <select id="ed-f-empresa">
+          <option value="1" selected>Sim</option>
+          <option value="">Todos</option>
+        </select>
+      </div>
+      <div>
+        <label>Tema</label>
+        <select id="ed-f-tema"><option value="">Todos</option></select>
+      </div>
+      <div>
+        <label>Região</label>
+        <select id="ed-f-regiao"><option value="">Todas</option></select>
+      </div>
+      <div>
+        <label>Tipo de oportunidade</label>
+        <select id="ed-f-tipo"><option value="">Todos</option></select>
+      </div>
+      <div>
+        <label>Buscar no título</label>
+        <input type="text" id="ed-f-texto" placeholder="ex: startup, saúde...">
+      </div>
+    </div>
+
+    <div class="kpi-row" id="editais-kpi-row"></div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">Editais por tema <span class="hint">clique para filtrar</span></div>
+      <div class="card-body"><div class="chart-wrap"><canvas id="chart-editais-tema"></canvas></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-header">
+        <span id="editais-lista-titulo">Editais</span>
+        <select id="ed-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+          <option value="prazo-asc">Prazo mais próximo</option>
+          <option value="prazo-desc">Prazo mais distante</option>
+          <option value="publicacao-desc">Publicado recentemente</option>
+          <option value="titulo-asc">Título (A-Z)</option>
+        </select>
+      </div>
+      <div class="card-body"><div id="editais-lista"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Encontre o edital certo para o seu projeto <span class="hint">endgame · IA local</span></div>
+      <div class="card-body">
+        <div class="search-box">
+          <input type="text" id="ed-endgame-input" placeholder="Descreva sua empresa/projeto. Ex: startup de biotecnologia desenvolvendo diagnóstico rápido para doenças tropicais">
+          <button id="ed-endgame-btn">Buscar editais</button>
+        </div>
+        <div id="editais-endgame-resultado"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="modal-title">Operações</span>
+      <select id="modal-ordenar" class="header-select" style="display:none;">
+        <option value="valor-desc">Maior valor</option>
+        <option value="valor-asc">Menor valor</option>
+        <option value="data-desc">Mais recente</option>
+        <option value="data-asc">Mais antiga</option>
+        <option value="instituicao-asc">Instituição (A-Z)</option>
+        <option value="agencia-asc">Agência (A-Z)</option>
+      </select>
+      <button class="close-btn" id="modal-close">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- ===== Modal "Baixar IA local" (so aparece no deploy hospedado) ===== -->
+<div class="modal-overlay" id="ia-local-modal-overlay">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-header">
+      <span>Ativar IA local</span>
+      <button class="close-btn" id="ia-local-modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>As respostas de IA (resumo de elegibilidade dos editais, leitura do endgame) rodam no <strong>seu computador</strong>, não em nenhum servidor -- assim continua grátis e privado para todo mundo. Uma vez configurado, funciona sozinho a partir daqui.</p>
+
+      <div class="detalhe-secao" style="margin:14px 0;">
+        <div class="detalhe-secao-titulo">1. Instale o Ollama</div>
+        <div style="padding:14px;">
+          <a href="https://ollama.com/download" target="_blank" rel="noopener" class="resumo-ia-btn" style="display:inline-block; text-decoration:none;">Baixar Ollama (ollama.com)</a>
+        </div>
+      </div>
+
+      <div class="detalhe-secao" style="margin:14px 0;">
+        <div class="detalhe-secao-titulo">2. Baixe o modelo de IA (~2GB, uma vez só)</div>
+        <div style="padding:14px;">
+          <code id="ia-local-comando-modelo" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-modelo" style="margin-top:8px;">Copiar comando</button>
+        </div>
+      </div>
+
+      <div class="detalhe-secao" style="margin:14px 0;">
+        <div class="detalhe-secao-titulo">3. Libere este site para conversar com o Ollama</div>
+        <div style="padding:14px;">
+          <p class="hint" style="margin-top:0;">Windows (PowerShell, uma vez só -- depois reinicie o Ollama):</p>
+          <code id="ia-local-comando-origens" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-origens" style="margin-top:8px;">Copiar comando</button>
+          <p class="hint" style="margin-top:14px;">Mac/Linux (rode assim em vez de só "ollama serve"):</p>
+          <code id="ia-local-comando-mac-linux" style="display:block; background:var(--bg); padding:8px 12px; border-radius:6px; font-size:12.5px;"></code>
+          <button class="resumo-ia-btn copiar-comando-btn" data-alvo="ia-local-comando-mac-linux" style="margin-top:8px;">Copiar comando</button>
+        </div>
+      </div>
+
+      <button class="resumo-ia-btn" id="ia-local-verificar-btn" style="width:100%;">Verificar novamente</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/config.js"></script>
+<script src="/js/vendor/chart.umd.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/local-ai.js"></script>
+<script src="/js/consolidado.js"></script>
+<script src="/js/tendencias.js"></script>
+<script src="/js/busca.js"></script>
+<script src="/js/editais.js"></script>
+</body>
+</html>

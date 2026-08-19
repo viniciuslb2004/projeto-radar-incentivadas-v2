@@ -1,0 +1,9 @@
+pandas
+openpyxl
+requests
+fastapi
+uvicorn[standard]
+sentence-transformers
+numpy
+pypdf
+libsql
