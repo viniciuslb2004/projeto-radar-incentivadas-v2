@@ -663,6 +663,25 @@ def _buscar_rapido_nucleo(query: str, query_expandida: str, query_vec, max_resul
     }
 
 
+def _combinar_query_com_descricao(query_expandida: str, descricao: str, query_original: str) -> str:
+    """Decide como juntar a descricao achada na web com a query antes de reembutir.
+
+    Testado empiricamente (varias queries reais, comparando melhor_score dos dois
+    jeitos): quando a query original e UM TOKEN SO (nome de empresa, sigla como "MPR",
+    ou um unico nome proprio como "Embraer"/"Natura"), o token em si nao tem nenhum
+    equivalente no corpus -- so dilui a descricao real, que sozinha ja pontua melhor
+    (ex: "MPR | <descricao>" = 0.56, so "<descricao>" = 0.61; mesmo padrao repetido em
+    "Quicksoft", "Embraer", "Natura"). Ja quando a query tem VARIAS PALAVRAS, ela
+    normalmente carrega vocabulario real do dominio (ex: "fabricante de sensores
+    agricolas TerraSense", "rede de hospitais HealthCore") que a descricao da web pode
+    nao mencionar -- ai manter o texto original junto da descricao pontua melhor ou empata
+    (nunca pior o suficiente para valer a pena descartar). Por isso: 1 palavra -> so a
+    descricao; 2+ palavras -> mantem o comportamento antigo (original + descricao)."""
+    if len(query_original.strip().split()) <= 1:
+        return descricao
+    return f"{query_expandida} | {descricao}"
+
+
 def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
     """Chamada RAPIDA (so embeddings + SQLite, sem Ollama) -- retorna resultados quase
     instantaneamente. Modo LOCAL (desktop): calcula o embedding da query no proprio
@@ -690,7 +709,7 @@ def buscar_rapido(query: str, max_resultados: int = 3000) -> dict:
     if resultado["confianca_baixa"]:
         descricao = buscar_atividade_empresa(query)
         if descricao:
-            query_enriquecida = f"{query_expandida} | {descricao}"
+            query_enriquecida = _combinar_query_com_descricao(query_expandida, descricao, query)
             vec_enriquecido = model.encode([query_enriquecida], normalize_embeddings=True)[0]
             candidato = _buscar_rapido_nucleo(query, query_enriquecida, vec_enriquecido, max_resultados)
             if candidato["melhor_score"] > resultado["melhor_score"]:
@@ -728,7 +747,7 @@ def preparar_texto_enriquecido(query: str) -> dict:
     descricao = buscar_atividade_empresa(query)
     if not descricao:
         return {"query_expandida": _expandir_query(query), "enriquecido_via_web": False}
-    query_enriquecida = f"{_expandir_query(query)} | {descricao}"
+    query_enriquecida = _combinar_query_com_descricao(_expandir_query(query), descricao, query)
     return {"query_expandida": query_enriquecida, "enriquecido_via_web": True}
 
 
