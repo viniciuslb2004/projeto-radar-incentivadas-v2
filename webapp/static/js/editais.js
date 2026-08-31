@@ -126,6 +126,21 @@ async function loadEditaisLista(filters) {
   renderEditaisLista(data);
 }
 
+function exportarEditaisCSV() {
+  exportarCSV("editais.csv", editaisAtuais, [
+    { chave: "titulo", rotulo: "Título" },
+    { chave: "situacao", rotulo: "Situação" },
+    { chave: "tema_principal", rotulo: "Tema" },
+    { chave: "tipo_oportunidade", rotulo: "Tipo de oportunidade" },
+    { chave: "tipo_cooperacao", rotulo: "Tipo de cooperação" },
+    { chave: "contrapartida", rotulo: "Contrapartida" },
+    { chave: "regiao", rotulo: "Região" },
+    { chave: "data_publicacao", rotulo: "Publicado em" },
+    { chave: "prazo_proposto", rotulo: "Prazo de submissão" },
+    { chave: "vigencia_fim", rotulo: "Vigência até" },
+  ]);
+}
+
 async function refreshEditais() {
   const filters = currentEditaisFilters();
   await Promise.all([loadEditaisDashboard(filters), loadEditaisLista(filters)]);
@@ -223,7 +238,7 @@ async function openEditalDetalhe(id) {
       // (Regulamento+Anexo1), o prompt e bem maior e o proprio backend chama o
       // Ollama (OLLAMA_TIMEOUT_RESUMO); no modo hospedado essa chamada e rapida
       // (so cache ou o prompt pronto, sem gerar nada ainda).
-      const resp = await fetchJSON(`/api/editais/${id}/resumo`, 310000);
+      const resp = await fetchJSON(`/api/editais/${id}/resumo`, 500000);
 
       if (resp.hospedado && resp.precisa_gerar) {
         const disponivel = await verificarOllamaLocal();
@@ -236,7 +251,7 @@ async function openEditalDetalhe(id) {
         btnResumo.textContent = "Gerando com sua IA local (pode levar alguns minutos)...";
         let texto = null;
         try {
-          texto = await gerarComOllamaLocal(resp.prompt, resp.modelo, resp.opcoes, 280000);
+          texto = await gerarComOllamaLocal(resp.prompt, resp.modelo, resp.opcoes, 500000);
         } catch (e) {
           texto = null;
         }
@@ -338,9 +353,9 @@ async function runEditaisEndgame(q) {
   let refino;
   try {
     if (window.MODO_HOSPEDADO) {
-      refino = await postJSON("/api/editais/buscar/refinar", { q, resultados: buscaResp.resultados }, 100000);
+      refino = await postJSON("/api/editais/buscar/refinar", { q, resultados: buscaResp.resultados }, 220000);
     } else {
-      refino = await fetchJSON("/api/editais/buscar/refinar?" + qs({ q }), 100000);
+      refino = await fetchJSON("/api/editais/buscar/refinar?" + qs({ q }), 220000);
     }
   } catch (e) {
     if (progressInterval) clearInterval(progressInterval);
@@ -381,7 +396,7 @@ async function runEditaisEndgame(q) {
     let respostaTexto = null;
     if (refino.prompt) {
       try {
-        respostaTexto = await gerarComOllamaLocal(refino.prompt, refino.modelo, refino.opcoes, 100000);
+        respostaTexto = await gerarComOllamaLocal(refino.prompt, refino.modelo, refino.opcoes, 220000);
       } catch (e) {
         respostaTexto = null;
       }
@@ -415,13 +430,13 @@ async function runEditaisEndgame(q) {
   progressInterval = edIniciarProgresso("Gerando leitura de elegibilidade...", ED_LEITURA_DURACAO_ESTIMADA_MS);
   try {
     const ids = resultados.map((r) => r.id).join(",");
-    const leituraResp = await fetchJSON("/api/editais/buscar/leitura?" + qs({ q, ids }), 60000);
+    const leituraResp = await fetchJSON("/api/editais/buscar/leitura?" + qs({ q, ids }), 150000);
     let textoFinal;
     if (leituraResp.hospedado) {
       let gerado = null;
       if (leituraResp.prompt) {
         try {
-          gerado = await gerarComOllamaLocal(leituraResp.prompt, leituraResp.modelo, leituraResp.opcoes, 100000);
+          gerado = await gerarComOllamaLocal(leituraResp.prompt, leituraResp.modelo, leituraResp.opcoes, 220000);
         } catch (e) {
           gerado = null;
         }
@@ -452,6 +467,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Enter") refreshEditais();
   });
   document.getElementById("ed-ordenar").addEventListener("change", refreshEditais);
+  document.getElementById("editais-exportar-btn").addEventListener("click", exportarEditaisCSV);
 
   const endgameInput = document.getElementById("ed-endgame-input");
   document.getElementById("ed-endgame-btn").addEventListener("click", () => {

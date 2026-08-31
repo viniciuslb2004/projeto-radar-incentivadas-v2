@@ -11,9 +11,14 @@ from embeddings import EMB_PATH, get_model
 from empresa_lookup import buscar_atividade_empresa
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:3b-instruct-q4_K_M"
-OLLAMA_TIMEOUT = 60
-OLLAMA_TIMEOUT_REFINO = 100  # prompt maior (varios candidatos) -- precisa de mais margem que a narrativa
+# 8B em vez de 3B (2026-08): resultados sensivelmente melhores em tarefas que exigem
+# seguir instrucoes com precisao (ex: nao inventar numeros de uma tabela bagunçada,
+# distinguir nome de empresa de ruido textual) -- ver historico de resumo de editais
+# e busca por empresa desconhecida. Custo: baixa em CPU ~2-3x mais devagar que o 3B e
+# precisa de mais RAM (~6-7GB livres) -- por isso os timeouts abaixo tambem subiram.
+OLLAMA_MODEL = "llama3.1:8b-instruct-q4_K_M"
+OLLAMA_TIMEOUT = 120
+OLLAMA_TIMEOUT_REFINO = 180  # prompt maior (varios candidatos) -- precisa de mais margem que a narrativa
 
 # Score de similaridade (cosseno, 0-1) abaixo do qual avisamos o usuario que a
 # correspondencia e fraca, em vez de apresentar os resultados como se fossem uma

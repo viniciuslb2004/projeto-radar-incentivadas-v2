@@ -73,6 +73,32 @@ async function postJSON(url, body, timeoutMs) {
   }
 }
 
+// Exporta uma lista de objetos como CSV (abre direto no Excel/Sheets) -- so client-side,
+// sem ida ao servidor, pra funcionar igual no modo local e no hospedado. `colunas` e uma
+// lista de {chave, rotulo}; `rotulo` vira o cabecalho, `chave` busca o valor em cada linha
+// (aceita "a.b" para acessar aninhado, embora nenhum uso atual precise disso).
+function exportarCSV(nomeArquivo, linhas, colunas) {
+  const escapar = (valor) => {
+    if (valor === null || valor === undefined) return "";
+    const texto = String(valor);
+    return /[",\n;]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"' : texto;
+  };
+  const cabecalho = colunas.map((c) => escapar(c.rotulo)).join(";");
+  const corpo = linhas
+    .map((linha) => colunas.map((c) => escapar(linha[c.chave])).join(";"))
+    .join("\n");
+  // BOM (﻿) pra o Excel abrir os acentos certo em UTF-8 sem precisar importar manualmente.
+  const blob = new Blob(["﻿" + cabecalho + "\n" + corpo], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
 function currentFilters() {
@@ -161,7 +187,7 @@ function _ligarBotoesDeAba() {
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
       document.getElementById("view-" + btn.dataset.view).classList.add("active");
-      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais") ? "none" : "flex";
+      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais" || btn.dataset.view === "elegibilidade") ? "none" : "flex";
     });
   });
 }

@@ -15,7 +15,7 @@ import pandas as pd
 import requests
 
 from db import DATA_DIR, get_connection
-from sector_taxonomy import canonical_setor, canonical_subsetor
+from sector_taxonomy import build_divisao_map
 
 WEBDAV_BASE = "https://arquivos.receitafederal.gov.br/public.php/webdav"
 SHARE_TOKEN = "gn672Ad4CF8N6TK"
@@ -72,22 +72,6 @@ def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
         ja_cacheados = pd.read_sql("SELECT cnpj FROM cnpj_cnae", conn)
         alvo -= set(ja_cacheados["cnpj"].dropna().astype(str))
     return alvo
-
-
-def _build_divisao_map(conn) -> dict:
-    """Faixas tipo 'A01 a A03' -> {divisao_int: (setor_bndes, subsetor_bndes)}."""
-    de_para = pd.read_sql("SELECT * FROM de_para_cnae", conn)
-    mapping = {}
-    for _, row in de_para.iterrows():
-        faixa = str(row.get("codigo_cnae_ibge_faixa") or "")
-        nums = [int(n) for n in re.findall(r"(\d{2})", faixa)]
-        if not nums:
-            continue
-        setor = canonical_setor(row.get("setor_bndes"))
-        subsetor = canonical_subsetor(row.get("subsetor_bndes"))
-        for divisao in range(min(nums), max(nums) + 1):
-            mapping[divisao] = (setor, subsetor)
-    return mapping
 
 
 def _baixar_cnae_nomes(month: str) -> dict:
@@ -190,7 +174,7 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
             print("Nenhum CNPJ pendente para enriquecer.")
             return 0
 
-        divisao_map = _build_divisao_map(conn)
+        divisao_map = build_divisao_map(conn)
         month = month or latest_month()
         print(f"Usando snapshot RFB: {month}")
 

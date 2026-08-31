@@ -19,7 +19,7 @@ Para o "narrador" da busca (opcional, com fallback automático se não estiver d
 
 ```powershell
 winget install --id Ollama.Ollama -e
-ollama pull llama3.2:3b-instruct-q4_K_M
+ollama pull llama3.1:8b-instruct-q4_K_M
 ```
 
 ## Subindo o site

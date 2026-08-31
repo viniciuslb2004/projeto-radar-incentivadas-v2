@@ -18,6 +18,7 @@
     <button class="tab-btn" data-view="tendencias">Tendências &amp; Insights</button>
     <button class="tab-btn" data-view="busca">Busca</button>
     <button class="tab-btn" data-view="editais">Editais</button>
+    <button class="tab-btn" data-view="elegibilidade">Minha Empresa</button>
   </div>
   <span class="ia-local-badge" id="ia-local-badge" style="display:none;"></span>
   <div class="status-pill" id="status-pill">carregando...</div>
@@ -138,13 +139,16 @@
       <div class="card">
         <div class="card-header">
           <span>Operações do período <span class="hint">clique para ver detalhe</span></span>
-          <select id="maiores-ordenar" class="header-select">
-            <option value="valor-desc">Maior valor</option>
-            <option value="valor-asc">Menor valor</option>
-            <option value="data-desc">Mais recente</option>
-            <option value="data-asc">Mais antiga</option>
-            <option value="instituicao-asc">Instituição (A-Z)</option>
-          </select>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button id="maiores-exportar-btn" class="header-select" style="cursor:pointer;">Exportar CSV</button>
+            <select id="maiores-ordenar" class="header-select">
+              <option value="valor-desc">Maior valor</option>
+              <option value="valor-asc">Menor valor</option>
+              <option value="data-desc">Mais recente</option>
+              <option value="data-asc">Mais antiga</option>
+              <option value="instituicao-asc">Instituição (A-Z)</option>
+            </select>
+          </div>
         </div>
         <div class="card-body" style="max-height:340px; overflow-y:auto;">
           <table class="ops-table" id="tabela-maiores">
@@ -216,12 +220,15 @@
     <div class="card" style="margin-bottom:24px;">
       <div class="card-header">
         <span id="editais-lista-titulo">Editais</span>
-        <select id="ed-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
-          <option value="prazo-asc">Prazo mais próximo</option>
-          <option value="prazo-desc">Prazo mais distante</option>
-          <option value="publicacao-desc">Publicado recentemente</option>
-          <option value="titulo-asc">Título (A-Z)</option>
-        </select>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="editais-exportar-btn" class="header-select" style="cursor:pointer;">Exportar CSV</button>
+          <select id="ed-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+            <option value="prazo-asc">Prazo mais próximo</option>
+            <option value="prazo-desc">Prazo mais distante</option>
+            <option value="publicacao-desc">Publicado recentemente</option>
+            <option value="titulo-asc">Título (A-Z)</option>
+          </select>
+        </div>
       </div>
       <div class="card-body"><div id="editais-lista"></div></div>
     </div>
@@ -234,6 +241,20 @@
           <button id="ed-endgame-btn">Buscar editais</button>
         </div>
         <div id="editais-endgame-resultado"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ELEGIBILIDADE (Minha Empresa) ===================== -->
+  <section id="view-elegibilidade" class="view">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">Consulte a sua empresa <span class="hint">digite o CNPJ, sem precisar saber os termos do BNDES/FINEP</span></div>
+      <div class="card-body">
+        <div class="search-box">
+          <input type="text" id="eleg-cnpj-input" placeholder="Ex: 12.345.678/0001-90" inputmode="numeric">
+          <button id="eleg-consultar-btn">Consultar</button>
+        </div>
+        <div id="eleg-resultado"></div>
       </div>
     </div>
   </section>
@@ -279,7 +300,7 @@
       <div class="detalhe-secao" style="margin:14px 0;">
         <div class="detalhe-secao-titulo">2. Baixe e rode o script de configuracao (uma vez só)</div>
         <div style="padding:14px;">
-          <p class="hint" style="margin-top:0;">Este script baixa o modelo de IA (~2GB) e já libera este site para conversar com o Ollama -- tudo em um passo só. Depois de rodar, é só recarregar esta página.</p>
+          <p class="hint" style="margin-top:0;">Este script baixa o modelo de IA (~5GB, recomendado ao menos 8GB de RAM livre) e já libera este site para conversar com o Ollama -- tudo em um passo só. Depois de rodar, é só recarregar esta página.</p>
           <a href="/api/config/instalar-ia.ps1" download="instalar-ia-local.ps1" id="ia-local-script-link" class="resumo-ia-btn" style="display:inline-block; text-decoration:none;">Baixar script de configuração (.ps1)</a>
           <p class="hint" style="margin-top:10px;">Depois de baixado, dê duplo-clique no arquivo (Windows pode pedir para confirmar em "Mais informações → Executar assim mesmo", pois é um script baixado da internet).</p>
         </div>
@@ -325,5 +346,6 @@
 <script src="/js/tendencias.js"></script>
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
+<script src="/js/elegibilidade.js"></script>
 </body>
 </html>

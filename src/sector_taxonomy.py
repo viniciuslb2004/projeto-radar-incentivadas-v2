@@ -11,6 +11,7 @@ sem variacao de acento) para a grafia nativa usada na aba SITE do BNDES,
 que e a que aparece em todas as 23 mil operacoes do BNDES e por isso e
 adotada como o rotulo canonico exibido no dashboard.
 """
+import re
 
 SETOR_ALIAS = {
     "AGROPECUÁRIA": "AGROPECUÁRIA",
@@ -53,3 +54,26 @@ def canonical_subsetor(raw: str):
     if not raw:
         return raw
     return SUBSETOR_ALIAS.get(raw.strip().upper(), raw.strip().upper())
+
+
+def build_divisao_map(conn) -> dict:
+    """Faixas tipo 'A01 a A03' -> {divisao_int: (setor_bndes, subsetor_bndes)}.
+
+    Extraido de enrich_cnae.py (onde nasceu, usado para enriquecer CNPJs da FINEP) para
+    ca -- elegibilidade.py precisa da MESMA logica de mapeamento para um CNAE resolvido
+    ao vivo (via BrasilAPI) que nao vem de nenhuma tabela de cache existente, entao faz
+    mais sentido como funcao compartilhada aqui do que duplicada a mao em outro arquivo."""
+    import pandas as pd
+
+    de_para = pd.read_sql("SELECT * FROM de_para_cnae", conn)
+    mapping = {}
+    for _, row in de_para.iterrows():
+        faixa = str(row.get("codigo_cnae_ibge_faixa") or "")
+        nums = [int(n) for n in re.findall(r"(\d{2})", faixa)]
+        if not nums:
+            continue
+        setor = canonical_setor(row.get("setor_bndes"))
+        subsetor = canonical_subsetor(row.get("subsetor_bndes"))
+        for divisao in range(min(nums), max(nums) + 1):
+            mapping[divisao] = (setor, subsetor)
+    return mapping

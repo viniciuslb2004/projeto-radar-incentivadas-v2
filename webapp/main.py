@@ -69,7 +69,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # ser fixa no script: descobrimos ela em tempo real a partir do request de
 # quem pediu o download, com fallback pro que ja estiver configurado no
 # ambiente (mesma fonte que o CORS ja usa, ver ALLOWED_ORIGINS acima).
-OLLAMA_MODELO_PADRAO = "llama3.2:3b-instruct-q4_K_M"
+OLLAMA_MODELO_PADRAO = "llama3.1:8b-instruct-q4_K_M"
 _ORIGEM_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$")
 
 
@@ -1272,6 +1272,130 @@ def edital_detalhe(edital_id: int):
         if not row:
             return {"erro": "edital nao encontrado"}
         return _edital_row_to_dict(row)
+    finally:
+        conn.close()
+
+
+# ============ Elegibilidade ("Minha Empresa"): o visitante digita o CNPJ da PROPRIA
+# empresa e o sistema resolve setor/porte (BrasilAPI, consulta ao vivo -- ver
+# elegibilidade.py) para cruzar com editais abertos e o historico de operacoes por
+# setor. Rota unica, sem split local/hospedado: so SQL simples + 1 chamada HTTP
+# externa, nada de embeddings/Ollama aqui. ============
+
+def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
+    """Mesmo filtro/ordenacao de '/api/editais?situacao=aberta&aplicavel_empresa=1'
+    (ver _editais_where acima): aberto de verdade (respeita prazo vencido mesmo que a
+    FINEP ainda marque como 'aberta') e com publico-alvo que inclui empresas. NAO
+    filtra por regiao: na base atual, 100% dos editais abertos aplicaveis a empresas
+    tem regiao='Todo Brasil' (conferido em produção), entao um filtro estrito so
+    esconderia oportunidades sem ganho nenhum -- fica so como possível refinamento
+    futuro se a FINEP passar a publicar editais regionais de novo."""
+    where, params = _editais_where(situacao="aberta", aplicavel_empresa=1)
+    cur = conn.cursor()
+    total = cur.execute(f"SELECT COUNT(*) FROM editais_raw {where}", params).fetchone()[0]
+    rows = cur.execute(
+        f"SELECT {', '.join(EDITAIS_COLS)} FROM editais_raw {where} "
+        f"ORDER BY prazo_proposto ASC NULLS LAST LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    return {"total": total, "resultados": [_edital_row_to_dict(r) for r in rows]}
+
+
+def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exemplos: int = 5) -> dict:
+    """Agregados de operations por setor (e por porte, quando resolvivel -- ver
+    porte_bndes_equivalente em elegibilidade.py) para responder 'empresas parecidas
+    com a minha ja pegaram credito?'. Se filtrar por porte nao achar nada, refaz so por
+    setor -- silenciosamente cai pro filtro mais largo em vez de devolver zero
+    resultados por causa de um porte que a Receita informou de um jeito que o BNDES
+    classifica diferente."""
+    cur = conn.cursor()
+
+    def _consulta(incluir_porte: bool):
+        where = "WHERE setor_bndes = ?"
+        params = [setor_bndes]
+        if incluir_porte and porte_bndes:
+            where += " AND porte_cliente = ?"
+            params.append(porte_bndes)
+        total_row = cur.execute(
+            f"SELECT COUNT(*), SUM(valor_contratado), AVG(valor_contratado) FROM operations {where}", params
+        ).fetchone()
+        por_agencia = cur.execute(
+            f"SELECT agencia, COUNT(*), SUM(valor_contratado), AVG(valor_contratado) FROM operations {where} GROUP BY agencia",
+            params,
+        ).fetchall()
+        exemplos = cur.execute(
+            f"SELECT cliente, agencia, uf, valor_contratado, data_contratacao FROM operations {where} "
+            f"ORDER BY valor_contratado DESC LIMIT ?",
+            params + [n_exemplos],
+        ).fetchall()
+        return total_row, por_agencia, exemplos
+
+    porte_considerado = bool(porte_bndes)
+    total_row, por_agencia, exemplos = _consulta(incluir_porte=True)
+    if porte_considerado and (total_row[0] or 0) == 0:
+        porte_considerado = False
+        total_row, por_agencia, exemplos = _consulta(incluir_porte=False)
+
+    return {
+        "total": total_row[0] or 0,
+        "valor_total": total_row[1] or 0,
+        "valor_medio": total_row[2] or 0,
+        "porte_considerado_no_filtro": porte_considerado,
+        "por_agencia": [
+            {"agencia": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "valor_medio": r[3] or 0}
+            for r in por_agencia
+        ],
+        "exemplos": [
+            {"cliente": r[0], "agencia": r[1], "uf": r[2], "valor_contratado": r[3], "data_contratacao": r[4]}
+            for r in exemplos
+        ],
+    }
+
+
+@app.get("/api/elegibilidade")
+def elegibilidade(cnpj: str = Query(...)):
+    # Sem min_length aqui de proposito: um CNPJ mal formatado deve virar a mensagem
+    # amigavel de resolver_empresa() (erro esperado, texto em portugues claro), nao o
+    # 422 padrao do FastAPI (JSON tecnico em ingles que a pagina nao trata e o dono da
+    # empresa nao entenderia).
+    from elegibilidade import mapear_setor, porte_bndes_equivalente, resolver_empresa
+
+    empresa = resolver_empresa(cnpj)
+    if empresa.get("erro"):
+        # CNPJ invalido / nao encontrado / API externa fora do ar sao desfechos
+        # esperados desta consulta, nao bugs -- nao logar como excecao (ver
+        # comentario no topo do arquivo sobre logger.exception).
+        return {"erro": empresa["erro"]}
+
+    conn = get_connection()
+    try:
+        setor_mapeado = mapear_setor(conn, empresa.get("cnae_codigo"))
+        porte_bndes = porte_bndes_equivalente(empresa.get("porte_receita"))
+        setor_mapeado["porte_bndes_equivalente"] = porte_bndes
+
+        editais = {"total": 0, "resultados": []}
+        operacoes_parecidas = {
+            "total": 0, "valor_total": 0, "valor_medio": 0,
+            "porte_considerado_no_filtro": False, "por_agencia": [], "exemplos": [],
+        }
+        if setor_mapeado["mapeado"]:
+            editais = _editais_elegiveis_para_setor(conn)
+            operacoes_parecidas = _operacoes_parecidas(conn, setor_mapeado["setor_bndes"], porte_bndes)
+        else:
+            # setor nao mapeado: ainda mostramos editais abertos p/ empresas em geral
+            # (nao dependem de setor), so os agregados de operacoes ficam vazios (nao
+            # ha setor_bndes pra filtrar operations de forma minimamente confiavel).
+            editais = _editais_elegiveis_para_setor(conn)
+
+        return {
+            "empresa": empresa,
+            "setor_mapeado": setor_mapeado,
+            "editais": editais,
+            "operacoes_parecidas": operacoes_parecidas,
+        }
+    except Exception as e:
+        logger.exception("elegibilidade indisponivel")
+        return {"erro": f"Não foi possível concluir a análise agora ({e}). Tente novamente em instantes."}
     finally:
         conn.close()
 

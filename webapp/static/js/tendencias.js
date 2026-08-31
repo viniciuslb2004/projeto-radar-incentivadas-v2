@@ -189,9 +189,26 @@ async function loadProdutos(filters) {
   });
 }
 
+let _ultimasMaioresOperacoes = [];
+
+function exportarMaioresOperacoesCSV() {
+  exportarCSV("operacoes.csv", _ultimasMaioresOperacoes, [
+    { chave: "cliente", rotulo: "Cliente" },
+    { chave: "cnpj", rotulo: "CNPJ" },
+    { chave: "agencia", rotulo: "Agência" },
+    { chave: "setor_bndes", rotulo: "Setor" },
+    { chave: "subsetor_bndes", rotulo: "Subsetor" },
+    { chave: "uf", rotulo: "UF" },
+    { chave: "data_contratacao", rotulo: "Data" },
+    { chave: "valor_contratado", rotulo: "Valor contratado" },
+    { chave: "valor_desembolsado", rotulo: "Valor desembolsado" },
+  ]);
+}
+
 async function loadMaioresOperacoes(filters) {
   const [order_by, order_dir] = document.getElementById("maiores-ordenar").value.split("-");
   const ops = await fetchJSON("/api/operacoes?" + qs(filters) + `&order_by=${order_by}&order_dir=${order_dir}&limit=15`);
+  _ultimasMaioresOperacoes = ops;
   const tbody = document.querySelector("#tabela-maiores tbody");
   tbody.innerHTML = ops
     .map(
@@ -224,5 +241,6 @@ async function refreshTendencias(filters) {
 document.addEventListener("DOMContentLoaded", () => {
   onFiltersChange(refreshTendencias);
   document.getElementById("maiores-ordenar").addEventListener("change", () => loadMaioresOperacoes(currentFilters()));
+  document.getElementById("maiores-exportar-btn").addEventListener("click", exportarMaioresOperacoesCSV);
   setTimeout(() => refreshTendencias(currentFilters()), 300);
 });

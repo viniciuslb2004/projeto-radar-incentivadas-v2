@@ -87,21 +87,40 @@ function renderResultados(data) {
     <div class="progress-label" id="status-timer">0s decorridos · pode levar até 30-40s</div>
   </div>`;
 
-  html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+  html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px;">
     <span class="progress-label" id="busca-contagem">${fmtNum(ultimosResultados.length)} operações parecidas encontradas</span>
-    <select id="busca-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
-      <option value="relevancia">Mais relevante</option>
-      <option value="data-desc">Mais recente</option>
-      <option value="data-asc">Mais antiga</option>
-      <option value="valor-desc">Maior valor</option>
-      <option value="valor-asc">Menor valor</option>
-      <option value="agencia-asc">Agência (A-Z)</option>
-    </select>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="busca-exportar-btn" class="resumo-ia-btn" style="padding:6px 12px; font-size:13px;">Exportar CSV</button>
+      <select id="busca-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+        <option value="relevancia">Mais relevante</option>
+        <option value="data-desc">Mais recente</option>
+        <option value="data-asc">Mais antiga</option>
+        <option value="valor-desc">Maior valor</option>
+        <option value="valor-asc">Menor valor</option>
+        <option value="agencia-asc">Agência (A-Z)</option>
+      </select>
+    </div>
   </div>`;
   html += '<div id="busca-lista"></div>';
 
   document.getElementById("busca-resultado").innerHTML = html;
   document.getElementById("busca-ordenar").addEventListener("change", renderListaResultados);
+  document.getElementById("busca-exportar-btn").addEventListener("click", () => {
+    exportarCSV(`busca-${(data.query || "resultado").replace(/[^a-z0-9]+/gi, "-")}.csv`, ultimosResultados, [
+      { chave: "cliente", rotulo: "Cliente" },
+      { chave: "cnpj", rotulo: "CNPJ" },
+      { chave: "agencia", rotulo: "Agência" },
+      { chave: "setor_bndes", rotulo: "Setor" },
+      { chave: "subsetor_bndes", rotulo: "Subsetor" },
+      { chave: "segmento", rotulo: "Segmento" },
+      { chave: "uf", rotulo: "UF" },
+      { chave: "data_contratacao", rotulo: "Data" },
+      { chave: "valor_contratado", rotulo: "Valor contratado" },
+      { chave: "valor_desembolsado", rotulo: "Valor desembolsado" },
+      { chave: "descricao_projeto", rotulo: "Descrição do projeto" },
+      { chave: "score", rotulo: "Similaridade" },
+    ]);
+  });
   renderListaResultados();
 }
 
@@ -160,7 +179,7 @@ async function refinarComIAHospedado(data) {
 
     let respostaTexto = null;
     try {
-      respostaTexto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 100000);
+      respostaTexto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 220000);
     } catch (e) {
       respostaTexto = null;
     }
@@ -216,7 +235,7 @@ async function refinarComIAHospedado(data) {
 async function refinarComIA(q) {
   const contagem = document.getElementById("busca-contagem");
   try {
-    const refino = await fetchJSON("/api/busca/refinar?" + qs({ q }), 150000);
+    const refino = await fetchJSON("/api/busca/refinar?" + qs({ q }), 220000);
     if (refino.erro || !refino.refinado) {
       if (contagem) contagem.innerHTML = `${fmtNum(ultimosResultados.length)} operações parecidas encontradas`;
       return;
@@ -257,7 +276,7 @@ async function narrativaComIAHospedado(data) {
     const disponivel = await verificarOllamaLocal();
     if (!disponivel) return prep.fallback || 'Ative a IA local (botão no topo da página) para gerar uma leitura personalizada.';
     try {
-      const texto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 100000);
+      const texto = await gerarComOllamaLocal(prep.prompt, prep.modelo, prep.opcoes, 220000);
       return (texto && texto.trim()) || prep.fallback;
     } catch (e) {
       return prep.fallback || "Não foi possível gerar a análise agora.";
@@ -341,7 +360,7 @@ async function runBusca(q) {
     if (window.MODO_HOSPEDADO) {
       textoFinal = await narrativaComIAHospedado(data);
     } else {
-      const narrativaResp = await fetchJSON("/api/busca/narrativa?" + qs({ q }), 90000);
+      const narrativaResp = await fetchJSON("/api/busca/narrativa?" + qs({ q }), 150000);
       textoFinal = narrativaResp.narrativa || narrativaResp.erro || "Não foi possível gerar a análise.";
     }
     if (progressInterval) clearInterval(progressInterval);

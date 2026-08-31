@@ -14,12 +14,14 @@ from editais_embeddings import EMB_PATH, build_editais_embeddings
 from embeddings import get_model
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:3b-instruct-q4_K_M"
-OLLAMA_TIMEOUT = 60
+# 8B em vez de 3B (2026-08, ver mesmo comentario em search.py): mais lento em CPU,
+# por isso os timeouts abaixo subiram tambem.
+OLLAMA_MODEL = "llama3.1:8b-instruct-q4_K_M"
+OLLAMA_TIMEOUT = 120
 # Resumo por documento real (Regulamento + Anexo 1) manda um prompt bem maior que os
-# outros -- precisa de mais margem para um modelo 3B em CPU terminar a tempo.
-OLLAMA_TIMEOUT_RESUMO = 300
-OLLAMA_TIMEOUT_REFINO = 90
+# outros -- precisa de mais margem para um modelo 8B em CPU terminar a tempo.
+OLLAMA_TIMEOUT_RESUMO = 480
+OLLAMA_TIMEOUT_REFINO = 150
 
 # Corpus pequeno (dezenas de editais abertos, nao milhares de operacoes) -- limiares
 # mais permissivos que os da busca de operacoes, senao uma busca legitima pode nao

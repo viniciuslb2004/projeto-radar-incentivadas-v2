@@ -28,7 +28,7 @@ Sem o Ollama rodando, Busca e Editais continuam funcionando (resultados e filtro
   - `RadarCreditoIncentivado` — refresh semanal (BNDES + FINEP), toda segunda 7h.
   - `RadarCreditoIncentivado_EnriquecimentoCNAE` — reenriquecimento de setor da FINEP, a cada 4 semanas.
   - `RadarCreditoIncentivado_Editais` — refresh diário dos editais da FINEP, todo dia às 6h30.
-- Ollama instalado e rodando como serviço (`ollama app`), modelo `llama3.2:3b-instruct-q4_K_M` já baixado.
+- Ollama instalado e rodando como serviço (`ollama app`), modelo `llama3.1:8b-instruct-q4_K_M` já baixado (trocado do 3B para o 8B em 2026-08 -- resultados bem melhores em resumo de edital e busca por empresa/CNPJ, precisa de mais RAM livre).
 
 ## Aba Editais (FINEP Oportunidades) -- adicionada em 2026-08-19
 

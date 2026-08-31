@@ -7,7 +7,10 @@
 // propria maquina, chamado diretamente pelo navegador dela.
 
 const OLLAMA_LOCAL_URL = "http://localhost:11434";
-const OLLAMA_MODELO_PADRAO = "llama3.2:3b-instruct-q4_K_M";
+// 8B em vez de 3B (2026-08): resultados sensivelmente melhores em resumo de edital e
+// busca por empresa/CNPJ, ao custo de precisar de mais RAM livre (~6-7GB) e ser mais
+// lento em CPU -- ver timeouts mais generosos abaixo e em busca.js/editais.js.
+const OLLAMA_MODELO_PADRAO = "llama3.1:8b-instruct-q4_K_M";
 
 let _ollamaDisponivel = null; // null = ainda nao verificado nesta sessao
 
@@ -30,7 +33,7 @@ function resetarVerificacaoOllama() {
 }
 
 // Gera texto via o Ollama local do visitante. `opcoes` pode ter {temperature, format}.
-async function gerarComOllamaLocal(prompt, modelo, opcoes, timeoutMs = 240000) {
+async function gerarComOllamaLocal(prompt, modelo, opcoes, timeoutMs = 300000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
