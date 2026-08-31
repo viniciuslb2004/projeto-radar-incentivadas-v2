@@ -1,0 +1,37 @@
+name: Enriquecimento CNAE (FINEP, mensal)
+
+on:
+  schedule:
+    - cron: "0 5 1 * *" # dia 1 de cada mes, 05:00 UTC (02:00 horario de Brasilia) --
+      # nao colide com o refresh semanal de operacoes (segunda 06:00 UTC) nem com o
+      # refresh diario de editais (08:00 UTC).
+  workflow_dispatch: {}
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    # O job mais pesado dos tres: baixa e escaneia ate 10 arquivos Estabelecimentos*.zip
+    # (varios GB cada) da Receita Federal via WebDAV. 340min fica logo abaixo do limite
+    # de 6h (360min) que o GitHub impoe a runners hospedados -- acima disso o job seria
+    # morto de qualquer forma, entao nao adianta pedir mais. Na pratica costuma terminar
+    # bem antes: enrich_cnae.py para de baixar zips assim que todo CNPJ pendente da FINEP
+    # ja foi encontrado (early exit), entao so o 1o run (ou um backlog grande de pendentes)
+    # deve chegar perto do limite.
+    timeout-minutes: 340
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar enriquecimento de CNAE (FINEP)
+        working-directory: src
+        run: python enrich_cnae.py

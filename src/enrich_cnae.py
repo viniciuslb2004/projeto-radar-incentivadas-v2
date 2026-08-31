@@ -143,6 +143,39 @@ def _scan_zip_for_targets(zip_path: Path, targets: set, found: dict):
                     found[row["cnpj"]] = (row["nome_fantasia"], row["cnae_fiscal_principal"])
 
 
+def _rows_para_commit(novos: dict, divisao_map: dict, cnae_nomes: dict, now: str) -> list:
+    rows = []
+    for cnpj, (nome_fantasia, cnae) in novos.items():
+        cnae_str = str(cnae) if cnae and str(cnae) != "nan" else None
+        divisao = int(cnae_str[:2]) if cnae_str and cnae_str[:2].isdigit() else None
+        setor_bndes, subsetor_bndes = divisao_map.get(divisao, (None, None))
+        cnae_descricao = cnae_nomes.get(cnae_str) if cnae_str else None
+        rows.append((cnpj, nome_fantasia, cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, now))
+    return rows
+
+
+def _commit_rows(conn, rows: list) -> None:
+    if not rows:
+        return
+    cur = conn.cursor()
+    cur.executemany(
+        """
+        INSERT INTO cnpj_cnae (cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao, setor_bndes_mapeado, subsetor_bndes_mapeado, atualizado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(cnpj) DO UPDATE SET
+            razao_social=excluded.razao_social,
+            cnae_codigo=excluded.cnae_codigo,
+            cnae_descricao=excluded.cnae_descricao,
+            cnae_divisao=excluded.cnae_divisao,
+            setor_bndes_mapeado=excluded.setor_bndes_mapeado,
+            subsetor_bndes_mapeado=excluded.subsetor_bndes_mapeado,
+            atualizado_em=excluded.atualizado_em
+        """,
+        rows,
+    )
+    conn.commit()
+
+
 def enrich(month: str = None, keep_downloads: bool = False, targets: set = None) -> int:
     """targets=None (padrao): resolve automaticamente os CNPJs da FINEP que ainda nao
     estao em cnpj_cnae (ver _target_cnpjs). Passe um set explicito para escopar a um
@@ -165,50 +198,35 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
         cnae_nomes = _baixar_cnae_nomes(month)
         print(f"  {len(cnae_nomes)} codigos CNAE carregados.")
 
+        # Cada Estabelecimentos*.zip tem varios GB: grava/commita o que foi achado logo
+        # apos escanear cada arquivo, em vez de acumular tudo em memoria ate o final. Assim,
+        # se o job cair no meio (rede, disco, timeout do CI), os zips ja escaneados nao
+        # precisam ser rebaixados/reescaneados na proxima execucao -- so os restantes.
         found = {}
+        total_gravados = 0
         for i in range(10):
             if len(found) >= len(targets):
                 print("Todos os CNPJs alvo ja encontrados, parando antecipadamente.")
                 break
             filename = f"Estabelecimentos{i}.zip"
             zip_path = _download_to_disk(month, filename)
+            antes = set(found.keys())
             try:
                 _scan_zip_for_targets(zip_path, targets, found)
             finally:
                 if not keep_downloads:
                     zip_path.unlink(missing_ok=True)
-            print(f"  progresso: {len(found)}/{len(targets)} CNPJs encontrados ate agora", flush=True)
-
-        now = datetime.now(timezone.utc).isoformat()
-        rows = []
-        for cnpj, (nome_fantasia, cnae) in found.items():
-            cnae_str = str(cnae) if cnae and str(cnae) != "nan" else None
-            divisao = int(cnae_str[:2]) if cnae_str and cnae_str[:2].isdigit() else None
-            setor_bndes, subsetor_bndes = divisao_map.get(divisao, (None, None))
-            cnae_descricao = cnae_nomes.get(cnae_str) if cnae_str else None
-            rows.append((cnpj, nome_fantasia, cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, now))
-
-        cur = conn.cursor()
-        cur.executemany(
-            """
-            INSERT INTO cnpj_cnae (cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao, setor_bndes_mapeado, subsetor_bndes_mapeado, atualizado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(cnpj) DO UPDATE SET
-                razao_social=excluded.razao_social,
-                cnae_codigo=excluded.cnae_codigo,
-                cnae_descricao=excluded.cnae_descricao,
-                cnae_divisao=excluded.cnae_divisao,
-                setor_bndes_mapeado=excluded.setor_bndes_mapeado,
-                subsetor_bndes_mapeado=excluded.subsetor_bndes_mapeado,
-                atualizado_em=excluded.atualizado_em
-            """,
-            rows,
-        )
-        conn.commit()
+            novos = {cnpj: found[cnpj] for cnpj in found.keys() - antes}
+            if novos:
+                now = datetime.now(timezone.utc).isoformat()
+                rows = _rows_para_commit(novos, divisao_map, cnae_nomes, now)
+                _commit_rows(conn, rows)
+                total_gravados += len(rows)
+            print(f"  progresso: {len(found)}/{len(targets)} CNPJs encontrados ate agora ({total_gravados} ja gravados no banco)", flush=True)
 
         nao_encontrados = len(targets) - len(found)
-        print(f"cnpj_cnae: {len(rows)} CNPJs gravados/atualizados. {nao_encontrados} nao encontrados na base da RFB.")
-        return len(rows)
+        print(f"cnpj_cnae: {total_gravados} CNPJs gravados/atualizados. {nao_encontrados} nao encontrados na base da RFB.")
+        return total_gravados
     finally:
         conn.close()
 
