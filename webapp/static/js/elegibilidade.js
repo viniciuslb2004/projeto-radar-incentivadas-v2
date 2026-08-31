@@ -93,6 +93,24 @@ function operacoesParecidasHTML(op) {
   return html;
 }
 
+// Diferente de operacoesParecidasHTML (o que JA foi financiado -- olhando pro
+// passado) e de renderEditaisElegiveis (chamadas com prazo -- podem fechar): isto
+// mostra as LINHAS DE CREDITO PERMANENTES (sem prazo de validade) mais usadas por
+// empresas do mesmo perfil, como um "isso aqui pode valer a pena tentar mesmo sem
+// nenhum edital aberto agora".
+function linhasEnquadraveisHTML(linhas) {
+  if (!linhas || !linhas.length) return "";
+  return `<div class="detalhe-secao">
+    <div class="detalhe-secao-titulo">Linhas de crédito possivelmente enquadráveis <span style="font-weight:400; text-transform:none; color:var(--blue-lighter);">sem prazo -- não dependem de edital aberto</span></div>
+    <div style="padding:14px;">
+      <p class="hint" style="margin:0 0 10px;">Linhas permanentes do BNDES/FINEP mais usadas por empresas do mesmo setor/porte -- vale procurar um agente financeiro ou o site oficial para ver as condições atuais de cada uma.</p>
+      <table class="ops-table"><thead><tr><th>Linha</th><th>Operações no setor</th><th>Valor médio</th></tr></thead><tbody>
+        ${linhas.map((l) => `<tr><td>${l.produto}</td><td>${fmtNum(l.n_operacoes)}</td><td>${fmtBRLFull(l.valor_medio)}</td></tr>`).join("")}
+      </tbody></table>
+    </div>
+  </div>`;
+}
+
 function exportarElegEditaisCSV() {
   exportarCSV("editais_elegiveis.csv", elegEditaisAtuais, [
     { chave: "titulo", rotulo: "Título" },
@@ -129,6 +147,7 @@ async function consultarElegibilidade() {
   html += setorCardHTML(data.setor_mapeado);
   html += renderEditaisElegiveis(data.editais);
   html += operacoesParecidasHTML(data.operacoes_parecidas);
+  html += linhasEnquadraveisHTML(data.operacoes_parecidas.linhas_enquadraveis);
   html += "</div>";
   container.innerHTML = html;
 

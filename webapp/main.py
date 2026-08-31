@@ -1328,13 +1328,24 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
             f"ORDER BY valor_contratado DESC LIMIT ?",
             params + [n_exemplos],
         ).fetchall()
-        return total_row, por_agencia, exemplos
+        # "Linhas enquadraveis": diferente dos editais (chamada publica, com prazo),
+        # produto e a LINHA DE CREDITO PERMANENTE do BNDES/FINEP (ex: "BNDES FINEM",
+        # "BNDES FINAME", "Credito Direto (FINEP)") -- sem data de validade, sempre
+        # aberta pra quem se enquadrar. Rankeada por frequencia de uso por empresas do
+        # MESMO setor/porte: e a resposta pra "alem do que ja foi financiado, que linha
+        # eu poderia tentar mesmo sem um edital ativo agora?".
+        linhas = cur.execute(
+            f"SELECT produto, COUNT(*), AVG(valor_contratado) FROM operations {where} "
+            f"AND produto IS NOT NULL AND produto != '' GROUP BY produto ORDER BY COUNT(*) DESC LIMIT 10",
+            params,
+        ).fetchall()
+        return total_row, por_agencia, exemplos, linhas
 
     porte_considerado = bool(porte_bndes)
-    total_row, por_agencia, exemplos = _consulta(incluir_porte=True)
+    total_row, por_agencia, exemplos, linhas = _consulta(incluir_porte=True)
     if porte_considerado and (total_row[0] or 0) == 0:
         porte_considerado = False
-        total_row, por_agencia, exemplos = _consulta(incluir_porte=False)
+        total_row, por_agencia, exemplos, linhas = _consulta(incluir_porte=False)
 
     return {
         "total": total_row[0] or 0,
@@ -1348,6 +1359,9 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
         "exemplos": [
             {"cliente": r[0], "agencia": r[1], "uf": r[2], "valor_contratado": r[3], "data_contratacao": r[4]}
             for r in exemplos
+        ],
+        "linhas_enquadraveis": [
+            {"produto": r[0], "n_operacoes": r[1], "valor_medio": r[2] or 0} for r in linhas
         ],
     }
 
@@ -1377,6 +1391,7 @@ def elegibilidade(cnpj: str = Query(...)):
         operacoes_parecidas = {
             "total": 0, "valor_total": 0, "valor_medio": 0,
             "porte_considerado_no_filtro": False, "por_agencia": [], "exemplos": [],
+            "linhas_enquadraveis": [],
         }
         if setor_mapeado["mapeado"]:
             editais = _editais_elegiveis_para_setor(conn)
