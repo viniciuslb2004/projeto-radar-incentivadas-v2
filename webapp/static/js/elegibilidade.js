@@ -111,6 +111,44 @@ function fmtTaxa(v) {
   return `${v.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% a.a.`;
 }
 
+function escapeHTML(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+// descricao_projeto vem em CAIXA ALTA corrida (texto oficial do BNDES) -- so encurta
+// pra caber no card, mantem a caixa original (mexer no case arrisca estragar siglas
+// como "P&D"/"TLP"/"BNDES").
+function truncarProjeto(texto, max = 200) {
+  const t = texto.trim().replace(/\s+/g, " ");
+  return t.length > max ? t.slice(0, max).trim() + "…" : t;
+}
+
+// Sub-linha real dentro de um produto (ex: dentro de "BNDES FINEM": "PSI - Inovação",
+// "CAPACIDADE PRODUTIVA - Indústria de Bens de Capital") -- responde o "qual FINEM,
+// por exemplo" e da o MOTIVO de enquadrabilidade com evidencia real: um projeto
+// (descricao_projeto, dado publico do proprio BNDES) que uma empresa do MESMO
+// setor/porte realmente financiou com essa sub-linha, nao uma alegacao generica.
+function sublinhasHTML(sublinhas) {
+  if (!sublinhas || !sublinhas.length) return "";
+  return `<div style="margin-top:10px;">
+    <div class="detalhe-label" style="margin-bottom:6px;">Sub-linhas mais usadas no setor (qual variante exatamente)</div>
+    ${sublinhas
+      .map(
+        (s) => `<div style="margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid var(--border);">
+          <div><strong>${escapeHTML(s.nome)}</strong> -- ${fmtNum(s.n_operacoes)} operações no setor, valor médio ${fmtBRLFull(s.valor_medio)}</div>
+          ${
+            s.exemplo_projeto
+              ? `<div class="hint" style="margin-top:3px;">Motivo: um projeto real financiado com esta sub-linha por uma empresa do mesmo setor foi "${escapeHTML(truncarProjeto(s.exemplo_projeto))}".</div>`
+              : ""
+          }
+        </div>`
+      )
+      .join("")}
+  </div>`;
+}
+
 // Cada linha da tabela principal é um resumo; clicar nela expande uma 2a linha logo
 // abaixo com as condições reais (prazo de carência/amortização, taxa, indexador) --
 // só existem pra produtos BNDES (ver comentário no backend), então quando tudo vem
@@ -120,7 +158,7 @@ function linhasEnquadraveisHTML(linhas) {
   const linhasHTML = linhas
     .map((l, i) => {
       const semCondicoes = l.prazo_carencia_meses == null && l.prazo_amortizacao_meses == null && l.taxa_juros == null;
-      const detalheHTML = semCondicoes
+      const condicoesHTML = semCondicoes
         ? `<p class="empty-state" style="padding:0;">Condições detalhadas (prazo/taxa) não disponíveis para esta linha -- consulte o agente financeiro ou o site oficial.</p>`
         : `<div class="detalhe-grid">
             <div class="detalhe-campo"><div class="detalhe-label">Carência</div><div class="detalhe-valor">${fmtMeses(l.prazo_carencia_meses)}</div></div>
@@ -128,6 +166,7 @@ function linhasEnquadraveisHTML(linhas) {
             <div class="detalhe-campo"><div class="detalhe-label">Taxa de juros média</div><div class="detalhe-valor">${fmtTaxa(l.taxa_juros)}</div></div>
             <div class="detalhe-campo"><div class="detalhe-label">Indexador mais comum</div><div class="detalhe-valor">${l.indexador || "-"}</div></div>
           </div>`;
+      const detalheHTML = condicoesHTML + sublinhasHTML(l.sublinhas);
       return `<tr class="eleg-linha-row" data-linha-idx="${i}"><td>${l.produto}</td><td>${fmtNum(l.n_operacoes)}</td><td>${fmtBRLFull(l.valor_medio)}</td></tr>
         <tr class="eleg-linha-detalhe" data-linha-idx="${i}" style="display:none;"><td colspan="3" style="background:var(--blue-lightest);">${detalheHTML}</td></tr>`;
     })
@@ -135,7 +174,7 @@ function linhasEnquadraveisHTML(linhas) {
   return `<div class="detalhe-secao">
     <div class="detalhe-secao-titulo">Linhas de crédito possivelmente enquadráveis <span style="font-weight:400; text-transform:none; color:var(--blue-lighter);">sem prazo -- não dependem de edital aberto</span></div>
     <div style="padding:14px;">
-      <p class="hint" style="margin:0 0 10px;">Linhas permanentes do BNDES/FINEP mais usadas por empresas do mesmo setor/porte -- clique em uma linha para ver as condições médias (prazo, taxa, indexador). Vale sempre confirmar as condições atuais com um agente financeiro ou o site oficial.</p>
+      <p class="hint" style="margin:0 0 10px;">Linhas permanentes do BNDES/FINEP mais usadas por empresas do mesmo setor/porte -- clique em uma linha para ver as condições médias (prazo, taxa, indexador) e, quando disponível, qual sub-linha exata e um projeto real que ela financiou. Vale sempre confirmar as condições atuais com um agente financeiro ou o site oficial.</p>
       <table class="ops-table" id="eleg-linhas-tabela"><thead><tr><th>Linha</th><th>Operações no setor</th><th>Valor médio</th></tr></thead><tbody>
         ${linhasHTML}
       </tbody></table>

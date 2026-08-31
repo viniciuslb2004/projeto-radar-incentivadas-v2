@@ -1392,13 +1392,48 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
                 params + [produto],
             ).fetchone()
             indexador_por_produto[produto] = r[0] if r else None
-        return total_row, por_agencia, exemplos, linhas, indexador_por_produto
+
+        # "Qual FINEM (por exemplo)": produto sozinho ("BNDES FINEM") e um balaio --
+        # instrumento_financeiro e a SUB-LINHA real (ex: "PSI - Inovacao", "CAPACIDADE
+        # PRODUTIVA - Industria de Bens de Capital") que da o "motivo" concreto de ser
+        # enquadravel: em vez de so alegar aderencia por estar no mesmo setor, mostra a
+        # sub-linha mais usada por empresas do MESMO setor/porte + um projeto real
+        # (descricao_projeto, dado publico do proprio BNDES) financiado por ela -- e a
+        # evidencia de que a linha realmente se aplica a este tipo de empresa, nao so
+        # uma alegacao. So existe pra BNDES (FINEP nao tem essa granularidade na
+        # planilha de origem, ver comentario em db.py).
+        sublinhas_por_produto = {}
+        for produto, *_ in linhas:
+            subs = cur.execute(
+                f"SELECT instrumento_financeiro, COUNT(*) c, AVG(valor_contratado) FROM operations {where} "
+                f"AND produto = ? AND instrumento_financeiro IS NOT NULL AND instrumento_financeiro != '' "
+                f"GROUP BY instrumento_financeiro ORDER BY c DESC LIMIT 3",
+                params + [produto],
+            ).fetchall()
+            sublinhas = []
+            for nome, n_op, valor_medio_sub in subs:
+                exemplo = cur.execute(
+                    f"SELECT descricao_projeto FROM operations {where} "
+                    f"AND produto = ? AND instrumento_financeiro = ? "
+                    f"AND descricao_projeto IS NOT NULL AND length(trim(descricao_projeto)) > 15 "
+                    f"ORDER BY length(descricao_projeto) DESC LIMIT 1",
+                    params + [produto, nome],
+                ).fetchone()
+                sublinhas.append({
+                    "nome": nome,
+                    "n_operacoes": n_op,
+                    "valor_medio": valor_medio_sub or 0,
+                    "exemplo_projeto": exemplo[0].strip() if exemplo else None,
+                })
+            sublinhas_por_produto[produto] = sublinhas
+
+        return total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto
 
     porte_considerado = bool(porte_bndes)
-    total_row, por_agencia, exemplos, linhas, indexador_por_produto = _consulta(incluir_porte=True)
+    total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto = _consulta(incluir_porte=True)
     if porte_considerado and (total_row[0] or 0) == 0:
         porte_considerado = False
-        total_row, por_agencia, exemplos, linhas, indexador_por_produto = _consulta(incluir_porte=False)
+        total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto = _consulta(incluir_porte=False)
 
     return {
         "total": total_row[0] or 0,
@@ -1422,6 +1457,7 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
                 "prazo_amortizacao_meses": r[4],
                 "taxa_juros": r[5],
                 "indexador": indexador_por_produto.get(r[0]),
+                "sublinhas": sublinhas_por_produto.get(r[0], []),
             }
             for r in linhas
         ],

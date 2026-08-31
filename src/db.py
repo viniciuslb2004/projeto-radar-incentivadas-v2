@@ -238,6 +238,11 @@ CREATE TABLE IF NOT EXISTS operations (
     setor_origem TEXT,                   -- 'nativo' (BNDES) | 'enriquecido' (FINEP via CNPJ) | 'pendente'
     porte_cliente TEXT,
     produto TEXT,
+    instrumento_financeiro TEXT,          -- sub-linha REAL dentro do produto (ex: dentro de "BNDES
+                                           -- FINEM": "PSI - Inovacao", "CAPACIDADE PRODUTIVA -
+                                           -- Industria de Bens de Capital") -- so BNDES por enquanto
+                                           -- (bndes_raw.instrumento_financeiro; FINEP nao tem
+                                           -- equivalente na planilha de origem)
     modalidade_apoio TEXT,               -- REEMBOLSAVEL | NAO REEMBOLSAVEL (caracteristica da linha)
     indexador TEXT,                      -- custo financeiro / indexador (ex: TLP, SELIC) -- so BNDES por enquanto
     taxa_juros REAL,                     -- spread/juros -- so BNDES por enquanto
@@ -337,6 +342,9 @@ MIGRACOES_COLUNAS = [
     ("finep_credito_direto_raw", "row_hash", "TEXT"),
     ("finep_credito_descentralizado_raw", "row_hash", "TEXT"),
     ("finep_nao_aprovados_raw", "row_hash", "TEXT"),
+    # Sub-linha real do BNDES (ver comentario no CREATE TABLE operations acima) --
+    # so passou a ser mapeada em unify.py depois que a tabela ja existia em producao.
+    ("operations", "instrumento_financeiro", "TEXT"),
 ]
 
 
@@ -349,6 +357,18 @@ def _aplicar_migracoes(conn):
         if colunas_existentes[tabela] and coluna not in colunas_existentes[tabela]:
             conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
             colunas_existentes[tabela].add(coluna)
+            if (tabela, coluna) == ("operations", "instrumento_financeiro"):
+                # Backfill unico: unify.py so preenche esta coluna para linhas
+                # INSERIDAS depois desta migracao (pipeline e incremental, nao
+                # reprocessa raw_id ja unificado) -- sem isso, todo o historico de
+                # BNDES ja carregado ficaria com instrumento_financeiro NULL para
+                # sempre. So roda quando a coluna acabou de ser criada (nao a cada
+                # init_db).
+                conn.execute(
+                    "UPDATE operations SET instrumento_financeiro = ("
+                    "  SELECT b.instrumento_financeiro FROM bndes_raw b WHERE b.id = operations.raw_id"
+                    ") WHERE raw_table = 'bndes_raw'"
+                )
     conn.commit()
 
 
