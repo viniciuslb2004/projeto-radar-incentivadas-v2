@@ -56,6 +56,32 @@ def canonical_subsetor(raw: str):
     return SUBSETOR_ALIAS.get(raw.strip().upper(), raw.strip().upper())
 
 
+def _extrair_divisoes(faixa: str) -> list:
+    """Devolve as divisoes (2 digitos) que uma faixa do de_para_cnae realmente
+    representa -- ex 'B05 a B09' -> [5,6,7,8,9], 'C10' -> [10], 'K64, K65 e K66' ->
+    [64,65,66].
+
+    So preenche um INTERVALO (min ate max) quando o texto tem a palavra ' a ' por
+    extenso (indicando uma faixa continua de verdade, ex 'A01 a A03'/'B05 a B09') --
+    listas separadas por virgula/'e', ou codigos de SUBCLASSE mais longos (7 digitos,
+    ex 'H4912401'), NUNCA viram um intervalo preenchido, so as divisoes efetivamente
+    citadas. BUG REAL ja encontrado por isso: a linha 'H4911,\\nH4912401 e\\nH4912402'
+    (3 codigos de subclasse dentro da divisao 49) tinha o numero inteiro fatiado cru em
+    blocos de 2 digitos (a versao antiga desta funcao fazia isso) -- '4912401' virava
+    fragmentos tipo '49','12','40', e o min/max desses fragmentos soltos [11..49] era
+    preenchido como se fosse um intervalo de DIVISOES, sobrescrevendo o mapeamento
+    correto de varias divisoes no meio (ex: divisao 26, fabricacao de eletronicos,
+    virava 'Transporte Ferroviario' em vez de 'Industria'). Pegar so os 2 PRIMEIROS
+    digitos de cada numero (a divisao de verdade) evita esse tipo de fragmento espurio."""
+    numeros = re.findall(r"\d+", faixa)
+    divisoes = sorted({int(n[:2]) for n in numeros if len(n) >= 2})
+    if not divisoes:
+        return []
+    if " a " in faixa and len(divisoes) >= 2:
+        return list(range(divisoes[0], divisoes[-1] + 1))
+    return divisoes
+
+
 def build_divisao_map(conn) -> dict:
     """Faixas tipo 'A01 a A03' -> {divisao_int: (setor_bndes, subsetor_bndes)}.
 
@@ -69,11 +95,11 @@ def build_divisao_map(conn) -> dict:
     mapping = {}
     for _, row in de_para.iterrows():
         faixa = str(row.get("codigo_cnae_ibge_faixa") or "")
-        nums = [int(n) for n in re.findall(r"(\d{2})", faixa)]
-        if not nums:
+        divisoes = _extrair_divisoes(faixa)
+        if not divisoes:
             continue
         setor = canonical_setor(row.get("setor_bndes"))
         subsetor = canonical_subsetor(row.get("subsetor_bndes"))
-        for divisao in range(min(nums), max(nums) + 1):
+        for divisao in divisoes:
             mapping[divisao] = (setor, subsetor)
     return mapping
