@@ -11,7 +11,12 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 180min (nao 30): a 1a carga incremental do zero (backfill de ~30 mil operacoes +
+    # embeddings) demorou mais que 30min mesmo rodando no Linux do GitHub -- confirmado
+    # por uma execucao real cancelada no limite antigo. Depois que a base ja estiver
+    # populada, os refreshes semanais seguintes processam so a diferenca e devem ser
+    # bem mais rapidos -- pode reduzir esse timeout de volta assim que confirmar isso.
+    timeout-minutes: 180
     env:
       TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
       TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
