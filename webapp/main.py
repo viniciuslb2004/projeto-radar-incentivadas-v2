@@ -1289,7 +1289,12 @@ def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
     filtra por regiao: na base atual, 100% dos editais abertos aplicaveis a empresas
     tem regiao='Todo Brasil' (conferido em produção), entao um filtro estrito so
     esconderia oportunidades sem ganho nenhum -- fica so como possível refinamento
-    futuro se a FINEP passar a publicar editais regionais de novo."""
+    futuro se a FINEP passar a publicar editais regionais de novo.
+
+    So o filtro BRUTO (aberto + aplicavel a empresa), sem nenhuma nocao de o quanto
+    cada edital realmente tem a ver com o que a empresa faz -- usado como fallback no
+    modo hospedado (ver _editais_elegiveis_ranqueados abaixo) e quando a busca por
+    embeddings nao acha nada com confianca suficiente."""
     where, params = _editais_where(situacao="aberta", aplicavel_empresa=1)
     cur = conn.cursor()
     total = cur.execute(f"SELECT COUNT(*) FROM editais_raw {where}", params).fetchone()[0]
@@ -1298,7 +1303,38 @@ def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
         f"ORDER BY prazo_proposto ASC NULLS LAST LIMIT ?",
         params + [limit],
     ).fetchall()
-    return {"total": total, "resultados": [_edital_row_to_dict(r) for r in rows]}
+    return {"total": total, "resultados": [_edital_row_to_dict(r) for r in rows], "ranqueado_por_ia": False}
+
+
+def _editais_elegiveis_ranqueados(descricao_empresa: str, limit: int = 20) -> dict:
+    """Versao 'rigorosa' de _editais_elegiveis_para_setor(): em vez de devolver TODO
+    edital aberto aplicavel a empresas (uma lista generica que nao diz nada sobre o
+    quanto cada um tem a ver com o que a empresa faz DE VERDADE), embute a descricao
+    real da empresa (razao social + CNAE, ver /api/elegibilidade) e rankeia os editais
+    abertos por similaridade semantica -- o MESMO motor ja usado na busca livre da aba
+    Editais (buscar_editais_por_projeto). So funciona no modo LOCAL (precisa do
+    sentence-transformers carregado no processo, ver embeddings.get_model() -- no
+    modo hospedado isso estouraria o teto de RAM do free tier do Render, entao o
+    chamador deve cair pro filtro bruto de _editais_elegiveis_para_setor() nesse caso;
+    ver comentario em /api/elegibilidade).
+
+    O corpus de buscar_editais_por_projeto ja e so 'aberto + prazo nao vencido' (ver
+    editais_embeddings.build_editais_embeddings), mas NAO filtra aplicavel_empresa --
+    um ICT ou fundo de investimento tambem entra no corpus. Filtra aqui depois do
+    ranking (os scores ja foram calculados, filtrar antes so complicaria sem ganho)."""
+    from editais_search import buscar_editais_por_projeto
+
+    resultado = buscar_editais_por_projeto(descricao_empresa, max_resultados=limit * 2)
+    resultados = [r for r in (resultado.get("resultados") or []) if r.get("aplicavel_empresa")][:limit]
+    # confianca_baixa aqui so significa "nada bateu bem o suficiente" -- ainda assim
+    # devolvemos o que achou (mais util que uma tela vazia), so sem alegar que e uma
+    # lista rigorosamente filtrada.
+    return {
+        "total": len(resultados),
+        "resultados": resultados,
+        "ranqueado_por_ia": True,
+        "confianca_baixa": resultado.get("confianca_baixa", False),
+    }
 
 
 def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exemplos: int = 5) -> dict:
@@ -1324,7 +1360,7 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
             params,
         ).fetchall()
         exemplos = cur.execute(
-            f"SELECT cliente, agencia, uf, valor_contratado, data_contratacao FROM operations {where} "
+            f"SELECT id, cliente, agencia, uf, valor_contratado, data_contratacao FROM operations {where} "
             f"ORDER BY valor_contratado DESC LIMIT ?",
             params + [n_exemplos],
         ).fetchall()
@@ -1333,19 +1369,36 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
         # "BNDES FINAME", "Credito Direto (FINEP)") -- sem data de validade, sempre
         # aberta pra quem se enquadrar. Rankeada por frequencia de uso por empresas do
         # MESMO setor/porte: e a resposta pra "alem do que ja foi financiado, que linha
-        # eu poderia tentar mesmo sem um edital ativo agora?".
+        # eu poderia tentar mesmo sem um edital ativo agora?". prazo/taxa/indexador so
+        # existem pra produtos BNDES (ver comentario em db.py) -- ficam NULL/None para
+        # produtos FINEP (Credito Direto/Descentralizado), o frontend trata isso como
+        # "condicoes nao disponiveis" em vez de mostrar um zero enganoso.
         linhas = cur.execute(
-            f"SELECT produto, COUNT(*), AVG(valor_contratado) FROM operations {where} "
+            f"SELECT produto, COUNT(*), AVG(valor_contratado), "
+            f"AVG(prazo_carencia_meses), AVG(prazo_amortizacao_meses), AVG(taxa_juros) "
+            f"FROM operations {where} "
             f"AND produto IS NOT NULL AND produto != '' GROUP BY produto ORDER BY COUNT(*) DESC LIMIT 10",
             params,
         ).fetchall()
-        return total_row, por_agencia, exemplos, linhas
+        # Indexador nao tem "media" (e categorico: TLP, SELIC, etc.) -- pega o mais
+        # frequente por produto separadamente, so pros produtos que sobreviveram ao
+        # LIMIT 10 acima (evita rodar essa subconsulta pra produtos que nem vao aparecer).
+        indexador_por_produto = {}
+        for produto, *_ in linhas:
+            r = cur.execute(
+                f"SELECT indexador, COUNT(*) c FROM operations {where} "
+                f"AND produto = ? AND indexador IS NOT NULL AND indexador != '' "
+                f"GROUP BY indexador ORDER BY c DESC LIMIT 1",
+                params + [produto],
+            ).fetchone()
+            indexador_por_produto[produto] = r[0] if r else None
+        return total_row, por_agencia, exemplos, linhas, indexador_por_produto
 
     porte_considerado = bool(porte_bndes)
-    total_row, por_agencia, exemplos, linhas = _consulta(incluir_porte=True)
+    total_row, por_agencia, exemplos, linhas, indexador_por_produto = _consulta(incluir_porte=True)
     if porte_considerado and (total_row[0] or 0) == 0:
         porte_considerado = False
-        total_row, por_agencia, exemplos, linhas = _consulta(incluir_porte=False)
+        total_row, por_agencia, exemplos, linhas, indexador_por_produto = _consulta(incluir_porte=False)
 
     return {
         "total": total_row[0] or 0,
@@ -1357,11 +1410,20 @@ def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exem
             for r in por_agencia
         ],
         "exemplos": [
-            {"cliente": r[0], "agencia": r[1], "uf": r[2], "valor_contratado": r[3], "data_contratacao": r[4]}
+            {"id": r[0], "cliente": r[1], "agencia": r[2], "uf": r[3], "valor_contratado": r[4], "data_contratacao": r[5]}
             for r in exemplos
         ],
         "linhas_enquadraveis": [
-            {"produto": r[0], "n_operacoes": r[1], "valor_medio": r[2] or 0} for r in linhas
+            {
+                "produto": r[0],
+                "n_operacoes": r[1],
+                "valor_medio": r[2] or 0,
+                "prazo_carencia_meses": r[3],
+                "prazo_amortizacao_meses": r[4],
+                "taxa_juros": r[5],
+                "indexador": indexador_por_produto.get(r[0]),
+            }
+            for r in linhas
         ],
     }
 
@@ -1393,14 +1455,37 @@ def elegibilidade(cnpj: str = Query(...)):
             "porte_considerado_no_filtro": False, "por_agencia": [], "exemplos": [],
             "linhas_enquadraveis": [],
         }
-        if setor_mapeado["mapeado"]:
-            editais = _editais_elegiveis_para_setor(conn)
-            operacoes_parecidas = _operacoes_parecidas(conn, setor_mapeado["setor_bndes"], porte_bndes)
+        # Descricao real da empresa (razao social + CNAE + setor estimado) usada pra
+        # ranquear editais por similaridade semantica de verdade, em vez de devolver
+        # todo edital aberto aplicavel a empresas so por bater o filtro estrutural (foi
+        # exatamente isso que o usuario reportou como "pouco rigoroso": uma empresa
+        # testada recebeu praticamente TODOS os editais abertos, sem nenhuma nocao real
+        # do que ela faz).
+        descricao_empresa = " - ".join(
+            filter(None, [
+                empresa.get("razao_social"),
+                empresa.get("cnae_descricao"),
+                setor_mapeado.get("setor_bndes"),
+                setor_mapeado.get("subsetor_bndes"),
+            ])
+        )
+        if not MODO_HOSPEDADO and descricao_empresa:
+            try:
+                editais = _editais_elegiveis_ranqueados(descricao_empresa)
+            except Exception:
+                logger.exception("ranking de editais por IA indisponivel, caindo pro filtro bruto")
+                editais = _editais_elegiveis_para_setor(conn)
+            if not editais["resultados"]:
+                # nada passou no ranking (ou o ranking falhou) -- lista vazia seria
+                # pior que o filtro bruto antigo, entao cai nele como rede de seguranca.
+                editais = _editais_elegiveis_para_setor(conn)
         else:
-            # setor nao mapeado: ainda mostramos editais abertos p/ empresas em geral
-            # (nao dependem de setor), so os agregados de operacoes ficam vazios (nao
-            # ha setor_bndes pra filtrar operations de forma minimamente confiavel).
+            # Hospedado: get_model() nunca pode rodar no servidor (estouraria o teto
+            # de RAM do free tier), entao fica so o filtro estrutural mesmo.
             editais = _editais_elegiveis_para_setor(conn)
+
+        if setor_mapeado["mapeado"]:
+            operacoes_parecidas = _operacoes_parecidas(conn, setor_mapeado["setor_bndes"], porte_bndes)
 
         return {
             "empresa": empresa,

@@ -295,6 +295,7 @@ table.ops-table th {
 }
 table.ops-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
 table.ops-table tr:hover { background: var(--blue-lightest); cursor: pointer; }
+table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
 
 /* ============ Detalhe amigavel da operacao ============ */
 .detalhe-secoes { display: flex; flex-direction: column; gap: 16px; }
