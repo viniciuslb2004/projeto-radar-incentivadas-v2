@@ -30,14 +30,21 @@ function _urlCompleta(url) {
   return url;
 }
 
+// Sem ISSO por padrao, uma chamada sem timeoutMs explicito nunca resolvia nem
+// rejeitava se o backend travasse/nao respondesse (ex: cold-start do free tier do
+// Render meio truncado por algum motivo) -- o await ficava pendurado pra sempre.
+// Isso ja travou a pagina inteira de verdade: initFiltersAndTabs() (ver mais
+// abaixo) so registra os cliques das abas DEPOIS do fetch de /api/status, entao um
+// fetch sem timeout que nunca resolve deixa ate a NAVEGACAO entre abas travada,
+// nao so o dado que ficaria faltando. 45s cobre com folga o cold-start do Render;
+// chamadas que legitimamente demoram mais (geracao de IA via Ollama local) ja
+// passam o proprio timeoutMs mais longo explicitamente, entao nao sao afetadas.
+const TIMEOUT_PADRAO_MS = 45000;
+
 async function fetchJSON(url, timeoutMs) {
   const fullUrl = _urlCompleta(url);
-  if (!timeoutMs) {
-    const r = await fetch(fullUrl, { credentials: "include" });
-    return r.json();
-  }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
   try {
     const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
     return await r.json();
@@ -50,19 +57,19 @@ async function fetchJSON(url, timeoutMs) {
 // visitante (ex: resumo de edital), pra virar cache compartilhado com todo mundo.
 async function postJSON(url, body, timeoutMs) {
   const fullUrl = _urlCompleta(url);
-  const controller = timeoutMs ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
   try {
     const r = await fetch(fullUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       credentials: "include",
-      signal: controller ? controller.signal : undefined,
+      signal: controller.signal,
     });
     return await r.json();
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -147,11 +154,34 @@ function extrairTermosAdicionaisLocal(respostaTexto) {
   }
 }
 
+function _ligarBotoesDeAba() {
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById("view-" + btn.dataset.view).classList.add("active");
+      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais") ? "none" : "flex";
+    });
+  });
+}
+
 async function initFiltersAndTabs() {
-  const status = await fetchJSON("/api/status");
+  // Troca de aba e 100% client-side (so classes CSS) -- liga ISSO primeiro e
+  // incondicionalmente, antes de qualquer fetch, pra a navegacao nunca depender
+  // do backend responder.
+  _ligarBotoesDeAba();
+
+  const pill = document.getElementById("status-pill");
+  let status;
+  try {
+    status = await fetchJSON("/api/status");
+  } catch (e) {
+    pill.textContent = "não foi possível conectar ao servidor";
+    return;
+  }
   window.MODO_HOSPEDADO = !!status.hospedado;
   document.dispatchEvent(new CustomEvent("modo-hospedado-conhecido"));
-  const pill = document.getElementById("status-pill");
   if (status.ultimo_refresh && status.ultimo_refresh.finished_at) {
     const d = new Date(status.ultimo_refresh.finished_at);
     pill.textContent = `${fmtNum(status.n_operacoes)} operações · atualizado em ${d.toLocaleDateString("pt-BR")}`;
@@ -159,7 +189,12 @@ async function initFiltersAndTabs() {
     pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
   }
 
-  const filtros = await fetchJSON("/api/filtros");
+  let filtros;
+  try {
+    filtros = await fetchJSON("/api/filtros");
+  } catch (e) {
+    return;
+  }
   const fill = (id, values) => {
     const sel = document.getElementById(id);
     values.forEach((v) => {
@@ -205,16 +240,6 @@ async function initFiltersAndTabs() {
 
   ["f-agencia", "f-setor", "f-uf", "f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"].forEach((id) => {
     document.getElementById(id).addEventListener("change", notifyFiltersChange);
-  });
-
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById("view-" + btn.dataset.view).classList.add("active");
-      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais") ? "none" : "flex";
-    });
   });
 }
 
