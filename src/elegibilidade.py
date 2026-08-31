@@ -16,6 +16,13 @@ from sector_taxonomy import build_divisao_map
 
 BRASILAPI_CNPJ_URL = "https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
 TIMEOUT_S = 10
+# BrasilAPI/Cloudflare bloqueia (429) requests com o User-Agent padrao da biblioteca
+# `requests` ("python-requests/x.y") -- confirmado testando ao vivo: a MESMA
+# requisicao com um User-Agent de navegador passa na hora, toda vez, mesmo em
+# sequencia rapida; ou seja, nao e rate limit de verdade por IP/frequencia, e sim
+# filtro por User-Agent. Sem isso, resolver_empresa() falharia praticamente sempre
+# em produção.
+_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 # BrasilAPI repete a nomenclatura da Receita Federal para porte ("MICRO EMPRESA",
 # "EMPRESA DE PEQUENO PORTE", "DEMAIS"), que nao bate 1:1 com as categorias que o
@@ -43,7 +50,7 @@ def resolver_empresa(cnpj: str) -> dict:
         return {"erro": "CNPJ inválido. Digite os 14 números do CNPJ (com ou sem pontuação)."}
 
     try:
-        resp = requests.get(BRASILAPI_CNPJ_URL.format(cnpj=cnpj_limpo), timeout=TIMEOUT_S)
+        resp = requests.get(BRASILAPI_CNPJ_URL.format(cnpj=cnpj_limpo), headers=_HEADERS, timeout=TIMEOUT_S)
     except requests.exceptions.RequestException:
         return {"erro": "Não foi possível consultar os dados da empresa agora (serviço de CNPJ fora do ar). Tente novamente em alguns instantes."}
 
