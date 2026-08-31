@@ -1,5 +1,6 @@
 """API FastAPI do Radar de Credito Incentivado (BNDES + FINEP)."""
 import datetime
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,14 @@ from fastapi.staticfiles import StaticFiles
 
 from db import MODO_HOSPEDADO, get_connection
 from webapp.detalhe import montar_detalhe_amigavel
+
+# As rotas de IA/busca (abaixo) capturam Exception generico e devolvem {"erro": ...}
+# de proposito -- uma falha de IA nao deve derrubar a pagina inteira pro usuario.
+# Mas sem logar em algum lugar, um bug de verdade (KeyError, etc) fica indistinguivel
+# de "IA indisponivel no momento" tanto pra quem chamou quanto nos logs do Render --
+# logger.exception() abaixo manda o traceback completo pro stdout/stderr do processo
+# (que o Render ja captura), sem mudar a resposta HTTP que o cliente recebe.
+logger = logging.getLogger("radar")
 
 # ============ Acesso (so ativo no deploy hospedado) ============
 # O app local (desktop) roda sem senha nenhuma, como sempre -- isso so entra em
@@ -728,6 +737,7 @@ try:
         try:
             return buscar_rapido(q)
         except Exception as e:
+            logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}
 
     @app.get("/api/busca/refinar")
@@ -748,6 +758,7 @@ try:
                 "termos_adicionais": refinado.get("termos_adicionais", []),
             }
         except Exception as e:
+            logger.exception("refinamento indisponivel")
             return {"erro": f"refinamento indisponivel no momento: {e}"}
 
     @app.get("/api/busca/narrativa")
@@ -761,6 +772,7 @@ try:
             )
             return {"narrativa": narrativa}
         except Exception as e:
+            logger.exception("narrador indisponivel")
             return {"erro": f"narrador indisponivel no momento: {e}"}
 
     # ============ Modo HOSPEDADO: o navegador calcula o embedding (transformers.js, ver
@@ -788,6 +800,7 @@ try:
         try:
             return preparar_texto_enriquecido(q)
         except Exception as e:
+            logger.exception("enriquecimento indisponivel")
             return {"erro": f"enriquecimento indisponivel no momento: {e}"}
 
     @app.post("/api/busca")
@@ -802,6 +815,7 @@ try:
         try:
             return buscar_rapido_com_vetor(q, vetor)
         except Exception as e:
+            logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}
 
     @app.post("/api/busca/refinar")
@@ -820,6 +834,7 @@ try:
                 "candidatos_ids": prep.get("candidatos_ids", []),
             }
         except Exception as e:
+            logger.exception("refinamento indisponivel")
             return {"erro": f"refinamento indisponivel no momento: {e}"}
 
     @app.post("/api/busca/termo")
@@ -836,6 +851,7 @@ try:
             achados = buscar_por_termo_com_vetor(termo, vetor, set(ja_incluidos))
             return {"resultados": achados}
         except Exception as e:
+            logger.exception("busca por termo indisponivel")
             return {"erro": f"busca por termo indisponivel no momento: {e}"}
 
     @app.post("/api/busca/narrativa")
@@ -857,6 +873,7 @@ try:
                 "fallback": prep.get("fallback"),
             }
         except Exception as e:
+            logger.exception("narrador indisponivel")
             return {"erro": f"narrador indisponivel no momento: {e}"}
 except ImportError as e:
     @app.get("/api/busca")
@@ -1081,6 +1098,7 @@ try:
         try:
             return buscar_editais_por_projeto(q)
         except Exception as e:
+            logger.exception("busca de editais indisponivel")
             return {"erro": f"busca de editais indisponivel no momento: {e}"}
 
     @app.post("/api/editais/buscar")
@@ -1095,6 +1113,7 @@ try:
         try:
             return buscar_editais_por_projeto_com_vetor(q, vetor)
         except Exception as e:
+            logger.exception("busca de editais indisponivel")
             return {"erro": f"busca de editais indisponivel no momento: {e}"}
 
     @app.get("/api/editais/buscar/refinar")
@@ -1120,6 +1139,7 @@ try:
                 "n_originais": refino["n_originais"],
             }
         except Exception as e:
+            logger.exception("refinamento indisponivel")
             return {"erro": f"refinamento indisponivel no momento: {e}"}
 
     @app.post("/api/editais/buscar/refinar")
@@ -1141,6 +1161,7 @@ try:
                 "candidatos_ids": prep["candidatos_ids"],
             }
         except Exception as e:
+            logger.exception("refinamento indisponivel")
             return {"erro": f"refinamento indisponivel no momento: {e}"}
 
     @app.get("/api/editais/buscar/leitura")
@@ -1177,6 +1198,7 @@ try:
             leitura = gerar_leitura_elegibilidade(q, resultados)
             return {"hospedado": False, "leitura": leitura}
         except Exception as e:
+            logger.exception("leitura indisponivel")
             return {"erro": f"leitura indisponivel no momento: {e}"}
 
     @app.get("/api/editais/{edital_id}/resumo")
@@ -1200,6 +1222,7 @@ try:
                 }
             return resumir_edital(edital_id, forcar=forcar)
         except Exception as e:
+            logger.exception("resumo indisponivel")
             return {"erro": f"resumo indisponivel no momento: {e}"}
 
     @app.post("/api/editais/{edital_id}/resumo")
@@ -1210,6 +1233,7 @@ try:
             resumo_texto = (body or {}).get("resumo", "")
             return salvar_resumo(edital_id, resumo_texto)
         except Exception as e:
+            logger.exception("falha ao salvar resumo")
             return {"erro": f"nao foi possivel salvar o resumo: {e}"}
 except ImportError as e:
     @app.get("/api/editais/buscar")

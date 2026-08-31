@@ -63,18 +63,17 @@ def executescript_compat(conn, script: str):
 # embeddings.py): BNDES/FINEP republicam o historico INTEIRO a cada refresh, mas em
 # vez de jogar tudo fora e reconstruir do zero, agora so inserimos linhas realmente
 # novas (por hash de conteudo da linha, ja que numero_contrato/contrato_finep_agente
-# NAO sao chave unica por linha -- ver commit/PR que introduziu isso). Continuam
-# fazendo drop+rebuild completo apenas as tabelas pequenas/derivadas, onde isso e
-# barato e nao ha problema de duplicacao nem de estabilidade de id:
-# - de_para_cnae: tabela de-para pequena (~60 linhas), republicada inteira pelo
-#   proprio BNDES a cada planilha -- reload completo e simples e correto.
-# - agg_*: agregados pre-calculados, recalculados do zero a partir da `operations`
-#   atual a cada refresh -- barato (poucas linhas de saida) e sem chave natural.
+# NAO sao chave unica por linha -- ver commit/PR que introduziu isso). So sobrou
+# de_para_cnae aqui (tabela de-para pequena, ~60 linhas, republicada inteira pelo
+# proprio BNDES a cada planilha -- reload completo e simples e correto). As tabelas
+# agg_setor_periodo/agg_uf/agg_porte que existiam aqui foram REMOVIDAS em 2026-08:
+# nenhuma rota da API as lia (webapp/main.py sempre fez GROUP BY ao vivo em
+# `operations`) -- eram custo puro (um SELECT * de operations inteira + 3 escritas
+# via to_sql, toda semana, contra um banco que ja luta pra terminar dentro do
+# timeout do CI sobre Turso). Se um consumidor de verdade aparecer no futuro, vale
+# reintroduzir com um leitor real, nao "pre-calculado por via das duvidas".
 REBUILD_EACH_REFRESH = [
     "de_para_cnae",
-    "agg_setor_periodo",
-    "agg_uf",
-    "agg_porte",
 ]
 
 SCHEMA = """
@@ -264,33 +263,6 @@ CREATE INDEX IF NOT EXISTS idx_operations_agencia ON operations(agencia);
 CREATE INDEX IF NOT EXISTS idx_operations_ano ON operations(ano);
 CREATE INDEX IF NOT EXISTS idx_operations_uf ON operations(uf);
 CREATE INDEX IF NOT EXISTS idx_operations_cnpj ON operations(cnpj);
-
--- ============ Pre-aggregated tables for fast dashboard loading ============
-CREATE TABLE IF NOT EXISTS agg_setor_periodo (
-    setor_bndes TEXT,
-    agencia TEXT,
-    ano INTEGER,
-    trimestre INTEGER,
-    n_operacoes INTEGER,
-    valor_total REAL,
-    cheque_medio REAL
-);
-
-CREATE TABLE IF NOT EXISTS agg_uf (
-    uf TEXT,
-    agencia TEXT,
-    n_operacoes INTEGER,
-    valor_total REAL,
-    cheque_medio REAL
-);
-
-CREATE TABLE IF NOT EXISTS agg_porte (
-    porte_cliente TEXT,
-    agencia TEXT,
-    n_operacoes INTEGER,
-    valor_total REAL,
-    cheque_medio REAL
-);
 
 -- ============ Refresh log / status ============
 CREATE TABLE IF NOT EXISTS refresh_log (

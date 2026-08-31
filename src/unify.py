@@ -300,8 +300,6 @@ def build_operations():
                 novos_ids.extend(r[0] for r in rows)
 
         reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup)
-
-        _build_aggregates(conn)
         conn.commit()
 
         total_ops = conn.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
@@ -321,38 +319,6 @@ def build_operations():
         "novos_ids": novos_ids,
         "reclassificados_ids": reclassificados_ids,
     }
-
-
-def _build_aggregates(conn):
-    ops = pd.read_sql("SELECT * FROM operations", conn)
-    if ops.empty:
-        return
-
-    setor_periodo = (
-        ops.dropna(subset=["ano"])
-        .groupby(["setor_bndes", "agencia", "ano", "trimestre"], dropna=False)
-        .agg(n_operacoes=("id", "count"), valor_total=("valor_contratado", "sum"))
-        .reset_index()
-    )
-    setor_periodo["cheque_medio"] = setor_periodo["valor_total"] / setor_periodo["n_operacoes"]
-    setor_periodo.to_sql("agg_setor_periodo", conn, if_exists="append", index=False)
-
-    uf = (
-        ops.groupby(["uf", "agencia"], dropna=False)
-        .agg(n_operacoes=("id", "count"), valor_total=("valor_contratado", "sum"))
-        .reset_index()
-    )
-    uf["cheque_medio"] = uf["valor_total"] / uf["n_operacoes"]
-    uf.to_sql("agg_uf", conn, if_exists="append", index=False)
-
-    porte = (
-        ops.fillna({"porte_cliente": "Nao informado"})
-        .groupby(["porte_cliente", "agencia"], dropna=False)
-        .agg(n_operacoes=("id", "count"), valor_total=("valor_contratado", "sum"))
-        .reset_index()
-    )
-    porte["cheque_medio"] = porte["valor_total"] / porte["n_operacoes"]
-    porte.to_sql("agg_porte", conn, if_exists="append", index=False)
 
 
 if __name__ == "__main__":

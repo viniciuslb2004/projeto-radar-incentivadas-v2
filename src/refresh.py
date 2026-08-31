@@ -10,6 +10,7 @@ reembutir tudo toda semana -- so processa o que e realmente novo. de_para_cnae e
 agregados (agg_*) continuam em reload completo (baratos, sem risco de duplicacao).
 """
 import datetime
+import sys
 import traceback
 
 from db import drop_rebuild_tables, get_connection, init_db
@@ -20,7 +21,12 @@ import unify
 import embeddings
 
 
-def run_refresh():
+def run_refresh() -> str:
+    """Devolve o status final ('ok'/'erro') -- o chamador de linha de comando (ver
+    __main__) e quem decide se isso vira um sys.exit(1). Sem isso, uma falha total
+    aqui (download fora do ar, Turso indisponivel, etc) ficava so registrada dentro
+    do proprio banco (refresh_log.status='erro') mas o processo saia com codigo 0 --
+    o workflow do GitHub Actions aparecia verde mesmo quando o refresh inteiro falhou."""
     init_db()
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     print(f"=== Refresh iniciado em {started_at} ===")
@@ -72,7 +78,8 @@ def run_refresh():
     print(f"=== Refresh finalizado em {finished_at} (status={status}) ===")
     print(f"BNDES: {bndes_rows} | FINEP credito direto: {finep_direto_rows} | FINEP descentralizado: {finep_desc_rows}")
     print(f"Operations: {ops_rows} ({pendentes} com setor pendente)")
+    return status
 
 
 if __name__ == "__main__":
-    run_refresh()
+    sys.exit(1 if run_refresh() == "erro" else 0)
