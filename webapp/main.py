@@ -1103,4 +1103,22 @@ def elegibilidade_editais_ranqueados(body: dict):
         return {"erro": f"nao foi possivel ranquear os editais agora ({e})"}
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# So monta o servico de arquivos estaticos quando NAO estamos rodando como funcao
+# serverless da Vercel -- e o que faz `uvicorn webapp.main:app` local (dev no PC,
+# app desktop) continuar servindo front+back no mesmo processo, de um jeito
+# identico a antes desta migracao. No deploy hospedado (ver vercel.json e
+# DEPLOY.md), a propria Vercel serve webapp/static/ direto pela CDN a partir de
+# `outputDirectory` -- rodar este mount ali tambem nao quebraria nada (so seria
+# alcancado por requisicoes que a CDN nunca deixa chegar ate a funcao), mas
+# empacotaria o HTML/CSS/JS inteiro dentro do bundle da funcao Python a toa.
+#
+# VERCEL=1 e a variavel de ambiente que a propria Vercel expõe (documentada em
+# https://vercel.com/docs/environment-variables/system-environment-variables) --
+# usada aqui como sinal de "estamos rodando na Vercel". NAO TESTADO contra um
+# deploy real (ver relatorio da migracao): confirmar no primeiro deploy que essa
+# variavel realmente chega ao processo (a Vercel documenta que a opcao "Enable
+# access to System Environment Variables" precisa estar marcada nas configuracoes
+# do projeto para isso) -- se nao chegar, o pior caso e so este mount rodar
+# desnecessariamente dentro da funcao (peso extra no bundle), nunca um erro.
+if not os.environ.get("VERCEL"):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

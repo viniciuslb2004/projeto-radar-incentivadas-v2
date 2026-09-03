@@ -1,4 +1,4 @@
-# Estado do projeto (atualizado em 2026-08-19)
+# Estado do projeto (atualizado em 2026-09-03)
 
 ## Como retomar
 
@@ -7,71 +7,80 @@ cd "C:\Users\ViníciusBorrellas\OneDrive - Ártica\Desenvolvimento - Incentivada
 .venv\Scripts\python.exe -m uvicorn webapp.main:app --host 127.0.0.1 --port 8001
 ```
 
-Depois abra http://127.0.0.1:8001 — os dados, embeddings e banco já estão prontos, não precisa rodar mais nada.
+Depois abra http://127.0.0.1:8001. O app agora fala SEMPRE com Postgres (Supabase) via
+`DATABASE_URL` -- não existe mais banco local (SQLite) nem modo dual local/hospedado. Em
+desenvolvimento local, `DATABASE_URL` vem de um arquivo `.env` na raiz do repo (não commitado,
+já tem a connection string do projeto Supabase "Linhas Incentivadas - CapSol").
 
-Se a porta 8001 estiver ocupada (ou o servidor não responder), troque para outra porta (ex: `--port 8002`) e ajuste a URL.
+Se a porta 8001 estiver ocupada (ou o servidor não responder), troque para outra porta.
 
-Ollama (usado pela Busca e pela aba Editais para gerar textos/resumos) já está rodando via o atalho de Inicialização do Windows -- não precisa religar manualmente. Se algum dia ele estiver parado:
-```powershell
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" serve
-```
-Sem o Ollama rodando, Busca e Editais continuam funcionando (resultados e filtros), só os textos gerados por IA caem no fallback de template.
+## Mudança de arquitetura desta sessão (2026-09-03) -- a maior do projeto até agora
 
-## O que já está pronto e funcionando
+Direção de produto mudou: bases de dados passam a chegar mais processadas de uma etapa
+externa; a plataforma deixa de fazer IA generativa e vira 100% online.
 
-- Base unificada: 28.780 operações (23.723 BNDES + 5.057 FINEP crédito), setor 100% classificado nas duas agências.
-- Granularidade em 3 níveis: Setor (4), Subsetor (19), Segmento CNAE (~1.290, ex: "Extração de Minério de Ferro").
-- 4 páginas: Consolidado, Tendências & Insights (com painéis de subsetor e segmento), Busca (semântica, local, com narrador via Ollama), e Editais (chamadas públicas abertas da FINEP).
-- Filtro de período com granularidade de mês/ano; tendências sempre comparam o período selecionado (capado em 12 meses) vs. o período equivalente anterior.
-- Ordenação (data/valor/instituição) nos resultados de busca, na tabela de operações e no modal de detalhe.
-- Tarefas agendadas no Windows Task Scheduler já registradas e funcionando sozinhas, sem precisar do Claude Code:
-  - `RadarCreditoIncentivado` — refresh semanal (BNDES + FINEP), toda segunda 7h.
-  - `RadarCreditoIncentivado_EnriquecimentoCNAE` — reenriquecimento de setor da FINEP, a cada 4 semanas.
-  - `RadarCreditoIncentivado_Editais` — refresh diário dos editais da FINEP, todo dia às 6h30.
-- Ollama instalado e rodando como serviço (`ollama app`), modelo `llama3.1:8b-instruct-q4_K_M` já baixado (trocado do 3B para o 8B em 2026-08 -- resultados bem melhores em resumo de edital e busca por empresa/CNPJ, precisa de mais RAM livre).
+1. **IA generativa (Ollama) removida por completo** -- resumos de edital, refino de busca,
+   narrativa. A busca SEMÂNTICA (embeddings) continua 100% intacta (é uma funcionalidade real
+   da plataforma, não uma etapa de "processamento"). Não há mais nenhuma referência a Ollama em
+   lugar nenhum do código.
+2. **Banco migrado de SQLite local + Turso hospedado para um único Postgres (Supabase)** --
+   `src/db.py` reescrito (schema em sintaxe Postgres, `GENERATED ALWAYS AS IDENTITY`), novo
+   `src/db_compat.py` (traduz `?`→`%s` sem precisar editar as dezenas de call sites
+   existentes), `coerce_for_pg` no lugar de `coerce_for_affinity`. Dados migrados de
+   `data/radar.db` pro Supabase via `scripts/migrate_sqlite_to_supabase.py` (já rodado com
+   sucesso, 94.580 linhas, 8 tabelas, contagens conferidas).
+3. **Deploy hospedado movendo de Render+Vercel para Vercel sozinha** (frontend + backend
+   juntos, função Python serverless em `api/index.py`) -- ver `DEPLOY.md` para arquitetura e
+   passo a passo. **Ainda não implantado de verdade** (só a estrutura de arquivos está pronta:
+   `vercel.json`, `api/index.py`, `requirements-api.txt`) -- falta configurar o projeto na
+   Vercel de verdade e decidir quando desligar a Render.
+4. Workflows do GitHub Actions (`.github/workflows/*.yml`) atualizados para usar o secret
+   `DATABASE_URL` em vez de `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` -- **ainda não pushado**
+   pro repositório: falta o usuário adicionar o secret `DATABASE_URL` (Settings → Secrets and
+   variables → Actions) antes, senão os workflows quebram na próxima execução agendada.
 
-## Aba Editais (FINEP Oportunidades) -- adicionada em 2026-08-19
+### Pendências reais para fechar a migração
 
-- Puxa direto da API pública da FINEP (`o/c/chamadapublicas`), não é scraping de HTML.
-- Filtro padrão: só editais realmente abertos (a própria FINEP às vezes mantém `situacao='aberta'`
-  com o `prazo_proposto` já vencido -- o app corrige isso automaticamente, tanto na lista quanto
-  no corpus do endgame) e só aplicável a empresas (empresa1-5/startup/cooperativa).
-- Dashboard com nº de editais abertos, quantos fecham em até 30 dias, e quebra por tema (clicável).
-- **Documentos reais**: além dos manuais genéricos da plataforma, o app busca o Regulamento, todos
-  os Anexos, FAQ e resultados parciais de cada edital aberto via um endpoint separado da FINEP
-  (`/o/c/chamadapublicas/{id}/documentos`, autenticado com um token "guest" público que o próprio
-  site usa para qualquer visitante anônimo -- não é um contorno de proteção). Ver `src/editais_documentos.py`.
-- **Resumo de elegibilidade por IA baseado no documento de verdade**: baixa e extrai o texto do
-  Regulamento + Anexo 1 (via `pypdf`) e pede à IA local 4 respostas objetivas: linhas temáticas e
-  o tema de cada uma, valor mínimo/máximo, quem pode pleitear, e a contrapartida exigida -- tudo
-  cacheado em `editais_raw.documento_chave_texto` (computado uma vez, não todo dia) e no
-  `resumo_ia` de cada edital. Quando o Regulamento/Anexo 1 não seguem o padrão usual (alguns
-  editais de FIP usam só "Edital" + "Anexos"), há fallback para esses nomes; se nada for
-  encontrado, o resumo avisa explicitamente em vez de inventar.
-- Endgame: descreva seu projeto/empresa em texto livre → busca rápida por embeddings → uma etapa
-  de revisão por IA remove editais que só bateram por semelhança genérica de texto mas não têm
-  elegibilidade real (ex: uma fabricante de baterias não deve ver um edital de Defesa só porque
-  "bateria" apareceu em ambos) → só then os cards aparecem → leitura final em texto dizendo qual(is)
-  edital(is) parecem mais elegíveis, com prazo.
-- Refresh diário via `src/refresh_editais.py`, preserva o cache de resumos de IA e do texto dos
-  documentos entre execuções (só busca/baixa PDF de edital que ainda não tem o texto cacheado).
+- [ ] Usuário adiciona o secret `DATABASE_URL` no GitHub (Settings → Secrets and variables → Actions).
+- [ ] Push dos commits locais (migração Postgres + workflows atualizados) pro `master`.
+- [ ] Criar/configurar o projeto na Vercel (Root Directory = raiz do repo, não mais
+      `webapp/static`), variáveis de ambiente `DATABASE_URL`/`SITE_USER`/`SITE_PASSWORD`.
+- [ ] Confirmar no 1º deploy real se `requirements-api.txt` é o arquivo que a Vercel usa pra
+      função (maior risco não testado, ver DEPLOY.md -- se não for, renomear pra
+      `api/requirements.txt`).
+- [ ] Depois de confirmar o deploy da Vercel funcionando, desligar o serviço da Render (não
+      apagar ainda -- é a rede de segurança até a Vercel estar 100% validada).
 
-## Pendências / próximos passos (quando você voltar)
+## O que já está pronto e funcionando (verificado ao vivo contra o Supabase real)
 
-Nada pendente — todos os itens pedidos até agora foram implementados e testados, incluindo a rodada mais recente (aba Editais + resumo baseado em Regulamento/Anexo 1 reais + refino do endgame).
+- Base unificada: ~30.585 operações (23.723 BNDES + 6.862 FINEP crédito), setor 100%
+  classificado nas duas agências. Granularidade em 3 níveis: Setor (4), Subsetor (19),
+  Segmento CNAE (~1.290).
+- 5 abas: Consolidado, Tendências & Insights, Busca (semântica, embeddings, sem IA
+  generativa), Editais (chamadas públicas abertas da FINEP), Minha Empresa (elegibilidade por
+  CNPJ).
+- **Minha Empresa**: resolve setor/porte via BrasilAPI a partir do CNPJ, cruza com histórico de
+  operações do setor (+ sub-linha real dentro de cada produto BNDES, ex: dentro de "BNDES
+  FINEM" -- "PSI - Inovação", com um projeto real como evidência) e rankeia os editais abertos
+  por similaridade semântica real (upgrade progressivo: mostra o filtro estrutural primeiro,
+  troca pela lista rankeada por IA assim que o embedding calculado no navegador chega).
+- Automação: GitHub Actions roda diário (editais), semanal (operações BNDES/FINEP) e mensal
+  (enriquecimento CNAE) -- ver pendência acima sobre o secret `DATABASE_URL`.
 
-Ideias em aberto que ainda não foram pedidas:
-- Mapa por UF (visual, hoje é só barra/lista) na aba Consolidado.
-- Exportar resultados da busca/drill-down para Excel.
-- Trazer também as condições financeiras da FINEP na Busca (hoje só o BNDES tem indexador/juros/prazo).
-- 3 dos 27 editais abertos não têm nenhum documento identificável pela FINEP (nem "Regulamento/Anexo1"
-  nem "Edital/Anexos") -- o resumo desses cai no fallback baseado só na descrição resumida do site.
+## Bug crítico corrigido nesta sessão (antes da migração de banco)
+
+`sector_taxonomy.py`'s `build_divisao_map()` fatiava código de CNAE de forma errada para faixas
+com códigos de subclasse longos (ex: "H4911, H4912401 e H4912402"), corrompendo o mapeamento
+setor/subsetor de várias divisões CNAE no meio do caminho (ex: divisão 26, "Fabricação de
+componentes eletrônicos", virava "Transporte Ferroviário" em vez de "Indústria"). Corrigido com
+`_extrair_divisoes()`, que só preenche um intervalo quando o texto tem " a " por extenso.
 
 ## Arquivos-chave
 
-- Plano da aba Editais: `C:\Users\ViníciusBorrellas\.claude\plans\binary-booping-reef.md`
 - Pipeline de dados (operações): `src/refresh.py` (orquestra tudo), `src/enrich_cnae.py` (pesado, mensal)
 - Pipeline de dados (editais): `src/refresh_editais.py` (orquestra `finep_editais.py` + `editais_documentos.py` + `editais_embeddings.py`)
-- Motor de busca: `src/search.py` (operações), `src/editais_search.py` (endgame + refino + resumo de editais)
-- API + frontend: `webapp/main.py`, `webapp/static/` (`js/editais.js` é a aba nova)
-- Banco: `data/radar.db` (SQLite), `data/embeddings.npz` + `data/editais_embeddings.npz` (busca semântica)
+- Motor de busca: `src/search.py` (operações), `src/editais_search.py` (busca de editais) -- ambos só embeddings, sem IA generativa
+- Elegibilidade ("Minha Empresa"): `src/elegibilidade.py`, rotas `/api/elegibilidade*` em `webapp/main.py`, `webapp/static/js/elegibilidade.js`
+- Banco: `src/db.py` (conexão + schema Postgres), `src/db_compat.py` (compat `?`→`%s`), `src/incremental.py` (hash/coerção de tipos)
+- API + frontend: `webapp/main.py`, `webapp/static/` (HTML/CSS/JS)
+- Deploy: `api/index.py` (entrypoint Vercel), `vercel.json`, `requirements-api.txt`, ver `DEPLOY.md`

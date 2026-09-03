@@ -1,11 +1,10 @@
 // Configuracao do frontend hospedado.
 //
-// Detecta automaticamente local vs. hospedado pelo hostname, para o mesmo
-// arquivo servir os dois casos sem precisar editar nada ao alternar entre
-// rodar no seu PC (Origin() vazio -- mesmo servidor) e o deploy na Vercel
-// (Origin() aponta pro backend sempre-ligado no Render, ver DEPLOY.md).
-(function () {
-  var host = window.location.hostname;
-  var local = host === "localhost" || host === "127.0.0.1" || host === "";
-  window.API_BASE_URL = local ? "" : "https://radar-credito-backend.onrender.com";
-})();
+// URL relativa (mesma origem) SEMPRE -- tanto local quanto hospedado. Local: o
+// proprio `uvicorn webapp.main:app` serve front+back no mesmo processo (mount de
+// StaticFiles em webapp/main.py). Hospedado: a API e o site estatico agora moram
+// no MESMO dominio da Vercel (vercel.json roteia /api/* para a funcao Python,
+// tudo o mais vem de webapp/static/ pela CDN) -- ver DEPLOY.md. Antes deste
+// arquivo apontava para um backend num dominio separado (Render); com os dois
+// lados no mesmo dominio no ar, esse desvio deixou de existir.
+window.API_BASE_URL = "";

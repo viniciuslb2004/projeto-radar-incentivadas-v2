@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "webapp/static",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "excludeFiles": "{webapp/static/**,data/raw/**,data/rfb_tmp/**,scripts/**,.github/**}"
+    }
+  }
+}

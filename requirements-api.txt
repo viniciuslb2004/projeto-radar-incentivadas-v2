@@ -1,0 +1,40 @@
+# Dependencias do backend hospedado (Vercel Functions, api/index.py -> webapp/main.py).
+#
+# Deliberadamente MENOR que requirements.txt (raiz): aquele arquivo serve o pipeline
+# de dados local + os workflows do GitHub Actions (download/parse/unify/enrich/
+# embeddings) e inclui torch/sentence-transformers/pandas/openpyxl/pypdf/sqlalchemy,
+# que a API hospedada nunca importa em tempo de execucao (ver DEPLOY.md, secao
+# "Arquitetura"). Instalar esse conjunto pesado na funcao serverless custaria bundle
+# size e tempo de build sem necessidade nenhuma -- so o que webapp/main.py e os
+# modulos de src/ que ele importa (busca/editais/elegibilidade) realmente carregam
+# ao responder uma requisicao HTTP e que entra aqui.
+#
+# Conferido por leitura manual do grafo de imports de nivel de modulo a partir de
+# webapp/main.py (import "de topo do arquivo", nao import lazy dentro de funcao):
+#   webapp/main.py     -> db, webapp/detalhe (sem imports proprios)
+#   src/db.py          -> os, pathlib (stdlib), dotenv, psycopg, db_compat
+#                         (sqlalchemy so e importado dentro de get_engine(), usado
+#                         apenas pelos scripts de pipeline -- webapp/main.py nunca
+#                         chama get_engine())
+#   src/search.py       -> numpy, pandas, db, embeddings, empresa_lookup
+#   src/embeddings.py   -> numpy, pandas, db (sentence_transformers so dentro de
+#                         get_model(), nunca chamado no modo hospedado -- ver
+#                         DEPLOY.md)
+#   src/empresa_lookup.py -> requests (busca web sem API key, usada no fallback de
+#                         "confianca_baixa" da busca)
+#   src/editais_search.py -> numpy, db, editais_embeddings, embeddings
+#   src/editais_embeddings.py -> numpy, pandas, db, embeddings
+#   src/elegibilidade.py   -> requests, sector_taxonomy (sector_taxonomy so usa `re`)
+# pypdf (src/editais_documentos.py) e openpyxl (src/parse_bndes.py, src/parse_finep.py)
+# NAO entram: so sao importados por modulos do pipeline (finep_editais.py,
+# refresh_editais.py, parse_*.py), nunca alcancados a partir de webapp/main.py.
+#
+# uvicorn fica de fora de proposito: o runtime Python da Vercel importa o objeto
+# ASGI `app` diretamente (ver api/index.py) e roda seu proprio servidor -- nao
+# precisa (nem deve) instalar um servidor ASGI a parte dentro da funcao.
+fastapi
+psycopg[binary]
+requests
+numpy
+pandas
+python-dotenv
