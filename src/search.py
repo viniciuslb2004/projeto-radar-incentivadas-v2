@@ -1,24 +1,12 @@
-"""Motor de busca por similaridade (embeddings locais) + narrador (Ollama com fallback estatistico)."""
+"""Motor de busca por similaridade (embeddings locais)."""
 import datetime
-import json
 
 import numpy as np
 import pandas as pd
-import requests
 
 from db import get_connection
 from embeddings import EMB_PATH, get_model
 from empresa_lookup import buscar_atividade_empresa
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
-# 8B em vez de 3B (2026-08): resultados sensivelmente melhores em tarefas que exigem
-# seguir instrucoes com precisao (ex: nao inventar numeros de uma tabela bagunçada,
-# distinguir nome de empresa de ruido textual) -- ver historico de resumo de editais
-# e busca por empresa desconhecida. Custo: baixa em CPU ~2-3x mais devagar que o 3B e
-# precisa de mais RAM (~6-7GB livres) -- por isso os timeouts abaixo tambem subiram.
-OLLAMA_MODEL = "llama3.1:8b-instruct-q4_K_M"
-OLLAMA_TIMEOUT = 120
-OLLAMA_TIMEOUT_REFINO = 180  # prompt maior (varios candidatos) -- precisa de mais margem que a narrativa
 
 # Score de similaridade (cosseno, 0-1) abaixo do qual avisamos o usuario que a
 # correspondencia e fraca, em vez de apresentar os resultados como se fossem uma
@@ -184,8 +172,8 @@ def _parse_date(s: str) -> datetime.date:
 def _tendencia_por_campo(conn, campo: str, valor_campo: str, rotulo: str):
     """Variacao de participacao de um valor de `campo` (setor_bndes OU segmento) nos
     ultimos 365 dias de dados vs os 365 anteriores. Usado tanto para a leitura ampla
-    (setor) quanto para a leitura fina e especifica (segmento CNAE) que alimenta a
-    narrativa -- o segmento e o que realmente diz algo especifico sobre a busca."""
+    (setor) quanto para a leitura fina e especifica (segmento CNAE) -- o segmento e
+    o que realmente diz algo especifico sobre a busca."""
     if not valor_campo:
         return None
     cur = conn.cursor()
@@ -237,143 +225,6 @@ def _tendencia_por_campo(conn, campo: str, valor_campo: str, rotulo: str):
         "n_operacoes_atual": n_atual,
         "direcao": direcao,
     }
-
-
-def _fmt_brl(v):
-    if v >= 1e9:
-        return f"R$ {v/1e9:.1f} bi"
-    if v >= 1e6:
-        return f"R$ {v/1e6:.1f} mi"
-    if v >= 1e3:
-        return f"R$ {v/1e3:.0f} mil"
-    return f"R$ {v:.0f}"
-
-
-def _tendencia_texto(tendencia: dict) -> str:
-    if not tendencia:
-        return ""
-    rotulo, grupo = tendencia["rotulo"], tendencia["grupo"]
-    if tendencia["direcao"] == "alta":
-        return (
-            f'O segmento "{grupo}" ({rotulo}) está em alta: passou de {tendencia["participacao_anterior_pct"]:.1f}% '
-            f'para {tendencia["participacao_atual_pct"]:.1f}% do crédito incentivado dos últimos 12 meses '
-            f'(+{tendencia["variacao_pp"]:.1f} p.p. frente aos 12 meses anteriores, {tendencia["n_operacoes_atual"]} '
-            f'operações e {_fmt_brl(tendencia["valor_atual"])} no período atual).'
-        )
-    if tendencia["direcao"] == "queda":
-        return (
-            f'O segmento "{grupo}" ({rotulo}) está em queda: caiu de {tendencia["participacao_anterior_pct"]:.1f}% '
-            f'para {tendencia["participacao_atual_pct"]:.1f}% do crédito incentivado dos últimos 12 meses '
-            f'({tendencia["variacao_pp"]:.1f} p.p. frente aos 12 meses anteriores, {tendencia["n_operacoes_atual"]} '
-            f'operações e {_fmt_brl(tendencia["valor_atual"])} no período atual).'
-        )
-    return (
-        f'A participação do segmento "{grupo}" ({rotulo}) está estável '
-        f'({tendencia["participacao_atual_pct"]:.1f}% do crédito incentivado nos últimos 12 meses, '
-        f'{tendencia["n_operacoes_atual"]} operações no período).'
-    )
-
-
-def _template_narrativa(query: str, tendencia_segmento: dict, tendencia_setor: dict, resultados: list, confianca_baixa: bool) -> str:
-    if not resultados:
-        return f'Não encontrei operações de BNDES ou FINEP parecidas com "{query}" na base atual.'
-
-    n = len(resultados)
-    agencias = sorted(set(r["agencia"] for r in resultados))
-    valor_medio = sum(r["valor_contratado"] or 0 for r in resultados) / n
-    exemplos = resultados[:3]
-
-    partes = []
-    if confianca_baixa:
-        partes.append(
-            f'Não encontrei uma correspondência forte para "{query}" na base do BNDES/FINEP -- '
-            "os resultados abaixo são os mais próximos que existem, mas com similaridade baixa."
-        )
-    else:
-        nomes = ", ".join(e["cliente"] for e in exemplos if e.get("cliente"))
-        partes.append(
-            f'Encontrei {n} operações de {" e ".join(agencias)} parecidas com "{query}", '
-            f"com cheque médio de {_fmt_brl(valor_medio)}. Os exemplos mais próximos incluem {nomes}."
-        )
-
-    texto_segmento = _tendencia_texto(tendencia_segmento)
-    if texto_segmento:
-        partes.append(texto_segmento)
-    elif tendencia_setor:
-        partes.append(_tendencia_texto(tendencia_setor))
-
-    return " ".join(partes)
-
-
-def montar_prompt_narrativa(query_expandida: str, tendencia_segmento: dict, tendencia_setor: dict, resultados: list, confianca_baixa: bool = False) -> dict:
-    """Mesmo prompt de gerar_narrativa(), devolvido em vez de enviado ao Ollama --
-    usado no modo HOSPEDADO (ver POST /api/busca/narrativa em webapp/main.py)."""
-    fallback = _template_narrativa(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
-    if not resultados:
-        return {"prompt": None, "fallback": fallback}
-
-    exemplos = "\n".join(
-        f"- {r['cliente']} | agência: {r['agencia']} | segmento: {r['segmento'] or 'nao classificado'} | "
-        f"valor: {_fmt_brl(r['valor_contratado'] or 0)} | data: {r['data_contratacao']} | "
-        f"projeto: {(r['descricao_projeto'] or '').strip()[:140]}"
-        for r in resultados[:6]
-    )
-    tendencia_txt = _tendencia_texto(tendencia_segmento) or _tendencia_texto(tendencia_setor) or "Sem dados de tendência suficientes."
-    aviso_confianca = (
-        "ATENCAO: a similaridade encontrada foi baixa, deixe isso claro logo na primeira frase. "
-        if confianca_baixa else ""
-    )
-    prompt = (
-        "Voce e um analista de credito incentivado (BNDES/FINEP) da Artica Capital Solutions, "
-        "escrevendo para um colega que precisa de uma leitura RAPIDA e ESPECIFICA, nao um resumo generico.\n\n"
-        f'O usuario descreveu: "{query_expandida}"\n\n'
-        f"Operacoes mais parecidas encontradas (use nomes e numeros REAIS destes exemplos):\n{exemplos}\n\n"
-        f"Dado de tendencia (o segmento especifico da busca, ultimos 12 meses vs 12 meses anteriores):\n{tendencia_txt}\n\n"
-        f"{aviso_confianca}"
-        "Escreva um paragrafo de 3-4 frases em portugues, seguindo esta estrutura:\n"
-        "1) Cite pelo menos 2 nomes de empresas reais da lista acima e o que elas fizeram (resuma o projeto).\n"
-        "2) Diga se ESSE SEGMENTO especifico (nao um setor generico) esta em alta ou queda, citando os p.p. e o valor fornecidos.\n"
-        "3) Termine com uma frase de leitura pratica (ex: se e um segmento aquecido, se os cheques sao "
-        "tipicamente grandes ou pequenos, se a base de comparaveis e ampla ou restrita).\n"
-        "Nao use frases genericas como 'isso sugere uma tendencia' sem dizer especificamente qual. "
-        "Nao invente numeros que nao foram fornecidos. "
-        "Responda direto com o paragrafo em si -- sem introducoes tipo 'aqui esta', sem comentar a tarefa, "
-        "sem repetir estas instrucoes."
-    )
-    return {"prompt": prompt, "modelo": OLLAMA_MODEL, "opcoes": {"temperature": 0.3}, "fallback": fallback}
-
-
-def gerar_narrativa(query_expandida: str, tendencia_segmento: dict, tendencia_setor: dict, resultados: list, confianca_baixa: bool = False) -> str:
-    """Chamada LENTA (Ollama, ~5-40s). Chame depois de ja ter mostrado os resultados ao usuario.
-
-    O prompt e deliberadamente concreto (exemplos com nome, segmento, valor, data e um
-    trecho da descricao do projeto + a tendencia do SEGMENTO especifico, nao do setor
-    generico) para que o modelo local (pequeno, 3B) tenha material suficiente pra
-    escrever algo especifico em vez de uma resposta generica de tendencia de setor.
-    Modo LOCAL apenas -- ver montar_prompt_narrativa() para o modo hospedado."""
-    prep = montar_prompt_narrativa(query_expandida, tendencia_segmento, tendencia_setor, resultados, confianca_baixa)
-    fallback = prep["fallback"]
-    if not prep.get("prompt"):
-        return fallback
-    try:
-        resp = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": prep["modelo"],
-                "prompt": prep["prompt"],
-                "stream": False,
-                "options": prep["opcoes"],
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        texto = resp.json().get("response", "").strip()
-        return texto or fallback
-    except Exception:
-        return fallback
-
-
-MAX_AVALIAR_REFINO = 30  # mais que isso deixa o prompt grande demais para um modelo 3B em CPU responder a tempo
 
 
 _COLS_OPERACAO = [
@@ -445,111 +296,6 @@ def buscar_por_termo_com_vetor(termo: str, vetor, ja_incluidos, limite: int = 8)
         vec = vec / norma
     incluidos = ja_incluidos if isinstance(ja_incluidos, set) else set(ja_incluidos or [])
     return _buscar_por_termo_nucleo(vec, incluidos, limite)
-
-
-def montar_prompt_refino(query_expandida: str, resultados: list, max_avaliar: int = MAX_AVALIAR_REFINO) -> dict:
-    """Mesmo prompt de refinar_resultados(), devolvido em vez de enviado ao Ollama --
-    usado no modo HOSPEDADO, onde quem efetivamente gera o texto e o navegador de quem
-    esta usando (ver local-ai.js). A filtragem do JSON de resposta (aplicarRefinoLocal,
-    ver common.js) acontece no proprio navegador -- os 'termos_adicionais' sao tratados
-    a parte (ver buscar_por_termo_com_vetor / rota POST /api/busca/termo), pois tambem
-    precisam de um vetor calculado no navegador."""
-    if not resultados:
-        return {"prompt": None, "candidatos_ids": []}
-
-    candidatos = resultados[:max_avaliar]
-    lista = "\n".join(
-        f"{r['id']}: empresa={r['cliente']} | segmento={r['segmento'] or 'nao classificado'} | "
-        f"valor={_fmt_brl(r['valor_contratado'] or 0)}"
-        for r in candidatos
-    )
-    prompt = (
-        "Voce e um analista revisando os resultados de uma busca semantica automatica por operacoes "
-        "de credito incentivado (BNDES/FINEP). A busca por similaridade de texto as vezes traz falsos "
-        "positivos (pontuacao alta mas sem relacao real) e tambem pode deixar de fora operacoes "
-        "relevantes que usam outros termos para a mesma coisa.\n\n"
-        f'Busca do usuario: "{query_expandida}"\n\n'
-        f"Candidatos encontrados (id: empresa | segmento | valor):\n{lista}\n\n"
-        'Responda APENAS com um JSON no formato '
-        '{"relevantes": [id1, id2, ...], "termos_adicionais": ["termo1", "termo2"]}\n'
-        "- relevantes: os IDs (numeros inteiros, da lista acima) que tem relacao REAL com a busca, "
-        "ordenados do mais para o menos relevante de verdade (nao so pontuacao de texto). Remova os "
-        "IDs cujo segmento claramente nao tem nada a ver com a busca. Se todos forem relevantes, "
-        "devolva todos.\n"
-        "- termos_adicionais: ate 3 termos, segmentos ou tipos de empresa relacionados que poderiam "
-        "pegar operacoes relevantes que NAO aparecem na lista acima (sinonimos, segmentos adjacentes, "
-        "cadeia produtiva relacionada). Deixe a lista vazia se nao houver sugestao boa. "
-        "Nao invente IDs que nao estao na lista acima."
-    )
-    return {
-        "prompt": prompt,
-        "modelo": OLLAMA_MODEL,
-        "opcoes": {"temperature": 0.1, "format": "json"},
-        "candidatos_ids": [r["id"] for r in candidatos],
-    }
-
-
-def refinar_resultados(query_expandida: str, resultados: list, max_avaliar: int = MAX_AVALIAR_REFINO) -> dict:
-    """3a etapa (chamada LENTA, Ollama): revisa os melhores candidatos da busca por
-    embeddings e (1) remove falsos-positivos que passaram no limiar de similaridade mas
-    nao tem relacao real com a busca, (2) reordena o que sobrou pela relevancia real
-    (nao so a similaridade de texto) e (3) sugere termos correlatos e busca por eles,
-    trazendo operacoes relevantes que a busca original pode ter deixado de fora.
-    Se o Ollama falhar ou a resposta nao vier em JSON valido, devolve a lista original
-    sem mudar nada -- nunca piora o resultado. Modo LOCAL apenas (chama o Ollama
-    diretamente) -- ver montar_prompt_refino() para o modo hospedado."""
-    if not resultados:
-        return {"resultados": resultados, "refinado": False, "n_removidos": 0, "n_adicionados": 0}
-
-    candidatos = resultados[:max_avaliar]
-    restante = resultados[max_avaliar:]
-    prep = montar_prompt_refino(query_expandida, resultados, max_avaliar)
-
-    try:
-        resp = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": prep["modelo"],
-                "prompt": prep["prompt"],
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.1},
-            },
-            timeout=OLLAMA_TIMEOUT_REFINO,
-        )
-        resp.raise_for_status()
-        texto = resp.json().get("response", "").strip()
-        parsed = json.loads(texto)
-
-        ids_relevantes = [int(i) for i in parsed.get("relevantes", []) if str(i).lstrip("-").isdigit()]
-        ids_candidatos = {r["id"] for r in candidatos}
-        ids_relevantes = [i for i in ids_relevantes if i in ids_candidatos]
-        if not ids_relevantes:
-            return {"resultados": resultados, "refinado": False, "n_removidos": 0, "n_adicionados": 0}
-
-        by_id = {r["id"]: r for r in candidatos}
-        refinados = [by_id[i] for i in dict.fromkeys(ids_relevantes)]
-        n_removidos = len(candidatos) - len(refinados)
-
-        termos_adicionais = [str(t).strip() for t in parsed.get("termos_adicionais", []) if str(t).strip()][:3]
-        ja_incluidos = {r["id"] for r in resultados}
-        adicionados = []
-        for termo in termos_adicionais:
-            try:
-                adicionados.extend(_buscar_por_termo(termo, ja_incluidos))
-            except Exception:
-                continue
-
-        final = refinados + adicionados + restante
-        return {
-            "resultados": final,
-            "refinado": True,
-            "n_removidos": n_removidos,
-            "n_adicionados": len(adicionados),
-            "termos_adicionais": termos_adicionais,
-        }
-    except Exception:
-        return {"resultados": resultados, "refinado": False, "n_removidos": 0, "n_adicionados": 0}
 
 
 def _estimar_probabilidade_aprovacao(conn, melhores: list) -> dict:
@@ -756,18 +502,9 @@ def preparar_texto_enriquecido(query: str) -> dict:
     return {"query_expandida": query_enriquecida, "enriquecido_via_web": True}
 
 
-def buscar(query: str, max_resultados: int = 3000) -> dict:
-    """Conveniencia para uso via CLI/testes: roda a busca rapida + a narrativa em uma chamada so."""
-    r = buscar_rapido(query, max_resultados=max_resultados)
-    r["narrativa"] = gerar_narrativa(
-        r["query_expandida"], r["tendencia_segmento"], r["tendencia_setor"], r["resultados"], r["confianca_baixa"]
-    )
-    return r
-
-
 if __name__ == "__main__":
     import json
     import sys
 
     q = " ".join(sys.argv[1:]) or "empresa de hospitais em SP"
-    print(json.dumps(buscar(q), ensure_ascii=False, indent=2, default=str))
+    print(json.dumps(buscar_rapido(q), ensure_ascii=False, indent=2, default=str))

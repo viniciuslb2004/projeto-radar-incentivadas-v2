@@ -86,17 +86,6 @@ body {
   border-radius: 20px;
 }
 
-.ia-local-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 5px 12px;
-  border-radius: 20px;
-  white-space: nowrap;
-}
-.ia-local-badge.ativa { background: #E4F3E4; color: var(--positive); }
-.ia-local-badge.inativa { background: #FFF6E5; color: #7A5300; }
-.ia-local-badge.inativa:hover { background: #FFEBC2; }
-
 /* ============ Filter bar ============ */
 .filterbar {
   background: var(--card-bg);
@@ -535,7 +524,7 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
 .detalhe-doc-list a { color: var(--steel-2); text-decoration: none; font-size: 13px; font-weight: 600; }
 .detalhe-doc-list a:hover { text-decoration: underline; }
 
-.resumo-ia-btn {
+.acao-btn {
   background: var(--navy);
   color: #fff;
   border: none;
@@ -546,13 +535,4 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
   font-size: 13px;
   margin-top: 4px;
 }
-.resumo-ia-btn:hover { background: var(--steel-2); }
-.resumo-ia-box {
-  background: var(--bg);
-  border-left: 4px solid var(--steel-2);
-  border-radius: 8px;
-  padding: 12px 14px;
-  margin-top: 10px;
-  font-size: 13px;
-  line-height: 1.5;
-}
+.acao-btn:hover { background: var(--steel-2); }

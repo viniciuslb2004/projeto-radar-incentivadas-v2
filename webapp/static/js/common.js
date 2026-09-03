@@ -37,8 +37,8 @@ function _urlCompleta(url) {
 // abaixo) so registra os cliques das abas DEPOIS do fetch de /api/status, entao um
 // fetch sem timeout que nunca resolve deixa ate a NAVEGACAO entre abas travada,
 // nao so o dado que ficaria faltando. 45s cobre com folga o cold-start do Render;
-// chamadas que legitimamente demoram mais (geracao de IA via Ollama local) ja
-// passam o proprio timeoutMs mais longo explicitamente, entao nao sao afetadas.
+// chamadas que legitimamente demoram mais ja passam o proprio timeoutMs mais longo
+// explicitamente, entao nao sao afetadas.
 const TIMEOUT_PADRAO_MS = 45000;
 
 async function fetchJSON(url, timeoutMs) {
@@ -53,8 +53,8 @@ async function fetchJSON(url, timeoutMs) {
   }
 }
 
-// Usado para mandar de volta pro servidor um resultado gerado pela IA local do
-// visitante (ex: resumo de edital), pra virar cache compartilhado com todo mundo.
+// POST generico (usado, por exemplo, para mandar ao servidor o vetor de embedding
+// ja calculado no navegador, no modo hospedado -- ver embeddings-client.js).
 async function postJSON(url, body, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
@@ -137,48 +137,6 @@ function qs(params) {
 const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
-
-// Modo HOSPEDADO apenas: aplica localmente o mesmo filtro que o backend aplicava
-// (refinar_editais/refinar_resultados no servidor) a partir do texto JSON que o
-// Ollama do proprio visitante gerou (ver local-ai.js/gerarComOllamaLocal) -- devolve
-// null se o texto nao veio num JSON valido (o chamador decide o fallback nesse
-// caso). Usado tanto por busca.js (operações) quanto por editais.js (editais) --
-// funciona em qualquer lista de objetos que tenha um campo `id`.
-function aplicarRefinoLocal(resultadosOriginais, candidatosIds, respostaTexto) {
-  try {
-    const parsed = JSON.parse(respostaTexto);
-    const idsValidos = new Set(candidatosIds);
-    const idsRelevantes = (parsed.relevantes || [])
-      .map((i) => parseInt(i, 10))
-      .filter((n) => !isNaN(n) && idsValidos.has(n));
-    const porId = {};
-    resultadosOriginais.forEach((r) => { porId[r.id] = r; });
-    const vistos = new Set();
-    const refinados = [];
-    idsRelevantes.forEach((id) => {
-      if (!vistos.has(id) && porId[id]) {
-        vistos.add(id);
-        refinados.push(porId[id]);
-      }
-    });
-    return refinados;
-  } catch (e) {
-    return null;
-  }
-}
-
-// So usado pela busca de operacoes (busca.js) -- editais nao tem essa feature. Extrai
-// os "termos_adicionais" (sinonimos/segmentos correlatos sugeridos pela IA) da MESMA
-// resposta JSON que aplicarRefinoLocal ja processou -- devolve [] se nao vier num
-// JSON valido ou se o campo nao existir.
-function extrairTermosAdicionaisLocal(respostaTexto) {
-  try {
-    const parsed = JSON.parse(respostaTexto);
-    return (parsed.termos_adicionais || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 3);
-  } catch (e) {
-    return [];
-  }
-}
 
 function _ligarBotoesDeAba() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {

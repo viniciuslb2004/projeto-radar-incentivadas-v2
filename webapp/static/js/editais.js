@@ -1,6 +1,6 @@
 // Aba Editais: chamadas publicas ABERTAS da FINEP -- filtros, dashboard de prazos,
-// lista ordenada por urgencia, detalhe com resumo de elegibilidade por IA, e o
-// endgame (descreva seu projeto -> quais editais parecem aplicaveis).
+// lista ordenada por urgencia, detalhe do edital, e o endgame (descreva seu
+// projeto -> quais editais parecem aplicaveis, por similaridade semantica).
 
 const PUBLICO_LABELS = {
   empresa1: "Empresa (menor porte)",
@@ -157,14 +157,6 @@ function documentosHTML(documentos) {
     .join("")}</ul>`;
 }
 
-function renderResumoIA(container, resp) {
-  if (resp.erro) {
-    container.innerHTML = `<div class="resumo-ia-box">Não foi possível gerar o resumo agora: ${resp.erro}</div>`;
-    return;
-  }
-  container.innerHTML = `<div class="resumo-ia-box">${resp.resumo}</div>`;
-}
-
 async function openEditalDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe do edital";
   document.getElementById("modal-ordenar").style.display = "none";
@@ -208,14 +200,6 @@ async function openEditalDetalhe(id) {
   </div>`;
 
   html += `<div class="detalhe-secao">
-    <div class="detalhe-secao-titulo">Resumo de elegibilidade (IA local)</div>
-    <div style="padding:14px;">
-      <button class="resumo-ia-btn" id="btn-resumo-ia">Resumir elegibilidade com IA</button>
-      <div id="resumo-ia-container"></div>
-    </div>
-  </div>`;
-
-  html += `<div class="detalhe-secao">
     <div class="detalhe-secao-titulo">Descrição completa</div>
     <div class="detalhe-texto-longo">${(edital.descricao_texto || "Sem descrição disponível.").trim()}</div>
   </div>`;
@@ -227,107 +211,26 @@ async function openEditalDetalhe(id) {
 
   html += `</div>`;
   body.innerHTML = html;
-
-  const btnResumo = document.getElementById("btn-resumo-ia");
-  const resumoContainer = document.getElementById("resumo-ia-container");
-  btnResumo.addEventListener("click", async () => {
-    btnResumo.disabled = true;
-    btnResumo.textContent = "Buscando resumo...";
-    try {
-      // timeout generoso: no modo local, quando ha documento_chave_texto
-      // (Regulamento+Anexo1), o prompt e bem maior e o proprio backend chama o
-      // Ollama (OLLAMA_TIMEOUT_RESUMO); no modo hospedado essa chamada e rapida
-      // (so cache ou o prompt pronto, sem gerar nada ainda).
-      const resp = await fetchJSON(`/api/editais/${id}/resumo`, 500000);
-
-      if (resp.hospedado && resp.precisa_gerar) {
-        const disponivel = await verificarOllamaLocal();
-        if (!disponivel) {
-          renderResumoIA(resumoContainer, {
-            erro: 'Ative a IA local primeiro -- clique em "Baixar IA local" no topo da página.',
-          });
-          return;
-        }
-        btnResumo.textContent = "Gerando com sua IA local (pode levar alguns minutos)...";
-        let texto = null;
-        try {
-          texto = await gerarComOllamaLocal(resp.prompt, resp.modelo, resp.opcoes, 500000);
-        } catch (e) {
-          texto = null;
-        }
-        // resp.prefixo (linhas tematicas + valor, ja extraidos pelo backend por regex,
-        // ver extrair_dados_estruturados em editais_documentos.py) e montado ANTES do
-        // texto gerado pela IA local -- nao pedimos pra IA reescrever essa parte porque
-        // um modelo local pequeno regularmente ignora dados prontos e reinventa esses
-        // dois itens a partir do titulo do edital.
-        const textoFinal = texto && texto.trim() ? (resp.prefixo || "") + texto.trim() : resp.fallback;
-        btnResumo.textContent = "Salvando para todo mundo...";
-        const salvo = await postJSON(`/api/editais/${id}/resumo`, { resumo: textoFinal }, 15000);
-        renderResumoIA(resumoContainer, salvo && !salvo.erro ? salvo : { resumo: textoFinal });
-      } else {
-        renderResumoIA(resumoContainer, resp);
-      }
-    } catch (e) {
-      resumoContainer.innerHTML = '<div class="resumo-ia-box">Não foi possível gerar o resumo agora. Tente novamente.</div>';
-    } finally {
-      btnResumo.textContent = "Gerar novamente";
-      btnResumo.disabled = false;
-    }
-  });
 }
 
 // ============ Endgame: descreva seu projeto -> editais aderentes ============
-// Importante: a lista de editais so aparece DEPOIS que a IA revisa os candidatos e
-// remove os que nao tem elegibilidade real (busca por embeddings sempre acha "algo"
-// no corpus pequeno de editais abertos, mesmo quando nada realmente se aplica).
-
-const ED_REFINO_DURACAO_ESTIMADA_MS = 30000;
-const ED_LEITURA_DURACAO_ESTIMADA_MS = 20000;
-
-function edIniciarProgresso(mensagem, duracaoEstimadaMs) {
-  const inicio = Date.now();
-  const fill = document.getElementById("ed-status-progress");
-  const timer = document.getElementById("ed-status-timer");
-  const msgEl = document.getElementById("ed-status-mensagem");
-  if (!fill || !timer) return null;
-  if (msgEl) msgEl.textContent = mensagem;
-  fill.style.width = "0%";
-  const interval = setInterval(() => {
-    const decorrido = Date.now() - inicio;
-    fill.style.width = Math.min(92, (decorrido / duracaoEstimadaMs) * 100) + "%";
-    const s = Math.round(decorrido / 1000);
-    timer.textContent = `${s}s decorridos · pode levar até 30-40s`;
-  }, 300);
-  return interval;
-}
-
-function edStatusBoxHTML(mensagem) {
-  return `<div class="narrativa loading" id="ed-status-box">
-    <div id="ed-status-mensagem">${mensagem}</div>
-    <div class="progress-track"><div class="progress-fill" id="ed-status-progress"></div></div>
-    <div class="progress-label" id="ed-status-timer">0s decorridos</div>
-  </div>`;
-}
-
-// aplicarRefinoLocal() agora mora em common.js (reaproveitado por busca.js tambem).
+// Busca por similaridade semantica (embeddings) dos editais abertos contra a
+// descricao do projeto/empresa.
 
 async function runEditaisEndgame(q) {
   const container = document.getElementById("editais-endgame-resultado");
-  container.innerHTML = edStatusBoxHTML("Buscando editais aderentes...");
-  let progressInterval = edIniciarProgresso("Buscando editais aderentes...", ED_REFINO_DURACAO_ESTIMADA_MS);
+  container.innerHTML = '<p class="empty-state">Buscando editais aderentes...</p>';
 
-  // Etapa 1 (rapida): acha os editais mais parecidos por embeddings. Modo hospedado
-  // calcula o vetor da descricao NO NAVEGADOR (transformers.js, ver embeddings-
-  // client.js, unico jeito de nao estourar os 512MB de RAM do free tier do servidor)
-  // e manda pronto; modo local (desktop) continua igual a sempre (get_model() no
-  // proprio backend).
+  // Modo hospedado calcula o vetor da descricao NO NAVEGADOR (transformers.js, ver
+  // embeddings-client.js, unico jeito de nao estourar os 512MB de RAM do free tier
+  // do servidor) e manda pronto; modo local (desktop) continua igual a sempre
+  // (get_model() no proprio backend).
   let buscaResp;
   try {
     if (window.MODO_HOSPEDADO) {
       const vetor = await embutirQuery(q, (info) => {
         if (info && info.status === "progress" && typeof info.progress === "number") {
-          const msgEl = document.getElementById("ed-status-mensagem");
-          if (msgEl) msgEl.textContent = `Baixando modelo de busca no seu navegador (${Math.round(info.progress)}%)...`;
+          container.innerHTML = `<p class="empty-state">Baixando modelo de busca no seu navegador (${Math.round(info.progress)}%)...</p>`;
         }
       });
       buscaResp = await postJSON("/api/editais/buscar", { q, vetor }, 60000);
@@ -335,90 +238,25 @@ async function runEditaisEndgame(q) {
       buscaResp = await fetchJSON("/api/editais/buscar?" + qs({ q }), 60000);
     }
   } catch (e) {
-    if (progressInterval) clearInterval(progressInterval);
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
     return;
   }
   if (buscaResp.erro) {
-    if (progressInterval) clearInterval(progressInterval);
     container.innerHTML = `<p class="empty-state">${buscaResp.erro}</p>`;
     return;
   }
 
-  // Etapa 2 (lenta, IA): remove falsos-positivos da busca rapida -- editais que so
-  // bateram por semelhanca generica de texto mas nao tem elegibilidade real.
-  const msgRefino = document.getElementById("ed-status-mensagem");
-  if (msgRefino) msgRefino.textContent = "Analisando quais editais abertos realmente se aplicam...";
-
-  let refino;
-  try {
-    if (window.MODO_HOSPEDADO) {
-      refino = await postJSON("/api/editais/buscar/refinar", { q, resultados: buscaResp.resultados }, 220000);
-    } else {
-      refino = await fetchJSON("/api/editais/buscar/refinar?" + qs({ q }), 220000);
-    }
-  } catch (e) {
-    if (progressInterval) clearInterval(progressInterval);
-    container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
-    return;
-  }
-  if (refino.erro) {
-    if (progressInterval) clearInterval(progressInterval);
-    container.innerHTML = `<p class="empty-state">${refino.erro}</p>`;
-    return;
-  }
-
-  let resultados;
-  let nOriginais;
-
-  if (refino.hospedado) {
-    // Modo hospedado: nao ha Ollama no servidor -- o navegador de quem esta
-    // usando gera a filtragem com a propria IA local dela.
-    const disponivel = await verificarOllamaLocal();
-    if (!disponivel) {
-      if (progressInterval) clearInterval(progressInterval);
-      resultados = refino.resultados_sem_filtro || [];
-      let html = resultados.length
-        ? '<div class="confianca-baixa-aviso">⚠ Ative a IA local (botão no topo da página) para filtrar estes resultados por elegibilidade real -- por enquanto são só os mais parecidos por texto, sem revisão.</div>'
-        : "";
-      html += '<div id="editais-endgame-lista"></div>';
-      container.innerHTML = html;
-      const lista = document.getElementById("editais-endgame-lista");
-      lista.innerHTML = resultados.length
-        ? resultados.map(editalCardHTML).join("")
-        : '<p class="empty-state">Nenhum edital aberto parece aderente a essa descrição.</p>';
-      lista.querySelectorAll(".edital-card").forEach((card) => {
-        card.addEventListener("click", () => openEditalDetalhe(card.dataset.id));
-      });
-      return;
-    }
-    nOriginais = (refino.candidatos_ids || []).length;
-    let respostaTexto = null;
-    if (refino.prompt) {
-      try {
-        respostaTexto = await gerarComOllamaLocal(refino.prompt, refino.modelo, refino.opcoes, 220000);
-      } catch (e) {
-        respostaTexto = null;
-      }
-    }
-    const filtrados = respostaTexto
-      ? aplicarRefinoLocal(refino.resultados_sem_filtro, refino.candidatos_ids, respostaTexto)
-      : null;
-    resultados = filtrados !== null ? filtrados : refino.resultados_sem_filtro;
-  } else {
-    resultados = refino.resultados || [];
-    nOriginais = refino.n_originais || 0;
-  }
-
-  if (progressInterval) clearInterval(progressInterval);
-
+  const resultados = buscaResp.resultados || [];
   if (!resultados.length) {
-    container.innerHTML = `<p class="empty-state">Nenhum edital aberto parece realmente aplicável a essa descrição${nOriginais ? ` -- a IA revisou ${nOriginais} candidato(s) encontrado(s) por similaridade e nenhum tinha elegibilidade real` : ""}.</p>`;
+    container.innerHTML = '<p class="empty-state">Nenhum edital aberto parece aderente a essa descrição.</p>';
     return;
   }
 
-  let html = edStatusBoxHTML("Gerando leitura de elegibilidade...");
-  html += `<div id="editais-endgame-lista"></div>`;
+  let html = "";
+  if (buscaResp.confianca_baixa) {
+    html += '<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para essa descrição -- os editais abaixo são os mais próximos disponíveis, mas com similaridade baixa.</div>';
+  }
+  html += '<div id="editais-endgame-lista"></div>';
   container.innerHTML = html;
 
   const lista = document.getElementById("editais-endgame-lista");
@@ -426,36 +264,6 @@ async function runEditaisEndgame(q) {
   lista.querySelectorAll(".edital-card").forEach((card) => {
     card.addEventListener("click", () => openEditalDetalhe(card.dataset.id));
   });
-
-  progressInterval = edIniciarProgresso("Gerando leitura de elegibilidade...", ED_LEITURA_DURACAO_ESTIMADA_MS);
-  try {
-    const ids = resultados.map((r) => r.id).join(",");
-    const leituraResp = await fetchJSON("/api/editais/buscar/leitura?" + qs({ q, ids }), 150000);
-    let textoFinal;
-    if (leituraResp.hospedado) {
-      let gerado = null;
-      if (leituraResp.prompt) {
-        try {
-          gerado = await gerarComOllamaLocal(leituraResp.prompt, leituraResp.modelo, leituraResp.opcoes, 220000);
-        } catch (e) {
-          gerado = null;
-        }
-      }
-      textoFinal = (gerado && gerado.trim()) || leituraResp.fallback || "Não foi possível gerar a leitura.";
-    } else {
-      textoFinal = leituraResp.leitura || leituraResp.erro || "Não foi possível gerar a leitura.";
-    }
-    if (progressInterval) clearInterval(progressInterval);
-    const box = document.getElementById("ed-status-box");
-    if (box) {
-      box.classList.remove("loading");
-      box.innerHTML = `<div>${textoFinal}</div>`;
-    }
-  } catch (e) {
-    if (progressInterval) clearInterval(progressInterval);
-    const box = document.getElementById("ed-status-box");
-    if (box) box.innerHTML = "<div>Não foi possível gerar a leitura em texto agora, mas os editais acima continuam válidos.</div>";
-  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
