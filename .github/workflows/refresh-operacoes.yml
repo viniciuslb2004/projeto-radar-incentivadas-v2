@@ -18,8 +18,7 @@ jobs:
     # bem mais rapidos -- pode reduzir esse timeout de volta assim que confirmar isso.
     timeout-minutes: 180
     env:
-      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
-      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
 
