@@ -103,41 +103,39 @@ def _normalizar(item: dict) -> dict:
     }
 
 
+_INSERT_EDITAL_COLS = [
+    "id", "titulo", "tema_principal", "temas", "situacao", "tipo_oportunidade",
+    "tipo_cooperacao", "contrapartida", "regiao", "publico_alvo", "aplicavel_empresa",
+    "data_publicacao", "vigencia_inicio", "vigencia_fim", "prazo_proposto",
+    "descricao_html", "descricao_texto", "documentos", "atualizado_em",
+]
+
+# Colunas atualizadas no conflito (todas menos `id`, que e a chave) -- resumo_ia /
+# resumo_gerado_em NAO entram aqui de proposito: preserva o cache entre refreshes.
+_UPDATE_EDITAL_COLS = [c for c in _INSERT_EDITAL_COLS if c != "id"]
+
+
 def parse_and_store(itens: list) -> tuple:
+    """Grava/atualiza editais_raw via UPSERT com placeholders POSICIONAIS (`?`, como
+    todo o resto do codigo -- ver db_compat.py) em vez dos parametros NOMEADOS
+    (`:coluna` + dict) que o sqlite3 aceitava: named params nao passam pela mesma
+    traducao de placeholder que o `?` posicional, entao precisam de uma query
+    escrita a mao no estilo posicional para funcionar contra o Postgres."""
     agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    placeholders = ", ".join(["?"] * len(_INSERT_EDITAL_COLS))
+    set_clause = ", ".join(f"{c}=excluded.{c}" for c in _UPDATE_EDITAL_COLS)
+    sql = (
+        f"INSERT INTO editais_raw ({', '.join(_INSERT_EDITAL_COLS)}) VALUES ({placeholders}) "
+        f"ON CONFLICT(id) DO UPDATE SET {set_clause}"
+    )
     conn = get_connection()
     try:
         cur = conn.cursor()
         for item in itens:
             row = _normalizar(item)
             row["atualizado_em"] = agora
-            cur.execute(
-                """
-                INSERT INTO editais_raw (
-                    id, titulo, tema_principal, temas, situacao, tipo_oportunidade,
-                    tipo_cooperacao, contrapartida, regiao, publico_alvo, aplicavel_empresa,
-                    data_publicacao, vigencia_inicio, vigencia_fim, prazo_proposto,
-                    descricao_html, descricao_texto, documentos, atualizado_em
-                ) VALUES (
-                    :id, :titulo, :tema_principal, :temas, :situacao, :tipo_oportunidade,
-                    :tipo_cooperacao, :contrapartida, :regiao, :publico_alvo, :aplicavel_empresa,
-                    :data_publicacao, :vigencia_inicio, :vigencia_fim, :prazo_proposto,
-                    :descricao_html, :descricao_texto, :documentos, :atualizado_em
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    titulo=excluded.titulo, tema_principal=excluded.tema_principal,
-                    temas=excluded.temas, situacao=excluded.situacao,
-                    tipo_oportunidade=excluded.tipo_oportunidade, tipo_cooperacao=excluded.tipo_cooperacao,
-                    contrapartida=excluded.contrapartida, regiao=excluded.regiao,
-                    publico_alvo=excluded.publico_alvo, aplicavel_empresa=excluded.aplicavel_empresa,
-                    data_publicacao=excluded.data_publicacao, vigencia_inicio=excluded.vigencia_inicio,
-                    vigencia_fim=excluded.vigencia_fim, prazo_proposto=excluded.prazo_proposto,
-                    descricao_html=excluded.descricao_html, descricao_texto=excluded.descricao_texto,
-                    documentos=excluded.documentos, atualizado_em=excluded.atualizado_em
-                    -- resumo_ia / resumo_gerado_em NAO sao tocados: preserva o cache entre refreshes
-                """,
-                row,
-            )
+            valores = tuple(row[c] for c in _INSERT_EDITAL_COLS)
+            cur.execute(sql, valores)
         conn.commit()
 
         total = cur.execute("SELECT COUNT(*) FROM editais_raw").fetchone()[0]
@@ -179,7 +177,7 @@ def backfill_documentos_chave() -> int:
     try:
         abertos = conn.execute(
             "SELECT id, documentos, documento_chave_texto FROM editais_raw "
-            "WHERE situacao = 'aberta' AND (prazo_proposto IS NULL OR date(prazo_proposto) >= date('now'))"
+            "WHERE situacao = 'aberta' AND (prazo_proposto IS NULL OR prazo_proposto::date >= CURRENT_DATE)"
         ).fetchall()
     finally:
         conn.close()

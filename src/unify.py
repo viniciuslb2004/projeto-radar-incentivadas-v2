@@ -17,7 +17,7 @@ mensal nunca mais seria refletida.
 """
 import pandas as pd
 
-from db import get_connection
+from db import get_connection, get_engine
 from geo import regiao_de
 from incremental import insert_new_rows
 
@@ -39,8 +39,10 @@ def _add_periodo(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
 
 
 def _load_cnae_lookup(conn) -> pd.DataFrame:
+    # pd.read_sql precisa de um engine SQLAlchemy (nao da conexao psycopg crua --
+    # pandas nao suporta isso de forma confiavel, ver docstring de db.get_engine()).
     return pd.read_sql(
-        "SELECT cnpj, setor_bndes_mapeado, subsetor_bndes_mapeado, cnae_descricao FROM cnpj_cnae", conn
+        "SELECT cnpj, setor_bndes_mapeado, subsetor_bndes_mapeado, cnae_descricao FROM cnpj_cnae", get_engine()
     )
 
 
@@ -48,7 +50,7 @@ def _build_bndes_ops(conn) -> pd.DataFrame:
     # so as linhas de bndes_raw que ainda nao tem uma linha correspondente em operations
     df = pd.read_sql(
         "SELECT * FROM bndes_raw WHERE id NOT IN (SELECT raw_id FROM operations WHERE raw_table = 'bndes_raw')",
-        conn,
+        get_engine(),
     )
     if df.empty:
         return df
@@ -90,7 +92,7 @@ def _build_finep_direto_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
     df = pd.read_sql(
         "SELECT * FROM finep_credito_direto_raw WHERE id NOT IN "
         "(SELECT raw_id FROM operations WHERE raw_table = 'finep_credito_direto_raw')",
-        conn,
+        get_engine(),
     )
     if df.empty:
         return df
@@ -134,7 +136,7 @@ def _build_finep_descentralizado_ops(conn, cnae_lookup: pd.DataFrame) -> pd.Data
     df = pd.read_sql(
         "SELECT * FROM finep_credito_descentralizado_raw WHERE id NOT IN "
         "(SELECT raw_id FROM operations WHERE raw_table = 'finep_credito_descentralizado_raw')",
-        conn,
+        get_engine(),
     )
     if df.empty:
         return df
@@ -232,7 +234,7 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame) -> list:
         "SELECT id, cnpj, produto, modalidade_apoio, indexador, valor_contratado, "
         "prazo_amortizacao_meses, descricao_projeto, municipio, uf "
         "FROM operations WHERE setor_origem = 'pendente'",
-        conn,
+        get_engine(),
     )
     if pendentes.empty:
         return []

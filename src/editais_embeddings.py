@@ -32,7 +32,7 @@ def build_editais_embeddings():
         # corpus do endgame, mesmo que a FINEP ainda nao tenha atualizado a situacao.
         df = pd.read_sql(
             "SELECT id, titulo, tema_principal, temas, descricao_texto FROM editais_raw "
-            "WHERE situacao='aberta' AND (prazo_proposto IS NULL OR date(prazo_proposto) >= date('now'))",
+            "WHERE situacao='aberta' AND (prazo_proposto IS NULL OR prazo_proposto::date >= CURRENT_DATE)",
             conn,
         )
     finally:

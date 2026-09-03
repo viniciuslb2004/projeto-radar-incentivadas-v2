@@ -7,7 +7,7 @@ maioria, toda semana) sao ignoradas sem custo de escrita no banco.
 """
 import pandas as pd
 
-from db import get_connection
+from db import get_connection, get_engine
 from download import BNDES_PATH
 from incremental import backfill_row_hashes, compute_row_hash, existing_hashes, insert_new_rows
 
@@ -98,11 +98,13 @@ def parse_bndes(path=BNDES_PATH):
         novas = novas.drop_duplicates(subset=["row_hash"])
 
         insert_new_rows(conn, "bndes_raw", novas, BNDES_HASH_COLS + ["row_hash"])
+        conn.commit()
         # de_para_cnae fica na lista de rebuild completo (tabela pequena, sem
         # problema de chave/duplicacao) -- ja foi dropada e recriada antes desta
-        # chamada, entao um append aqui equivale a um reload completo.
-        de_para.to_sql("de_para_cnae", conn, if_exists="append", index=False)
-        conn.commit()
+        # chamada, entao um append aqui equivale a um reload completo. to_sql precisa
+        # de um engine SQLAlchemy (nao da conexao psycopg crua -- pandas nao suporta
+        # isso de forma confiavel, ver docstring de db.get_engine()).
+        de_para.to_sql("de_para_cnae", get_engine(), if_exists="append", index=False)
         total_agora = conn.execute("SELECT COUNT(*) FROM bndes_raw").fetchone()[0]
     finally:
         conn.close()

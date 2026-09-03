@@ -1,59 +1,84 @@
-"""SQLite schema and connection helpers for the Radar de Credito Incentivado project.
+"""Schema e conexao Postgres (Supabase) para o Radar de Credito Incentivado.
 
-Roda em dois modos, escolhidos por variavel de ambiente -- o app local (desktop, na
-maquina do usuario, via schtasks) continua usando um arquivo SQLite local, sem NENHUMA
-mudanca de comportamento. A versao hospedada (deploy compartilhado entre varias
-pessoas) usa Turso (banco compativel com SQLite, acessado pela rede) quando
-TURSO_DATABASE_URL esta definida. O resto do codigo (que faz conn.execute(...),
-cur = conn.cursor(), .fetchall(), .commit(), etc) funciona igual nos dois modos --
-libsql implementa a mesma interface do sqlite3 (PEP 249).
+Banco UNICO, sempre Postgres, acessado via `DATABASE_URL` (variavel de ambiente).
+Nao ha mais modo dual SQLite local (desktop) / Turso hospedado -- essa distincao
+existiu num passado deste projeto e foi removida: o app agora SEMPRE fala com o
+mesmo Postgres, local ou em producao, sem nenhuma bifurcacao de comportamento.
 
-NAO TESTADO CONTRA UM BANCO TURSO REAL (nao ha como criar uma conta/credencial daqui).
-Depois de criar o banco (ver DEPLOY.md) e configurar as variaveis de ambiente, rode
-`python src/db.py` uma vez para confirmar que o schema inicializa certo nesse modo."""
+`DATABASE_URL` normalmente vem de um arquivo `.env` na raiz do repo em
+desenvolvimento local (carregado abaixo via `load_dotenv()`, que e um no-op seguro
+quando o arquivo nao existe) e de uma variavel de ambiente real configurada na
+plataforma de deploy (ex: Vercel) em producao.
+"""
 import os
-import sqlite3
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-DB_PATH = DATA_DIR / "radar.db"
+from dotenv import load_dotenv
 
+load_dotenv()
+
+import psycopg
+
+import db_compat
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Ainda usado por modulos que gravam/leem arquivos locais que NAO sao o banco (ex:
+# data/embeddings.npz, data/editais_embeddings.npz, data/raw/, data/rfb_tmp/) --
+# so o antigo DB_PATH (arquivo .db do SQLite) deixou de existir.
+DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL")
-TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
-MODO_HOSPEDADO = bool(TURSO_DATABASE_URL)
+# Monkeypatch `?` -> `%s` (ver db_compat.py) -- aplicado uma unica vez por processo,
+# antes de qualquer conexao psycopg ser aberta, para que TODO `conn.execute(sql, ?)`/
+# `cur.executemany(sql, ?)` do resto do codigo (SQL parametrizado no estilo SQLite,
+# nunca reescrito) continue funcionando sem nenhuma mudanca nos call sites.
+db_compat.patch()
+
+_ENGINE = None
 
 
 def get_connection():
-    if MODO_HOSPEDADO:
-        import libsql
-
-        # Modo remoto puro (sem replica local nem sync): toda query vai direto pro
-        # Turso pela rede. Mais simples e mais seguro pra varias pessoas usando ao
-        # mesmo tempo do que o modo "replica local com sync" -- sem isso, escritas de
-        # uma pessoa (ex: cache de resumo de IA) poderiam demorar a aparecer pra outra.
-        # Testado localmente contra o formato da API (libsql==0.1.11); nao testado
-        # contra um banco Turso real ainda -- ver DEPLOY.md.
-        return libsql.connect(TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    """Conexao psycopg (Postgres/Supabase) -- a UNICA forma de acesso ao banco neste
+    projeto. Levanta um erro claro se DATABASE_URL nao estiver configurada, em vez de
+    cair silenciosamente em qualquer outro banco/arquivo."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL nao configurada. Defina essa variavel de ambiente com a "
+            "connection string do Postgres (Supabase) -- em desenvolvimento local, "
+            "via um arquivo .env na raiz do repo; em producao, como variavel de "
+            "ambiente real da plataforma de deploy."
+        )
+    return psycopg.connect(database_url)
 
 
-def executescript_compat(conn, script: str):
-    """executescript() e uma extensao do sqlite3 que o libsql pode nao ter -- faz um
-    fallback simples (split por ';') quando o metodo nao existe. O SCHEMA deste
-    projeto nao tem ';' dentro de strings/literais, entao o split e seguro aqui."""
-    if hasattr(conn, "executescript"):
-        conn.executescript(script)
-        return
-    for statement in script.split(";"):
-        statement = statement.strip()
-        if statement:
-            conn.execute(statement)
+def get_engine():
+    """Engine SQLAlchemy, usado APENAS pelos scripts de pipeline (unify.py,
+    enrich_cnae.py, parse_bndes.py) que fazem `pd.read_sql(...)`/`df.to_sql(...)`.
+
+    pandas nao suporta de forma confiavel uma conexao psycopg3 crua para isso:
+    `pd.read_sql` ate funciona (emite so um UserWarning), mas `df.to_sql` FALHA na
+    pratica (`ProgrammingError: the query has 0 placeholders but N parameters were
+    passed`, confirmado testando contra o banco real) -- por isso esses pipelines
+    passam a usar este engine em vez da conexao crua so para essas chamadas
+    especificas do pandas, mantendo `get_connection()` (SQL parametrizado explicito,
+    via db_compat) para todo o resto (inserts/updates escritos a mao).
+
+    NAO usado pelo resto do codigo (webapp/main.py, search.py, etc.) -- so por esses
+    poucos modulos de pipeline que dependem do pandas para ler/gravar DataFrame
+    inteiro de uma vez."""
+    global _ENGINE
+    if _ENGINE is None:
+        from sqlalchemy import create_engine
+
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL nao configurada.")
+        # SQLAlchemy precisa do dialeto explicito ("+psycopg") para usar o driver
+        # psycopg (v3) em vez de tentar psycopg2 (nao instalado neste projeto).
+        sqlalchemy_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        _ENGINE = create_engine(sqlalchemy_url)
+    return _ENGINE
 
 
 # Tables that are fully dropped and rebuilt on every weekly refresh.
@@ -84,7 +109,7 @@ SCHEMA = """
 -- publica varias linhas por numero_contrato (uma por desembolso), entao esse campo
 -- sozinho nao serve como chave unica.
 CREATE TABLE IF NOT EXISTS bndes_raw (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     row_hash TEXT,
     cliente TEXT,
     cnpj TEXT,
@@ -124,7 +149,7 @@ CREATE TABLE IF NOT EXISTS bndes_raw (
 
 -- ============ Staging: FINEP Projetos_Credito_Direto ============
 CREATE TABLE IF NOT EXISTS finep_credito_direto_raw (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     row_hash TEXT,
     demanda TEXT,
     ref TEXT,
@@ -159,7 +184,7 @@ CREATE TABLE IF NOT EXISTS finep_credito_direto_raw (
 
 -- ============ Staging: FINEP Projetos_Credito_Descentralizado ============
 CREATE TABLE IF NOT EXISTS finep_credito_descentralizado_raw (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     row_hash TEXT,
     data_assinatura TEXT,
     contrato_finep_agente TEXT,
@@ -178,7 +203,7 @@ CREATE TABLE IF NOT EXISTS finep_credito_descentralizado_raw (
 -- e so para os instrumentos que ela mesma decide (Credito Direto tem volume relevante;
 -- Credito Descentralizado nao aparece aqui pois quem decide e o banco parceiro).
 CREATE TABLE IF NOT EXISTS finep_nao_aprovados_raw (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     row_hash TEXT,
     instrumento TEXT,
     demanda TEXT,
@@ -195,7 +220,7 @@ CREATE TABLE IF NOT EXISTS finep_nao_aprovados_raw (
 
 -- ============ De-Para CNAE -> Setor/Subsetor BNDES (from the BNDES workbook) ============
 CREATE TABLE IF NOT EXISTS de_para_cnae (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     setor_cnae TEXT,
     subsetor_cnae_agrupado TEXT,
     subsetor_bndes TEXT,
@@ -219,7 +244,7 @@ CREATE TABLE IF NOT EXISTS cnpj_cnae (
 
 -- ============ Unified operations table (BNDES + FINEP credito) ============
 CREATE TABLE IF NOT EXISTS operations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     agencia TEXT NOT NULL,              -- 'BNDES' | 'FINEP'
     instrumento TEXT,                    -- 'Direto' | 'Indireto nao automatico' | 'Credito Direto' | 'Credito Descentralizado'
     fonte_id TEXT,                       -- numero_contrato / contrato (original id, for traceability)
@@ -271,7 +296,7 @@ CREATE INDEX IF NOT EXISTS idx_operations_cnpj ON operations(cnpj);
 
 -- ============ Refresh log / status ============
 CREATE TABLE IF NOT EXISTS refresh_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     started_at TEXT,
     finished_at TEXT,
     bndes_rows INTEGER,
@@ -318,7 +343,7 @@ CREATE INDEX IF NOT EXISTS idx_editais_aplicavel_empresa ON editais_raw(aplicave
 CREATE INDEX IF NOT EXISTS idx_editais_prazo ON editais_raw(prazo_proposto);
 
 CREATE TABLE IF NOT EXISTS refresh_editais_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     started_at TEXT,
     finished_at TEXT,
     total_editais INTEGER,
@@ -352,8 +377,11 @@ def _aplicar_migracoes(conn):
     colunas_existentes = {}
     for tabela, coluna, tipo in MIGRACOES_COLUNAS:
         if tabela not in colunas_existentes:
-            rows = conn.execute(f"PRAGMA table_info({tabela})").fetchall()
-            colunas_existentes[tabela] = {r[1] for r in rows}
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (tabela,),
+            ).fetchall()
+            colunas_existentes[tabela] = {r[0] for r in rows}
         if colunas_existentes[tabela] and coluna not in colunas_existentes[tabela]:
             conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
             colunas_existentes[tabela].add(coluna)
@@ -382,10 +410,10 @@ def init_db():
         # coluna nao existe. Rodar migracoes antes garante que colunas novas ja
         # existem quando os indices forem criados.
         _aplicar_migracoes(conn)
-        executescript_compat(conn, SCHEMA)
+        conn.execute(SCHEMA)
         conn.commit()
         # roda de novo: cobre o caso de banco novo (tabelas acabaram de ser criadas
-        # agora pelo executescript acima, entao a chamada anterior foi um no-op).
+        # agora pelo execute acima, entao a chamada anterior foi um no-op).
         _aplicar_migracoes(conn)
     finally:
         conn.close()
@@ -395,10 +423,10 @@ def drop_rebuild_tables(conn):
     """Drop the tables that get a full reload on every refresh (keeps cnpj_cnae cache intact)."""
     for table in REBUILD_EACH_REFRESH:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
-    executescript_compat(conn, SCHEMA)
+    conn.execute(SCHEMA)
     conn.commit()
 
 
 if __name__ == "__main__":
     init_db()
-    print(f"Banco inicializado em {DB_PATH}")
+    print("Banco inicializado (Postgres/Supabase, ver DATABASE_URL).")

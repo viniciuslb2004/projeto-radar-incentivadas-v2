@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from db import DATA_DIR, get_connection
+from db import DATA_DIR, get_connection, get_engine
 from sector_taxonomy import build_divisao_map
 
 WEBDAV_BASE = "https://arquivos.receitafederal.gov.br/public.php/webdav"
@@ -65,11 +65,11 @@ def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
         UNION
         SELECT cnpj_beneficiario AS cnpj FROM finep_credito_descentralizado_raw
         """,
-        conn,
+        get_engine(),
     )
     alvo = set(df["cnpj"].dropna().astype(str))
     if only_unresolved:
-        ja_cacheados = pd.read_sql("SELECT cnpj FROM cnpj_cnae", conn)
+        ja_cacheados = pd.read_sql("SELECT cnpj FROM cnpj_cnae", get_engine())
         alvo -= set(ja_cacheados["cnpj"].dropna().astype(str))
     return alvo
 

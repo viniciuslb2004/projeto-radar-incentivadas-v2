@@ -223,15 +223,10 @@ async function consultarElegibilidade() {
   html += setorCardHTML(data.setor_mapeado);
   html += operacoesParecidasHTML(data.operacoes_parecidas);
   html += linhasEnquadraveisHTML(data.operacoes_parecidas.linhas_enquadraveis);
-  html += renderEditaisElegiveis(data.editais);
+  html += `<div id="eleg-editais-wrap">${renderEditaisElegiveis(data.editais)}</div>`;
   html += "</div>";
   container.innerHTML = html;
-
-  container.querySelectorAll(".edital-card").forEach((card) => {
-    card.addEventListener("click", () => openEditalDetalhe(card.dataset.id));
-  });
-  const btnExportar = document.getElementById("eleg-exportar-editais-btn");
-  if (btnExportar) btnExportar.addEventListener("click", exportarElegEditaisCSV);
+  _ligarEditaisElegiveis(container);
 
   container.querySelectorAll("#eleg-exemplos-tabela tbody tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => openOperacaoDetalhe(tr.dataset.id));
@@ -242,6 +237,39 @@ async function consultarElegibilidade() {
       if (detalhe) detalhe.style.display = detalhe.style.display === "none" ? "" : "none";
     });
   });
+
+  // 2a etapa (progressive enhancement): calcula o embedding da descricao da empresa
+  // NO NAVEGADOR (embeddings-client.js) e substitui a lista bruta pela versao
+  // rankeada por similaridade semantica real -- mesmo padrao do resto do app
+  // hospedado (busca.js/editais.js). Se falhar por qualquer motivo (modelo nao
+  // carregou, rede, etc.), a lista bruta que ja esta na tela continua valendo --
+  // nunca deixa a secao vazia por causa disso.
+  if (data.descricao_para_busca && typeof window.embutirQuery === "function") {
+    (async () => {
+      try {
+        const vetor = await window.embutirQuery(data.descricao_para_busca);
+        const ranqueado = await postJSON("/api/elegibilidade/editais_ranqueados", {
+          descricao: data.descricao_para_busca,
+          vetor,
+        });
+        if (ranqueado.erro || !ranqueado.resultados) return;
+        const wrap = document.getElementById("eleg-editais-wrap");
+        if (!wrap) return;
+        wrap.innerHTML = renderEditaisElegiveis(ranqueado);
+        _ligarEditaisElegiveis(container);
+      } catch (e) {
+        // silencioso de proposito -- a lista bruta ja mostrada continua valida.
+      }
+    })();
+  }
+}
+
+function _ligarEditaisElegiveis(container) {
+  container.querySelectorAll(".edital-card").forEach((card) => {
+    card.addEventListener("click", () => openEditalDetalhe(card.dataset.id));
+  });
+  const btnExportar = document.getElementById("eleg-exportar-editais-btn");
+  if (btnExportar) btnExportar.addEventListener("click", exportarElegEditaisCSV);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

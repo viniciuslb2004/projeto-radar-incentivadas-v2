@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
-from db import MODO_HOSPEDADO, get_connection
+from db import get_connection
 from webapp.detalhe import montar_detalhe_amigavel
 
 # As rotas de IA/busca (abaixo) capturam Exception generico e devolvem {"erro": ...}
@@ -62,23 +62,16 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @app.on_event("startup")
 def _warmup_busca():
-    """Carrega o modelo de embeddings no startup do servidor, nao na primeira busca do usuario
-    (sem isso, a primeira busca de cada reinicio parecia travada por ~20-30s).
-
-    Modo HOSPEDADO (Render, free tier, 512MB de RAM): NUNCA chama warmup() aqui --
-    carregar o sentence-transformers no processo estouraria esse limite (foi
-    literalmente o que derrubou o deploy antes desta mudanca, ver DEPLOY.md). So
-    carrega os vetores precalculados (.npz); o embedding da query e calculado no
-    navegador de quem esta usando (ver webapp/static/js/embeddings-client.js)."""
+    """Carrega os vetores de embeddings precalculados (.npz) no startup do servidor,
+    nao na primeira busca do usuario (sem isso, a primeira busca de cada reinicio
+    parecia travada). NUNCA chama get_model() aqui -- carregar o sentence-transformers
+    no processo do servidor web e um custo que so vale a pena pago sob demanda (rota
+    GET local mais abaixo), nao a cada boot do processo (ver DEPLOY.md)."""
     try:
-        from search import warmup, warmup_hospedado
+        from search import warmup_hospedado
 
-        if MODO_HOSPEDADO:
-            warmup_hospedado()
-            print("Motor de busca pronto (so vetores do corpus -- modo hospedado, sem modelo carregado no servidor).")
-        else:
-            warmup()
-            print("Motor de busca pronto (modelo de embeddings carregado).")
+        warmup_hospedado()
+        print("Motor de busca pronto (vetores do corpus carregados).")
     except Exception as e:
         print(f"Aviso: motor de busca nao pode ser pre-carregado ({e}).")
 
@@ -167,7 +160,12 @@ def status():
             "data_min": min_max[0],
             "data_max": min_max[1],
             "ultimo_refresh": {"started_at": last[0], "finished_at": last[1], "status": last[2]} if last else None,
-            "hospedado": MODO_HOSPEDADO,
+            # Sempre True: o app so tem um modo agora (banco Postgres compartilhado,
+            # sem SQLite local). Mantido por compatibilidade com o frontend (ver
+            # webapp/static/js/common.js), que ainda le este campo para decidir se
+            # calcula o embedding da busca no navegador (transformers.js) ou pede
+            # pro servidor calcular -- so o primeiro caminho continua existindo.
+            "hospedado": True,
         }
     finally:
         conn.close()
@@ -453,11 +451,20 @@ def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = 
     conn = get_connection()
     try:
         cur = conn.cursor()
+        # GROUP BY na propria expressao COALESCE (nao so em `produto`): Postgres, ao
+        # contrario do SQLite, exige que toda coluna no SELECT que nao seja agregada
+        # apareca IGUAL no GROUP BY -- agrupar so por `produto` e depois exibir
+        # `instrumento` como fallback (para as linhas com produto NULO) e rejeitado
+        # com "column operations.instrumento must appear in the GROUP BY clause or be
+        # used in an aggregate function" (erro real, confirmado migrando para
+        # Postgres). Agrupar pela propria expressao produz o mesmo agrupamento
+        # pretendido (por rotulo efetivo exibido), so que de forma valida nos dois
+        # bancos.
         rows = cur.execute(
             f"""
             SELECT COALESCE(produto, instrumento, 'Nao informado'), COUNT(*), SUM(valor_contratado)
             FROM operations {where}
-            GROUP BY produto
+            GROUP BY COALESCE(produto, instrumento, 'Nao informado')
             ORDER BY SUM(valor_contratado) DESC
             LIMIT 20
             """,
@@ -550,37 +557,39 @@ try:
         preparar_texto_enriquecido,
     )
 
-    # ============ Modo LOCAL (desktop): identico a sempre -- o proprio backend calcula
-    # o embedding (get_model()). Esta rota GET recusa explicitamente rodar em modo
-    # hospedado (nunca chama get_model() nesse caso) -- ver a rota POST abaixo, que e a
-    # usada pelo navegador quando MODO_HOSPEDADO=True (busca.js). ============
+    # ============ Rota GET: calcula o embedding no proprio processo do servidor
+    # (get_model()) -- so serve sob demanda (lazy-load do sentence-transformers na
+    # primeira chamada, ver embeddings.get_model()), nunca pre-carregada no startup
+    # (ver _warmup_busca acima). AMBIGUO/nao removido: o frontend (busca.js) so chama
+    # esta rota quando window.MODO_HOSPEDADO e falsy, o que na pratica nunca mais
+    # acontece agora que /api/status sempre devolve hospedado=True -- mas como isso
+    # depende do JS (fora do escopo desta migracao), a rota fica funcional em vez de
+    # ser removida (ver relatorio da migracao). ============
 
     @app.get("/api/busca")
     def busca(q: str = Query(..., min_length=3)):
-        if MODO_HOSPEDADO:
-            return {"erro": "modo hospedado: use GET /api/busca/preparar + POST /api/busca com o vetor calculado no navegador"}
         try:
             return buscar_rapido(q)
         except Exception as e:
             logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}
 
-    # ============ Modo HOSPEDADO: o navegador calcula o embedding (transformers.js, ver
-    # embeddings-client.js) e manda o vetor pronto -- o servidor so faz numpy, nunca
-    # importa/chama sentence_transformers aqui. ============
+    # ============ Rota usada pelo navegador: calcula o embedding no NAVEGADOR
+    # (transformers.js, ver embeddings-client.js) e manda o vetor pronto -- o servidor
+    # so faz numpy, nunca importa/chama sentence_transformers aqui. ============
 
     @app.get("/api/busca/preparar")
     def busca_preparar(q: str = Query(..., min_length=3)):
-        """So usado no modo hospedado: devolve a query ja expandida (ex: 'fintech' ->
-        vocabulario mais proximo do corpus, ver EXPANSAO_TERMOS em search.py) para o
-        navegador gerar o vetor com o MESMO texto que o modo local sempre embutiu --
-        sem isso o resultado nao seria comparavel. So string processing, sem modelo."""
+        """Devolve a query ja expandida (ex: 'fintech' -> vocabulario mais proximo do
+        corpus, ver EXPANSAO_TERMOS em search.py) para o navegador gerar o vetor com o
+        MESMO texto que o servidor embutiria -- sem isso o resultado nao seria
+        comparavel. So string processing, sem modelo."""
         return {"query_expandida": _expandir_query(q)}
 
     @app.get("/api/busca/preparar_enriquecido")
     def busca_preparar_enriquecido(q: str = Query(..., min_length=3)):
-        """So usado no modo hospedado: equivalente ao bloco de enriquecimento via web
-        que buscar_rapido() faz sozinho no modo local -- so que aqui o embedding roda
+        """Equivalente ao bloco de enriquecimento via web que buscar_rapido() faz
+        sozinho quando o embedding roda no proprio servidor -- aqui o embedding roda
         no navegador, entao o cliente precisa de 2 idas e vindas: 1a chamada (POST
         /api/busca) volta com confianca_baixa=True, o navegador chama esta rota para
         pesquisar `q` na web (buscar_atividade_empresa, so requests puro -- nunca
@@ -594,9 +603,9 @@ try:
 
     @app.post("/api/busca")
     def busca_com_vetor(body: dict):
-        """Modo hospedado: recebe {q, vetor} com o vetor ja calculado no navegador
-        contra o texto de /api/busca/preparar. So faz a matematica (numpy) contra os
-        vetores precalculados do corpus -- nunca chama get_model()."""
+        """Recebe {q, vetor} com o vetor ja calculado no navegador contra o texto de
+        /api/busca/preparar. So faz a matematica (numpy) contra os vetores
+        precalculados do corpus -- nunca chama get_model()."""
         q = (body or {}).get("q", "")
         vetor = (body or {}).get("vetor")
         if not q or not vetor:
@@ -609,9 +618,8 @@ try:
 
     @app.post("/api/busca/termo")
     def busca_termo_com_vetor(body: dict):
-        """Modo hospedado: parte do refino -- busca operacoes por um termo correlato
-        sugerido pela IA (o navegador ja calculou o vetor do termo), equivalente ao
-        _buscar_por_termo() do modo local, sem chamar get_model()."""
+        """Parte do refino -- busca operacoes por um termo correlato sugerido pela IA
+        (o navegador ja calculou o vetor do termo), sem chamar get_model()."""
         termo = (body or {}).get("termo", "")
         vetor = (body or {}).get("vetor")
         ja_incluidos = (body or {}).get("ja_incluidos", []) or []
@@ -676,7 +684,7 @@ def _editais_where(situacao=None, aplicavel_empresa=None, tema=None, regiao=None
     clauses = []
     params = []
     if situacao == "aberta":
-        clauses.append("situacao = ? AND (prazo_proposto IS NULL OR date(prazo_proposto) >= date('now'))")
+        clauses.append("situacao = ? AND (prazo_proposto IS NULL OR prazo_proposto::date >= CURRENT_DATE)")
         params.append("aberta")
     elif situacao:
         clauses.append("situacao = ?")
@@ -784,31 +792,29 @@ try:
 
     @app.on_event("startup")
     def _warmup_editais():
-        """Modo HOSPEDADO: so carrega o .npz de vetores dos editais (warmup_hospedado,
-        numpy, barato) -- NUNCA chama get_model() aqui (estouraria a RAM do free tier
-        do Render). Modo local: warmup() completo, como sempre."""
+        """So carrega o .npz de vetores dos editais (warmup_hospedado, numpy, barato)
+        -- NUNCA chama get_model() aqui (custo alto de RAM: carregar sentence-
+        transformers no boot do processo so vale a pena sob demanda, ver rota GET
+        abaixo, nao a cada reinicio do servidor)."""
         try:
-            from editais_search import warmup as warmup_editais
             from editais_search import warmup_hospedado as warmup_editais_hospedado
 
-            if MODO_HOSPEDADO:
-                warmup_editais_hospedado()
-                print("Motor de busca de editais pronto (so vetores -- modo hospedado, sem modelo carregado no servidor).")
-            else:
-                warmup_editais()
-                print("Motor de busca de editais pronto (embeddings de editais carregados).")
+            warmup_editais_hospedado()
+            print("Motor de busca de editais pronto (vetores carregados).")
         except Exception as e:
             print(f"Aviso: motor de busca de editais nao pode ser pre-carregado ({e}).")
 
     # IMPORTANTE: esta rota de path fixo (/buscar) precisa ser registrada ANTES de
     # /api/editais/{edital_id} -- senao o FastAPI casa "buscar" como se fosse um
     # edital_id (rota generica registrada primeiro vence).
+    #
+    # AMBIGUO/nao removida (mesmo caso da rota GET /api/busca acima): calcula o
+    # embedding no proprio processo do servidor (get_model(), sob demanda). O
+    # frontend (editais.js) so chama esta rota quando window.MODO_HOSPEDADO e falsy,
+    # o que na pratica nunca mais acontece agora que /api/status sempre devolve
+    # hospedado=True -- mantida funcional em vez de removida (ver relatorio).
     @app.get("/api/editais/buscar")
     def editais_buscar(q: str = Query(..., min_length=3)):
-        """Modo local (desktop) apenas -- calcula o embedding no proprio processo
-        (get_model()). Modo hospedado usa POST /api/editais/buscar (vetor do navegador)."""
-        if MODO_HOSPEDADO:
-            return {"erro": "modo hospedado: use POST /api/editais/buscar com o vetor calculado no navegador"}
         try:
             return buscar_editais_por_projeto(q)
         except Exception as e:
@@ -817,9 +823,9 @@ try:
 
     @app.post("/api/editais/buscar")
     def editais_buscar_com_vetor(body: dict):
-        """Modo hospedado: recebe {q, vetor} com o vetor ja calculado no navegador
-        (transformers.js, ver embeddings-client.js) -- so faz a matematica (numpy)
-        contra os vetores precalculados dos editais abertos, nunca chama get_model()."""
+        """Recebe {q, vetor} com o vetor ja calculado no navegador (transformers.js,
+        ver embeddings-client.js) -- so faz a matematica (numpy) contra os vetores
+        precalculados dos editais abertos, nunca chama get_model()."""
         q = (body or {}).get("q", "")
         vetor = (body or {}).get("vetor")
         if not q or not vetor:
@@ -858,8 +864,10 @@ def edital_detalhe(edital_id: int):
 # ============ Elegibilidade ("Minha Empresa"): o visitante digita o CNPJ da PROPRIA
 # empresa e o sistema resolve setor/porte (BrasilAPI, consulta ao vivo -- ver
 # elegibilidade.py) para cruzar com editais abertos e o historico de operacoes por
-# setor. Rota unica, sem split local/hospedado: so SQL simples + 1 chamada HTTP
-# externa, nada de embeddings aqui. ============
+# setor. GET principal e so SQL + 1 chamada HTTP externa; o ranking por IA dos
+# editais (POST /api/elegibilidade/editais_ranqueados) e uma 2a chamada separada,
+# com o embedding calculado no navegador -- mesmo padrao do resto do app hospedado.
+# ============
 
 def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
     """Mesmo filtro/ordenacao de '/api/editais?situacao=aberta&aplicavel_empresa=1'
@@ -871,9 +879,11 @@ def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
     futuro se a FINEP passar a publicar editais regionais de novo.
 
     So o filtro BRUTO (aberto + aplicavel a empresa), sem nenhuma nocao de o quanto
-    cada edital realmente tem a ver com o que a empresa faz -- usado como fallback no
-    modo hospedado (ver _editais_elegiveis_ranqueados abaixo) e quando a busca por
-    embeddings nao acha nada com confianca suficiente."""
+    cada edital realmente tem a ver com o que a empresa faz -- usado como resultado
+    imediato (a 1a coisa que aparece na tela) e como fallback se o ranking por IA
+    falhar. A versao rigorosa (ranqueada por similaridade semantica) chega depois,
+    numa 2a chamada do frontend -- ver POST /api/elegibilidade/editais_ranqueados
+    abaixo, que recebe o vetor ja calculado no navegador (embeddings-client.js)."""
     where, params = _editais_where(situacao="aberta", aplicavel_empresa=1)
     cur = conn.cursor()
     total = cur.execute(f"SELECT COUNT(*) FROM editais_raw {where}", params).fetchone()[0]
@@ -883,37 +893,6 @@ def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
         params + [limit],
     ).fetchall()
     return {"total": total, "resultados": [_edital_row_to_dict(r) for r in rows], "ranqueado_por_ia": False}
-
-
-def _editais_elegiveis_ranqueados(descricao_empresa: str, limit: int = 20) -> dict:
-    """Versao 'rigorosa' de _editais_elegiveis_para_setor(): em vez de devolver TODO
-    edital aberto aplicavel a empresas (uma lista generica que nao diz nada sobre o
-    quanto cada um tem a ver com o que a empresa faz DE VERDADE), embute a descricao
-    real da empresa (razao social + CNAE, ver /api/elegibilidade) e rankeia os editais
-    abertos por similaridade semantica -- o MESMO motor ja usado na busca livre da aba
-    Editais (buscar_editais_por_projeto). So funciona no modo LOCAL (precisa do
-    sentence-transformers carregado no processo, ver embeddings.get_model() -- no
-    modo hospedado isso estouraria o teto de RAM do free tier do Render, entao o
-    chamador deve cair pro filtro bruto de _editais_elegiveis_para_setor() nesse caso;
-    ver comentario em /api/elegibilidade).
-
-    O corpus de buscar_editais_por_projeto ja e so 'aberto + prazo nao vencido' (ver
-    editais_embeddings.build_editais_embeddings), mas NAO filtra aplicavel_empresa --
-    um ICT ou fundo de investimento tambem entra no corpus. Filtra aqui depois do
-    ranking (os scores ja foram calculados, filtrar antes so complicaria sem ganho)."""
-    from editais_search import buscar_editais_por_projeto
-
-    resultado = buscar_editais_por_projeto(descricao_empresa, max_resultados=limit * 2)
-    resultados = [r for r in (resultado.get("resultados") or []) if r.get("aplicavel_empresa")][:limit]
-    # confianca_baixa aqui so significa "nada bateu bem o suficiente" -- ainda assim
-    # devolvemos o que achou (mais util que uma tela vazia), so sem alegar que e uma
-    # lista rigorosamente filtrada.
-    return {
-        "total": len(resultados),
-        "resultados": resultados,
-        "ranqueado_por_ia": True,
-        "confianca_baixa": resultado.get("confianca_baixa", False),
-    }
 
 
 def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exemplos: int = 5) -> dict:
@@ -1064,40 +1043,24 @@ def elegibilidade(cnpj: str = Query(...)):
         porte_bndes = porte_bndes_equivalente(empresa.get("porte_receita"))
         setor_mapeado["porte_bndes_equivalente"] = porte_bndes
 
-        editais = {"total": 0, "resultados": []}
         operacoes_parecidas = {
             "total": 0, "valor_total": 0, "valor_medio": 0,
             "porte_considerado_no_filtro": False, "por_agencia": [], "exemplos": [],
             "linhas_enquadraveis": [],
         }
-        # Descricao real da empresa (razao social + CNAE + setor estimado) usada pra
-        # ranquear editais por similaridade semantica de verdade, em vez de devolver
-        # todo edital aberto aplicavel a empresas so por bater o filtro estrutural (foi
-        # exatamente isso que o usuario reportou como "pouco rigoroso": uma empresa
-        # testada recebeu praticamente TODOS os editais abertos, sem nenhuma nocao real
-        # do que ela faz).
-        descricao_empresa = " - ".join(
-            filter(None, [
-                empresa.get("razao_social"),
-                empresa.get("cnae_descricao"),
-                setor_mapeado.get("setor_bndes"),
-                setor_mapeado.get("subsetor_bndes"),
-            ])
-        )
-        if not MODO_HOSPEDADO and descricao_empresa:
-            try:
-                editais = _editais_elegiveis_ranqueados(descricao_empresa)
-            except Exception:
-                logger.exception("ranking de editais por IA indisponivel, caindo pro filtro bruto")
-                editais = _editais_elegiveis_para_setor(conn)
-            if not editais["resultados"]:
-                # nada passou no ranking (ou o ranking falhou) -- lista vazia seria
-                # pior que o filtro bruto antigo, entao cai nele como rede de seguranca.
-                editais = _editais_elegiveis_para_setor(conn)
-        else:
-            # Hospedado: get_model() nunca pode rodar no servidor (estouraria o teto
-            # de RAM do free tier), entao fica so o filtro estrutural mesmo.
-            editais = _editais_elegiveis_para_setor(conn)
+        # Filtro estrutural (aberto + aplicavel a empresa) -- mostrado de imediato.
+        # O frontend faz uma 2a chamada (POST /api/elegibilidade/editais_ranqueados,
+        # com o embedding calculado no proprio navegador via embeddings-client.js,
+        # mesmo padrao ja usado em /api/editais/buscar) pra substituir esta lista pela
+        # versao rankeada por similaridade semantica real -- ver descricao_para_busca
+        # abaixo, que e o texto que o navegador deve embutir.
+        editais = _editais_elegiveis_para_setor(conn)
+        descricao_para_busca = " - ".join(filter(None, [
+            empresa.get("razao_social"),
+            empresa.get("cnae_descricao"),
+            setor_mapeado.get("setor_bndes"),
+            setor_mapeado.get("subsetor_bndes"),
+        ]))
 
         if setor_mapeado["mapeado"]:
             operacoes_parecidas = _operacoes_parecidas(conn, setor_mapeado["setor_bndes"], porte_bndes)
@@ -1106,6 +1069,7 @@ def elegibilidade(cnpj: str = Query(...)):
             "empresa": empresa,
             "setor_mapeado": setor_mapeado,
             "editais": editais,
+            "descricao_para_busca": descricao_para_busca or None,
             "operacoes_parecidas": operacoes_parecidas,
         }
     except Exception as e:
@@ -1113,6 +1077,30 @@ def elegibilidade(cnpj: str = Query(...)):
         return {"erro": f"Não foi possível concluir a análise agora ({e}). Tente novamente em instantes."}
     finally:
         conn.close()
+
+
+@app.post("/api/elegibilidade/editais_ranqueados")
+def elegibilidade_editais_ranqueados(body: dict):
+    """2a etapa da elegibilidade: recebe {descricao, vetor} com o vetor ja calculado
+    no navegador (embeddings-client.js, mesmo modelo/pooling usado em
+    /api/editais/buscar) e rankeia os editais ABERTOS por similaridade semantica real
+    com o que a empresa faz -- em vez do filtro estrutural bruto (que devolve
+    praticamente todo edital aberto aplicavel a empresas, sem nocao de aderencia).
+    So faz a matematica (numpy) contra os vetores precalculados, nunca chama
+    get_model() no servidor."""
+    descricao = (body or {}).get("descricao", "")
+    vetor = (body or {}).get("vetor")
+    if not descricao or not vetor:
+        return {"erro": "parametros 'descricao' e 'vetor' sao obrigatorios"}
+    try:
+        from editais_search import buscar_editais_por_projeto_com_vetor
+
+        resultado = buscar_editais_por_projeto_com_vetor(descricao, vetor, max_resultados=40)
+        resultados = [r for r in (resultado.get("resultados") or []) if r.get("aplicavel_empresa")][:20]
+        return {"total": len(resultados), "resultados": resultados, "ranqueado_por_ia": True}
+    except Exception as e:
+        logger.exception("ranking de editais por IA indisponivel")
+        return {"erro": f"nao foi possivel ranquear os editais agora ({e})"}
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

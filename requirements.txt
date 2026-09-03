@@ -9,4 +9,6 @@ uvicorn[standard]
 sentence-transformers
 numpy
 pypdf
-libsql
+psycopg[binary]
+sqlalchemy
+python-dotenv

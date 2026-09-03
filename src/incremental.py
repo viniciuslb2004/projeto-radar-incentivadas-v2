@@ -33,11 +33,15 @@ schema -- e colunas REAL (ex: prazo_carencia_meses) as vezes vem como int64
 quando a planilha nao tem NaN nessa coluna. O codigo antigo usava
 `DataFrame.to_sql(...)`, que resolvia essa conversao de tipo por baixo dos panos
 (o SQLite aplica "affinity": uma coluna TEXT converte numero pra string "redonda"
-sem sufixo .0, uma coluna REAL converte int pra float). Como agora inserimos com
-SQL parametrizado explicito (pedido do projeto, p/ compatibilidade com libsql/
-Turso), replicamos esse comportamento de affinity manualmente em `_coerce_for_affinity`
--- e usamos a MESMA funcao tanto para calcular o hash quanto para montar os
-parametros do INSERT, para o hash bater exatamente com o que fica gravado.
+sem sufixo .0, uma coluna REAL converte int pra float). Agora que o banco e
+Postgres (colunas ja estritamente tipadas na criacao da tabela, sem affinity
+dinamica no estilo SQLite) e inserimos com SQL parametrizado explicito, o unico
+trabalho real de `coerce_for_pg` e normalizar tipos numpy/pandas (np.int64,
+np.float64, NaN/NaT, pd.Timestamp) para tipos nativos do Python ANTES do bind --
+psycopg (tipado, ao contrario do sqlite3) levanta erro de adaptacao se receber um
+np.int64/np.float64 cru. Usamos a MESMA funcao tanto para calcular o hash quanto
+para montar os parametros do INSERT, para o hash bater exatamente com o que fica
+gravado.
 """
 import datetime
 import hashlib
@@ -49,10 +53,14 @@ NULL_TOKEN = "\x00NULL\x00"
 
 
 def column_types(conn, table: str) -> dict:
-    """Nome de coluna -> tipo declarado no CREATE TABLE (ex: 'TEXT', 'REAL'), em
-    maiusculas. Usa PRAGMA table_info, disponivel tanto em SQLite quanto no libsql."""
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r[1]: (r[2] or "").upper() for r in rows}
+    """Nome de coluna -> tipo declarado no Postgres (ex: 'text', 'real', 'integer'),
+    em minusculas, via information_schema.columns (substitui o antigo PRAGMA
+    table_info, especifico de SQLite/libsql)."""
+    rows = conn.execute(
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ?",
+        (table,),
+    ).fetchall()
+    return {r[0]: (r[1] or "").lower() for r in rows}
 
 
 def _is_na(value) -> bool:
@@ -65,11 +73,14 @@ def _is_na(value) -> bool:
         return False
 
 
-def coerce_for_affinity(value, decl_type: str):
-    """Normaliza `value` para o tipo Python que a coluna `decl_type` (affinity do
-    SQLite) realmente vai armazenar -- mesmo resultado esteja o valor vindo de um
-    DataFrame recem-lido do Excel (numpy int64/float64/Timestamp) ou de uma linha
-    ja gravada no banco (Python nativo). Ver docstring do modulo."""
+def coerce_for_pg(value):
+    """Normaliza `value` (numpy/pandas ou Python nativo) para um tipo que o psycopg
+    aceita bindar sem erro de adaptacao -- ver docstring do modulo. Diferente do
+    antigo `coerce_for_affinity`, NAO recebe/usa o tipo declarado da coluna: o
+    Postgres ja e estritamente tipado desde o CREATE TABLE (sem affinity dinamica
+    no estilo SQLite), entao normalizar o VALOR (numpy -> Python nativo, NaN/NaT ->
+    None) e suficiente -- o proprio Postgres rejeita/converte na hora do INSERT se o
+    valor nao bater com o tipo da coluna."""
     if value is None:
         return None
     if isinstance(value, (float, np.floating)) and np.isnan(value):
@@ -82,31 +93,12 @@ def coerce_for_affinity(value, decl_type: str):
         # string (ex: data_entrada_sf) -- pandas.to_sql fazia essa conversao sozinho.
         return str(value)
 
-    decl_type = decl_type or ""
-    if "CHAR" in decl_type or "TEXT" in decl_type or "CLOB" in decl_type:
-        if isinstance(value, (bool, np.bool_)):
-            return str(int(value))
-        if isinstance(value, (int, np.integer)):
-            return str(int(value))
-        if isinstance(value, (float, np.floating)):
-            fv = float(value)
-            return str(int(fv)) if fv.is_integer() else repr(fv)
-        return str(value)
-
-    if "INT" in decl_type:
-        return int(value)
-
-    if "REAL" in decl_type or "FLOA" in decl_type or "DOUB" in decl_type:
-        return float(value)
-
-    # affinity NUMERIC ou tipo nao mapeado: ainda assim converte tipos numpy pra
-    # nativos do Python (sqlite3/libsql podem nao aceitar np.int64/np.float64 direto).
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
         return float(value)
-    if isinstance(value, np.bool_):
-        return bool(value)
     return value
 
 
@@ -125,16 +117,14 @@ def _hash_values(values) -> str:
 
 def compute_row_hash(conn, table: str, df: pd.DataFrame, cols: list) -> pd.Series:
     """Hash de conteudo por linha, na ORDEM FIXA de `cols`, apos normalizar cada
-    valor pelo tipo REAL da coluna de destino (ver coerce_for_affinity) -- assim o
-    hash de uma linha recem-lida do Excel bate com o hash da mesma linha lida de
-    volta do banco (backfill_row_hashes usa a mesma normalizacao)."""
+    valor (ver coerce_for_pg) -- assim o hash de uma linha recem-lida do Excel bate
+    com o hash da mesma linha lida de volta do banco (backfill_row_hashes usa a
+    mesma normalizacao)."""
     if df.empty:
         return pd.Series([], dtype=object)
-    tipos = column_types(conn, table)
-    tipos_lista = [tipos.get(c, "") for c in cols]
 
     def hash_row(row):
-        valores = [coerce_for_affinity(v, t) for v, t in zip(row, tipos_lista)]
+        valores = [coerce_for_pg(v) for v in row]
         return _hash_values(valores)
 
     return df[cols].apply(lambda row: hash_row(row.tolist()), axis=1)
@@ -149,8 +139,6 @@ def backfill_row_hashes(conn, table: str, cols: list, id_col: str = "id") -> int
     """Preenche row_hash para linhas gravadas ANTES desta coluna existir (banco
     ja em producao). So roda de fato na primeira vez que este codigo executa contra
     um banco existente -- depois disso nunca ha mais linha com row_hash NULL."""
-    tipos = column_types(conn, table)
-    tipos_lista = [tipos.get(c, "") for c in cols]
     col_list = ", ".join([id_col] + cols)
     rows = conn.execute(f"SELECT {col_list} FROM {table} WHERE row_hash IS NULL").fetchall()
     if not rows:
@@ -158,7 +146,7 @@ def backfill_row_hashes(conn, table: str, cols: list, id_col: str = "id") -> int
     updates = []
     for row in rows:
         rid = row[0]
-        valores = [coerce_for_affinity(v, t) for v, t in zip(row[1:], tipos_lista)]
+        valores = [coerce_for_pg(v) for v in row[1:]]
         updates.append((_hash_values(valores), rid))
     cur = conn.cursor()
     cur.executemany(f"UPDATE {table} SET row_hash = ? WHERE {id_col} = ?", updates)
@@ -169,17 +157,16 @@ def backfill_row_hashes(conn, table: str, cols: list, id_col: str = "id") -> int
 def insert_new_rows(conn, table: str, df_new: pd.DataFrame, cols: list) -> int:
     """Insere so as linhas de `df_new` (que ja deve trazer `row_hash` calculado em
     uma das colunas de `cols`, quando aplicavel), via SQL parametrizado simples
-    (`?`) -- funciona igual em SQLite local e em libsql/Turso (ver db.py). Cada
-    valor passa por `coerce_for_affinity` antes do bind, pelo mesmo motivo do hash:
-    consistencia de tipo entre o que foi hasheado e o que efetivamente e gravado."""
+    (`?`, traduzido para `%s` do Postgres por db_compat.py) -- mesmo estilo de
+    sempre, so a normalizacao de tipo mudou (ver coerce_for_pg). Cada valor passa
+    por `coerce_for_pg` antes do bind, pelo mesmo motivo do hash: consistencia de
+    tipo entre o que foi hasheado e o que efetivamente e gravado."""
     if df_new.empty:
         return 0
-    tipos = column_types(conn, table)
-    tipos_lista = [tipos.get(c, "") for c in cols]
     placeholders = ", ".join(["?"] * len(cols))
     col_list = ", ".join(cols)
     linhas = [
-        tuple(coerce_for_affinity(v, t) for v, t in zip(row, tipos_lista))
+        tuple(coerce_for_pg(v) for v in row)
         for row in df_new[cols].itertuples(index=False, name=None)
     ]
     cur = conn.cursor()
