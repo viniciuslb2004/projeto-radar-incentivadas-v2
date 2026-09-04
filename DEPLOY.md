@@ -37,21 +37,18 @@ memória no servidor), e o backend, no modo hospedado, nunca importa/carrega
 `sentence_transformers`/`torch` em tempo de execução -- só faz a matemática (produto
 escalar via numpy) contra os vetores do corpus já pré-calculados
 (`data/embeddings.npz`/`data/editais_embeddings.npz`, versionados no próprio repo). Por
-esse motivo a função da Vercel usa `requirements-api.txt` (dependências enxutas: fastapi,
+esse motivo a função da Vercel usa `api/requirements.txt` (dependências enxutas: fastapi,
 psycopg, requests, numpy, pandas, python-dotenv) em vez do `requirements.txt` da raiz, que
 serve o pipeline de dados local + os workflows do GitHub Actions e inclui
 torch/sentence-transformers/pandas/openpyxl/pypdf/sqlalchemy -- pacotes bem mais pesados
 que a API hospedada nunca usa em tempo de execução.
 
-> **Ponto em aberto (não testado contra deploy real, ver "O que NÃO foi testado" no fim
-> deste documento):** não há garantia total de que a Vercel vai associar
-> `requirements-api.txt` (nome não-padrão) à função em `api/index.py` em vez do
-> `requirements.txt` da raiz (nome padrão que a Vercel procura automaticamente). Se o log
-> de build do primeiro deploy mostrar pacotes pesados (torch, sentence-transformers,
-> openpyxl, pypdf, sqlalchemy) sendo instalados para a função da API, o ajuste é copiar/
-> renomear `requirements-api.txt` para `api/requirements.txt` (arquivo ao lado da própria
-> função é um local documentado e sem ambiguidade -- ver comentário no topo de
-> `requirements-api.txt`).
+> **Confirmado contra deploy real (2026-09-03):** a 1ª tentativa usou um
+> `requirements-api.txt` na raiz do repo -- a Vercel ignorou esse nome e instalou o
+> `requirements.txt` pesado da raiz mesmo assim ("Total bundle size (1143.54 MB) exceeds
+> the maximum function size (500 MB)"). Corrigido movendo o arquivo pra
+> `api/requirements.txt` (ao lado da própria função, colocação que a Vercel realmente
+> respeita) -- build seguinte confirmado dentro do limite.
 
 ## Passo 1 -- Criar o banco no Supabase
 
@@ -98,9 +95,8 @@ Supabase -- o app hospedado só lê o banco, nunca escreve nele sozinho.
    servidor de arquivos estáticos embutido (só deve rodar localmente; ver comentário no
    código). Sem essa variável chegando ao processo, o pior efeito é esse mount rodar à
    toa dentro da função (peso extra no bundle), não um erro -- mas vale confirmar.
-6. Depois do primeiro deploy, confira no log de build se `requirements-api.txt` foi
-   mesmo o arquivo usado para instalar as dependências da função Python (ver "Ponto em
-   aberto" na seção Arquitetura acima).
+6. Depois de cada deploy, vale conferir no log de build se o bundle da função ficou
+   dentro do limite de 500MB (ver nota na seção Arquitetura sobre `api/requirements.txt`).
 
 ## Passo 3 -- Testar
 
@@ -149,12 +145,6 @@ raiz do repo).
 
 O que precisa de confirmação depois que o projeto Vercel estiver configurado de verdade:
 
-- Se `requirements-api.txt` (nome não-padrão) é realmente o arquivo que a Vercel usa para
-  instalar as dependências de `api/index.py`, em vez do `requirements.txt` da raiz (ver
-  "Ponto em aberto" na seção Arquitetura). Este é o maior risco desta migração: se a
-  Vercel usar o arquivo errado, o build tenta instalar torch/sentence-transformers e
-  pode estourar o limite de tamanho do bundle (ou só ficar muito mais lento que o
-  necessário) sem nenhum ganho real.
 - A sintaxe exata de configuração do runtime Python em `vercel.json` -- a Vercel mudou
   essa convenção mais de uma vez ao longo do tempo (o antigo builder `@vercel/python`
   com `builds`/`routes` foi substituído por detecção automática + `rewrites`/`functions`,
