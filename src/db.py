@@ -37,11 +37,33 @@ db_compat.patch()
 _ENGINE = None
 
 
-def get_connection():
+def get_connection(pooled: bool = False):
     """Conexao psycopg (Postgres/Supabase) -- a UNICA forma de acesso ao banco neste
-    projeto. Levanta um erro claro se DATABASE_URL nao estiver configurada, em vez de
-    cair silenciosamente em qualquer outro banco/arquivo."""
-    database_url = os.environ.get("DATABASE_URL")
+    projeto. Levanta um erro claro se a variavel de ambiente relevante nao estiver
+    configurada, em vez de cair silenciosamente em qualquer outro banco/arquivo.
+
+    pooled=True usa `DATABASE_URL_POOLER` (pooler da Supabase em modo TRANSACTION,
+    porta 6543) em vez de `DATABASE_URL` (modo SESSION/direto, porta 5432) -- so a
+    webapp (webapp/main.py) passa pooled=True, porque e o unico caller que abre
+    muitas conexoes curtas e concorrentes (uma por requisicao HTTP); os scripts de
+    pipeline (refresh.py, enrich_cnae.py etc, chamados so por GitHub Actions/execucao
+    manual) fazem sessoes longas com poucas conexoes -- o caso de uso oposto ao que o
+    modo transaction resolve -- entao continuam em DATABASE_URL sem mudar nada.
+
+    Cai em DATABASE_URL se DATABASE_URL_POOLER nao estiver definida (ambiente sem a
+    separacao configurada ainda, ex: antes de adicionar o novo secret/env var) --
+    nunca quebra por falta dela, so deixa de aproveitar o pooler em modo transaction.
+
+    prepare_threshold=None (so quando pooled=True) desliga o "server-side prepare"
+    automatico do psycopg3: sob um pooler em modo TRANSACTION, cada transacao pode
+    cair numa conexao fisica diferente por tras do PgBouncer, entao um statement
+    preparado numa transacao anterior pode nao existir mais na proxima conexao
+    fisica -- sem isso, erros intermitentes tipo "prepared statement does not
+    exist"."""
+    if pooled:
+        database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
+    else:
+        database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL nao configurada. Defina essa variavel de ambiente com a "
@@ -49,6 +71,8 @@ def get_connection():
             "via um arquivo .env na raiz do repo; em producao, como variavel de "
             "ambiente real da plataforma de deploy."
         )
+    if pooled:
+        return psycopg.connect(database_url, prepare_threshold=None)
     return psycopg.connect(database_url)
 
 

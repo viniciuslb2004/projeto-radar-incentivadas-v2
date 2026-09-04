@@ -177,7 +177,7 @@ def _periodo_anterior(data_inicio: str, data_fim: str, conn):
 
 @app.get("/api/status")
 def status():
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         n_ops = cur.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
@@ -209,7 +209,7 @@ def status():
 
 @app.get("/api/filtros")
 def filtros():
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
 
@@ -233,7 +233,7 @@ def filtros():
 @app.get("/api/kpis")
 def kpis(agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         total = cur.execute(
@@ -280,7 +280,7 @@ def serie_temporal(
         granularidade = "trimestral"
     periodo_expr = GRANULARIDADES_SERIE[granularidade]
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -304,7 +304,7 @@ def serie_temporal(
 @app.get("/api/setores")
 def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
     where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim, instrumento)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -327,7 +327,7 @@ def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_f
 @app.get("/api/subsetores")
 def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -350,7 +350,7 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
 @app.get("/api/segmentos")
 def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None, limit: int = 20):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -374,7 +374,7 @@ def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: 
 @app.get("/api/uf")
 def uf_breakdown(agencia: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
     where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -394,7 +394,7 @@ def uf_breakdown(agencia: str = None, setor: str = None, data_inicio: str = None
 @app.get("/api/porte")
 def porte_breakdown(agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -463,7 +463,7 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
 @app.get("/api/tendencias/setores")
 def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
     """Ranking de setores por variacao de participacao entre o periodo selecionado e o periodo anterior equivalente."""
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "setor_bndes", agencia, uf, instrumento, None, data_inicio, data_fim)
         return {
@@ -479,7 +479,7 @@ def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = N
 @app.get("/api/tendencias/subsetores")
 def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
     """Ranking de subsetores (dentro de um setor) por variacao de participacao."""
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "subsetor_bndes", agencia, uf, instrumento, setor, data_inicio, data_fim)
         return {
@@ -496,7 +496,7 @@ def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str 
 @app.get("/api/tendencias/segmentos")
 def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
     """Ranking de segmentos CNAE (granularidade fina) dentro de um setor, por variacao de participacao."""
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "segmento", agencia, uf, instrumento, setor, data_inicio, data_fim, subsetor_pai=subsetor)
         return {
@@ -514,7 +514,7 @@ def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia:
 @app.get("/api/tendencias/produtos")
 def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
     where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         # GROUP BY na propria expressao COALESCE (nao so em `produto`): Postgres, ao
@@ -568,7 +568,7 @@ def operacoes(
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento)
     coluna_ordenacao = ORDENACAO_COLUNAS.get(order_by, "valor_contratado")
     direcao = "ASC" if order_dir == "asc" else "DESC"
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -594,7 +594,7 @@ def operacoes(
 
 @app.get("/api/operacoes/{op_id}")
 def operacao_detalhe(op_id: int):
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         row = cur.execute(
@@ -831,7 +831,7 @@ def _editais_where(situacao=None, aplicavel_empresa=None, tema=None, regiao=None
 
 @app.get("/api/editais/filtros")
 def editais_filtros():
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
 
@@ -857,7 +857,7 @@ def editais_dashboard(situacao: str = None, aplicavel_empresa: int = None, tema:
     from editais_search import _dias_restantes
 
     where, params = _editais_where(situacao, aplicavel_empresa, tema, regiao, tipo_oportunidade, tipo_cooperacao, q)
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(f"SELECT prazo_proposto, tema_principal FROM editais_raw {where}", params).fetchall()
@@ -888,7 +888,7 @@ def editais_lista(situacao: str = None, aplicavel_empresa: int = None, tema: str
     }
     coluna = colunas_ordenacao.get(order_by, "prazo_proposto")
     direcao = "DESC" if order_dir == "desc" else "ASC"
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
@@ -966,7 +966,7 @@ except ImportError as e:
 
 @app.get("/api/editais/{edital_id}")
 def edital_detalhe(edital_id: int):
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         row = cur.execute(
@@ -1035,7 +1035,7 @@ def _linhas_where(instituicao=None, setor=None, porte=None, regiao=None, status=
 def linhas_filtros():
     """Opcoes de filtro geradas a partir dos dados existentes -- nunca exibe opcao
     vazia (ver item 7 do pedido: "Não exibir opções vazias")."""
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
 
@@ -1066,7 +1066,7 @@ def linhas(
     where, params = _linhas_where(instituicao, setor, porte, regiao, status, fluxo, q)
     col_ordenacao = order_by if order_by in LINHAS_COLS_LISTA else "data_atualizacao"
     direcao = "ASC" if order_dir == "asc" else "DESC"
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         total = cur.execute(f"SELECT COUNT(*) FROM linhas_incentivadas {where}", params).fetchone()[0]
@@ -1090,7 +1090,7 @@ def linhas(
 
 @app.get("/api/linhas/{linha_id}")
 def linha_detalhe(linha_id: int):
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         row = conn.execute(
             f"SELECT {', '.join(LINHAS_COLS_DETALHE)} FROM linhas_incentivadas WHERE id = ?", (linha_id,)
@@ -1114,7 +1114,7 @@ def linha_detalhe(linha_id: int):
 
 @app.get("/api/enriquecimento/importacoes")
 def enriquecimento_importacoes(limit: int = 20):
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         transacoes = cur.execute(
@@ -1145,7 +1145,7 @@ def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
     informado na planilha de origem, caso em que nenhum enriquecimento automatico
     (CNPJ->CNAE) tem como resolver; so uma correcao manual (quem conhece a operacao)
     pode."""
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         total = cur.execute("SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'").fetchone()[0]
@@ -1164,7 +1164,7 @@ def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
 
 @app.get("/api/enriquecimento/correcoes")
 def enriquecimento_correcoes(limit: int = 50):
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         rows = conn.execute(
             "SELECT c.id, c.operation_id, o.cliente, c.campo, c.valor_anterior, c.valor_novo, "
@@ -1188,7 +1188,7 @@ def enriquecimento_corrigir(body: dict):
         return {"erro": "parametros 'operation_id', 'campo' e 'valor_novo' sao obrigatorios"}
     from unify import registrar_correcao_manual
 
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         registrar_correcao_manual(conn, int(operation_id), campo, valor_novo, usuario)
         return {"ok": True}
