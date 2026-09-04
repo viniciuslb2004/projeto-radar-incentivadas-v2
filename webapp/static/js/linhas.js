@@ -197,7 +197,7 @@ async function openLinhaDetalhe(id) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(
     "#ln-f-instituicao, #ln-f-setor, #ln-f-porte, #ln-f-regiao, #ln-f-status, #ln-f-fluxo, #linhas-ordenar"
   ).forEach((el) => el.addEventListener("change", () => loadLinhas(0)));
@@ -206,12 +206,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter") loadLinhas(0);
   });
 
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    if (btn.dataset.view === "linhas") {
-      btn.addEventListener("click", async () => {
-        await initLinhasFiltros();
-        loadLinhas(0);
-      }, { once: true });
-    }
-  });
+  // Antes so carregava filtros/lista no CLICK da aba "Linhas Incentivadas" -- com as
+  // rotas por caminho (/linhas-incentivadas), entrar direto pela URL ou dar F5 nunca
+  // clica o botao da aba, entao a pagina ficava vazia pra sempre. Carrega igual as
+  // outras abas (ver editais.js/tendencias.js): incondicional, ja no DOMContentLoaded.
+  await initLinhasFiltros();
+  loadLinhas(0);
 });
