@@ -4,6 +4,68 @@
 
 let ultimosResultados = [];
 
+// Historico de buscas: pessoal e temporario (so no navegador da propria pessoa,
+// via localStorage -- nunca vai pro servidor). Substitui os chips de exemplo
+// fixos que existiam antes (pedido do usuario).
+const BUSCA_HISTORICO_KEY = "radar_busca_historico";
+const BUSCA_HISTORICO_MAX = 8;
+
+function carregarHistoricoBusca() {
+  try {
+    const bruto = localStorage.getItem(BUSCA_HISTORICO_KEY);
+    const lista = bruto ? JSON.parse(bruto) : [];
+    return Array.isArray(lista) ? lista : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function registrarHistoricoBusca(q) {
+  try {
+    const atual = carregarHistoricoBusca().filter((item) => item.toLowerCase() !== q.toLowerCase());
+    atual.unshift(q);
+    localStorage.setItem(BUSCA_HISTORICO_KEY, JSON.stringify(atual.slice(0, BUSCA_HISTORICO_MAX)));
+  } catch (e) {
+    // localStorage indisponivel (aba privada, storage bloqueado) -- historico so nao aparece.
+  }
+  renderHistoricoBusca();
+}
+
+function renderHistoricoBusca() {
+  const container = document.getElementById("busca-historico");
+  const input = document.getElementById("busca-input");
+  const historico = carregarHistoricoBusca();
+
+  if (!historico.length) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+
+  container.style.display = "flex";
+  container.innerHTML =
+    historico.map((q) => `<span class="chip" data-q="${q.replace(/"/g, "&quot;")}">${q}</span>`).join("") +
+    '<span class="chip chip-limpar" id="busca-historico-limpar">Limpar histórico</span>';
+
+  container.querySelectorAll(".chip[data-q]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      input.value = chip.dataset.q;
+      runBusca(chip.dataset.q);
+    });
+  });
+  const limpar = document.getElementById("busca-historico-limpar");
+  if (limpar) {
+    limpar.addEventListener("click", () => {
+      try {
+        localStorage.removeItem(BUSCA_HISTORICO_KEY);
+      } catch (e) {
+        // ignora
+      }
+      renderHistoricoBusca();
+    });
+  }
+}
+
 function ordenarResultados(lista, criterio) {
   const copia = [...lista];
   switch (criterio) {
@@ -119,6 +181,7 @@ function renderResultados(data) {
 }
 
 async function runBusca(q) {
+  registrarHistoricoBusca(q);
   const container = document.getElementById("busca-resultado");
   container.innerHTML = '<p class="empty-state">Buscando operações parecidas...</p>';
 
@@ -186,10 +249,5 @@ document.addEventListener("DOMContentLoaded", () => {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && input.value.trim().length >= 3) runBusca(input.value.trim());
   });
-  document.querySelectorAll(".chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      input.value = chip.dataset.q;
-      runBusca(chip.dataset.q);
-    });
-  });
+  renderHistoricoBusca();
 });

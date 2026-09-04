@@ -138,18 +138,41 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
 
-// Persiste um valor (ex: granularidade do grafico) na URL via query string, sem
-// recarregar a pagina -- permite compartilhar um link que abre a mesma visao. Le o
-// valor inicial de volta com getURLParam(); troca so acontece por replaceState (nao
-// empilha entradas no historico do navegador a cada mudanca de select).
-function getURLParam(nome, padrao) {
-  return new URLSearchParams(window.location.search).get(nome) || padrao;
+// Roteamento por caminho: a URL reflete APENAS qual aba esta aberta (/consolidado,
+// /tendencias, /busca, /editais, /linhas-incentivadas), nunca estado de filtro/select
+// (ex: granularidade do grafico) -- isso fica so na pagina (estado de sessao, se perde
+// ao recarregar), pedido explicito do usuario pra manter a barra de endereco limpa.
+const _SLUG_PARA_VIEW = {
+  "": "consolidado",
+  "consolidado": "consolidado",
+  "tendencias": "tendencias",
+  "busca": "busca",
+  "editais": "editais",
+  "linhas-incentivadas": "linhas",
+};
+const _VIEW_PARA_SLUG = {
+  consolidado: "consolidado",
+  tendencias: "tendencias",
+  busca: "busca",
+  editais: "editais",
+  linhas: "linhas-incentivadas",
+};
+
+function _viewInicialDaURL() {
+  const slug = window.location.pathname.replace(/^\/+|\/+$/g, "");
+  return _SLUG_PARA_VIEW[slug] || "consolidado";
 }
 
-function setURLParam(nome, valor) {
-  const url = new URL(window.location);
-  url.searchParams.set(nome, valor);
-  window.history.replaceState({}, "", url);
+function _ativarView(view, empilharHistorico) {
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
+  document.getElementById("filterbar").style.display =
+    view === "busca" || view === "editais" || view === "linhas" ? "none" : "flex";
+  const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
+  if (window.location.pathname !== caminho) {
+    if (empilharHistorico) window.history.pushState({ view }, "", caminho);
+    else window.history.replaceState({ view }, "", caminho);
+  }
 }
 
 // Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
@@ -194,14 +217,10 @@ function validarIntervaloDatas(campoAlterado) {
 
 function _ligarBotoesDeAba() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById("view-" + btn.dataset.view).classList.add("active");
-      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais" || btn.dataset.view === "linhas") ? "none" : "flex";
-    });
+    btn.addEventListener("click", () => _ativarView(btn.dataset.view, true));
   });
+  window.addEventListener("popstate", () => _ativarView(_viewInicialDaURL(), false));
+  _ativarView(_viewInicialDaURL(), false);
 }
 
 async function initFiltersAndTabs() {

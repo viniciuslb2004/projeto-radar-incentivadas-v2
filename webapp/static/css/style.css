@@ -385,6 +385,8 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
   border: 1px solid var(--blue-lighter);
 }
 .chip:hover { background: var(--blue-lighter); }
+.chip.chip-limpar { background: none; color: var(--muted, #888); text-decoration: underline; }
+.chip.chip-limpar:hover { background: none; }
 
 .narrativa {
   background: var(--card-bg);

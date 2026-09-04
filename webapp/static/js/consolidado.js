@@ -156,12 +156,7 @@ async function refreshConsolidado(filters) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   const granularidadeSelect = document.getElementById("serie-granularidade");
-  const granularidadeInicial = getURLParam("granularidade", null);
-  if (granularidadeInicial && [...granularidadeSelect.options].some((o) => o.value === granularidadeInicial)) {
-    granularidadeSelect.value = granularidadeInicial;
-  }
   granularidadeSelect.addEventListener("change", () => {
-    setURLParam("granularidade", granularidadeSelect.value);
     loadSerieTemporal(currentFilters());
   });
   await initFiltersAndTabs();

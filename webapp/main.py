@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from db import get_connection
 from webapp.detalhe import montar_detalhe_amigavel
@@ -1064,9 +1065,14 @@ def linhas(
     try:
         cur = conn.cursor()
         total = cur.execute(f"SELECT COUNT(*) FROM linhas_incentivadas {where}", params).fetchone()[0]
+        # Tiebreaker por id e necessario: sem ele, ORDER BY numa coluna com valores repetidos
+        # (ex.: varias linhas atualizadas no mesmo lote, mesmo data_atualizacao) nao tem ordem
+        # estavel entre paginas -- o Postgres pode devolver a mesma linha em duas paginas
+        # diferentes (ou pular linhas), especialmente se a tabela for escrita entre as duas
+        # requisicoes de paginacao. Com o id como desempate, LIMIT/OFFSET fica deterministico.
         rows = cur.execute(
             f"SELECT {', '.join(LINHAS_COLS_LISTA)} FROM linhas_incentivadas {where} "
-            f"ORDER BY {col_ordenacao} {direcao} NULLS LAST LIMIT ? OFFSET ?",
+            f"ORDER BY {col_ordenacao} {direcao} NULLS LAST, id ASC LIMIT ? OFFSET ?",
             params + [limit, offset],
         ).fetchall()
         return {
@@ -1188,6 +1194,22 @@ def enriquecimento_corrigir(body: dict):
         return {"erro": f"nao foi possivel salvar a correcao agora ({e})"}
     finally:
         conn.close()
+
+
+# Rotas da SPA por caminho (/consolidado, /tendencias, /busca, /editais,
+# /linhas-incentivadas): so servem o MESMO index.html, a troca de aba de verdade e
+# 100% client-side (ver _ativarView em common.js). No deploy hospedado (Vercel), quem
+# resolve isso e o rewrite em vercel.json direto na CDN -- estas rotas aqui so
+# importam pro modo local (`uvicorn webapp.main:app`), onde nao existe CDN
+# reescrevendo nada antes de chegar no FastAPI.
+_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas"]
+
+
+@app.get("/{pagina}", include_in_schema=False)
+async def spa_pagina(pagina: str):
+    if pagina not in _SPA_PAGINAS:
+        raise HTTPException(status_code=404)
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 # So monta o servico de arquivos estaticos quando NAO estamos rodando como funcao

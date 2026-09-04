@@ -2,7 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "webapp/static",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" }
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/consolidado", "destination": "/index.html" },
+    { "source": "/tendencias", "destination": "/index.html" },
+    { "source": "/busca", "destination": "/index.html" },
+    { "source": "/editais", "destination": "/index.html" },
+    { "source": "/linhas-incentivadas", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.py": {
