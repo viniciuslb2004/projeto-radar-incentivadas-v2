@@ -219,6 +219,7 @@ async function initFiltersAndTabs() {
     return;
   }
   window.MODO_HOSPEDADO = !!status.hospedado;
+  window.BUSCA_IA_ATIVA = !!status.busca_ia_ativa;
   document.dispatchEvent(new CustomEvent("modo-hospedado-conhecido"));
   if (status.ultimo_refresh && status.ultimo_refresh.finished_at) {
     const d = new Date(status.ultimo_refresh.finished_at);

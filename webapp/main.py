@@ -24,6 +24,15 @@ from webapp.detalhe import montar_detalhe_amigavel
 # (que o Render ja captura), sem mudar a resposta HTTP que o cliente recebe.
 logger = logging.getLogger("radar")
 
+# ============ Motor de busca (item 4/5 do pedido de melhorias) ============
+# Por padrao a busca online e SEM IA (full-text/trigram, ver src/search_fts.py) --
+# nenhuma chamada a modelo/embeddings acontece no caminho padrao de producao. O
+# motor por IA (embeddings, ver src/search.py e src/embeddings.py) continua
+# intacto e religavel: virar MOTOR_BUSCA_IA=1 (variavel de ambiente) volta o
+# comportamento anterior (rotas /api/busca/preparar*, calculo de vetor no
+# navegador via embeddings-client.js) sem precisar mudar nenhuma linha de codigo.
+MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
+
 # ============ Acesso (so ativo no deploy hospedado) ============
 # O app local (desktop) roda sem senha nenhuma, como sempre -- isso so entra em
 # jogo quando SITE_PASSWORD estiver configurada (deploy compartilhado, ver
@@ -183,6 +192,10 @@ def status():
             # calcula o embedding da busca no navegador (transformers.js) ou pede
             # pro servidor calcular -- so o primeiro caminho continua existindo.
             "hospedado": True,
+            # Ver MOTOR_BUSCA_IA acima -- o frontend (busca.js) le este campo pra
+            # decidir entre o caminho sem IA (uma chamada, sem vetor) e o caminho
+            # antigo por embeddings (preparar -> calcular vetor no navegador -> postar).
+            "busca_ia_ativa": MOTOR_BUSCA_IA,
         }
     finally:
         conn.close()
@@ -595,110 +608,140 @@ def operacao_detalhe(op_id: int):
         conn.close()
 
 
-try:
-    from search import (
-        _expandir_query,
-        buscar_por_termo_com_vetor,
-        buscar_rapido,
-        buscar_rapido_com_vetor,
-        preparar_texto_enriquecido,
-    )
-
-    # ============ Rota GET: calcula o embedding no proprio processo do servidor
-    # (get_model()) -- so serve sob demanda (lazy-load do sentence-transformers na
-    # primeira chamada, ver embeddings.get_model()), nunca pre-carregada no startup
-    # (ver _warmup_busca acima). AMBIGUO/nao removido: o frontend (busca.js) so chama
-    # esta rota quando window.MODO_HOSPEDADO e falsy, o que na pratica nunca mais
-    # acontece agora que /api/status sempre devolve hospedado=True -- mas como isso
-    # depende do JS (fora do escopo desta migracao), a rota fica funcional em vez de
-    # ser removida (ver relatorio da migracao). ============
+if not MOTOR_BUSCA_IA:
+    # ============ Motor de busca SEM IA (padrao) -- full-text/trigram Postgres, ver
+    # src/search_fts.py. Uma chamada so, sem calculo de vetor em lugar nenhum
+    # (navegador ou servidor) -- nunca importa search.py/embeddings.py. ============
+    from search_fts import buscar_texto
 
     @app.get("/api/busca")
     def busca(q: str = Query(..., min_length=3)):
         try:
-            return buscar_rapido(q)
+            return buscar_texto(q)
         except Exception as e:
             logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}
 
-    # ============ Rota usada pelo navegador: calcula o embedding no NAVEGADOR
-    # (transformers.js, ver embeddings-client.js) e manda o vetor pronto -- o servidor
-    # so faz numpy, nunca importa/chama sentence_transformers aqui. ============
-
-    @app.get("/api/busca/preparar")
-    def busca_preparar(q: str = Query(..., min_length=3)):
-        """Devolve a query ja expandida (ex: 'fintech' -> vocabulario mais proximo do
-        corpus, ver EXPANSAO_TERMOS em search.py) para o navegador gerar o vetor com o
-        MESMO texto que o servidor embutiria -- sem isso o resultado nao seria
-        comparavel. So string processing, sem modelo."""
-        return {"query_expandida": _expandir_query(q)}
-
-    @app.get("/api/busca/preparar_enriquecido")
-    def busca_preparar_enriquecido(q: str = Query(..., min_length=3)):
-        """Equivalente ao bloco de enriquecimento via web que buscar_rapido() faz
-        sozinho quando o embedding roda no proprio servidor -- aqui o embedding roda
-        no navegador, entao o cliente precisa de 2 idas e vindas: 1a chamada (POST
-        /api/busca) volta com confianca_baixa=True, o navegador chama esta rota para
-        pesquisar `q` na web (buscar_atividade_empresa, so requests puro -- nunca
-        chama get_model()/SentenceTransformer aqui) e reembute o texto devolvido antes
-        de chamar POST /api/busca de novo. Ver o retry em webapp/static/js/busca.js."""
-        try:
-            return preparar_texto_enriquecido(q)
-        except Exception as e:
-            logger.exception("enriquecimento indisponivel")
-            return {"erro": f"enriquecimento indisponivel no momento: {e}"}
-
-    @app.post("/api/busca")
-    def busca_com_vetor(body: dict):
-        """Recebe {q, vetor} com o vetor ja calculado no navegador contra o texto de
-        /api/busca/preparar. So faz a matematica (numpy) contra os vetores
-        precalculados do corpus -- nunca chama get_model()."""
-        q = (body or {}).get("q", "")
-        vetor = (body or {}).get("vetor")
-        if not q or not vetor:
-            return {"erro": "parametros 'q' e 'vetor' sao obrigatorios"}
-        try:
-            return buscar_rapido_com_vetor(q, vetor)
-        except Exception as e:
-            logger.exception("motor de busca indisponivel")
-            return {"erro": f"motor de busca indisponivel no momento: {e}"}
-
-    @app.post("/api/busca/termo")
-    def busca_termo_com_vetor(body: dict):
-        """Parte do refino -- busca operacoes por um termo correlato sugerido pela IA
-        (o navegador ja calculou o vetor do termo), sem chamar get_model()."""
-        termo = (body or {}).get("termo", "")
-        vetor = (body or {}).get("vetor")
-        ja_incluidos = (body or {}).get("ja_incluidos", []) or []
-        if not vetor:
-            return {"erro": "parametro 'vetor' e obrigatorio"}
-        try:
-            achados = buscar_por_termo_com_vetor(termo, vetor, set(ja_incluidos))
-            return {"resultados": achados}
-        except Exception as e:
-            logger.exception("busca por termo indisponivel")
-            return {"erro": f"busca por termo indisponivel no momento: {e}"}
-
-except ImportError as e:
-    @app.get("/api/busca")
-    def busca_indisponivel(q: str = ""):
-        return {"erro": f"motor de busca ainda nao configurado: {e}"}
-
-    @app.post("/api/busca")
-    def busca_indisponivel_post(body: dict = None):
-        return {"erro": f"motor de busca ainda nao configurado: {e}"}
-
+    # Rotas do modo por IA (preparar/preparar_enriquecido/termo) nao se aplicam nesse
+    # modo -- devolvem um erro claro em vez de 404 caso algum cliente antigo (JS em
+    # cache no navegador de alguem) ainda tente chamar.
     @app.get("/api/busca/preparar")
     def busca_preparar_indisponivel(q: str = ""):
-        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+        return {"erro": "motor de busca por IA desativado (ver MOTOR_BUSCA_IA)"}
 
     @app.get("/api/busca/preparar_enriquecido")
     def busca_preparar_enriquecido_indisponivel(q: str = ""):
-        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+        return {"erro": "motor de busca por IA desativado (ver MOTOR_BUSCA_IA)"}
 
     @app.post("/api/busca/termo")
     def busca_termo_indisponivel(body: dict = None):
-        return {"erro": f"motor de busca ainda nao configurado: {e}"}
+        return {"erro": "motor de busca por IA desativado (ver MOTOR_BUSCA_IA)"}
+
+else:
+    try:
+        from search import (
+            _expandir_query,
+            buscar_por_termo_com_vetor,
+            buscar_rapido,
+            buscar_rapido_com_vetor,
+            preparar_texto_enriquecido,
+        )
+
+        # ============ Rota GET: calcula o embedding no proprio processo do servidor
+        # (get_model()) -- so serve sob demanda (lazy-load do sentence-transformers na
+        # primeira chamada, ver embeddings.get_model()), nunca pre-carregada no startup
+        # (ver _warmup_busca acima). AMBIGUO/nao removido: o frontend (busca.js) so chama
+        # esta rota quando window.MODO_HOSPEDADO e falsy, o que na pratica nunca mais
+        # acontece agora que /api/status sempre devolve hospedado=True -- mas como isso
+        # depende do JS (fora do escopo desta migracao), a rota fica funcional em vez de
+        # ser removida (ver relatorio da migracao). ============
+
+        @app.get("/api/busca")
+        def busca(q: str = Query(..., min_length=3)):
+            try:
+                return buscar_rapido(q)
+            except Exception as e:
+                logger.exception("motor de busca indisponivel")
+                return {"erro": f"motor de busca indisponivel no momento: {e}"}
+
+        # ============ Rota usada pelo navegador: calcula o embedding no NAVEGADOR
+        # (transformers.js, ver embeddings-client.js) e manda o vetor pronto -- o servidor
+        # so faz numpy, nunca importa/chama sentence_transformers aqui. ============
+
+        @app.get("/api/busca/preparar")
+        def busca_preparar(q: str = Query(..., min_length=3)):
+            """Devolve a query ja expandida (ex: 'fintech' -> vocabulario mais proximo do
+            corpus, ver EXPANSAO_TERMOS em search.py) para o navegador gerar o vetor com o
+            MESMO texto que o servidor embutiria -- sem isso o resultado nao seria
+            comparavel. So string processing, sem modelo."""
+            return {"query_expandida": _expandir_query(q)}
+
+        @app.get("/api/busca/preparar_enriquecido")
+        def busca_preparar_enriquecido(q: str = Query(..., min_length=3)):
+            """Equivalente ao bloco de enriquecimento via web que buscar_rapido() faz
+            sozinho quando o embedding roda no proprio servidor -- aqui o embedding roda
+            no navegador, entao o cliente precisa de 2 idas e vindas: 1a chamada (POST
+            /api/busca) volta com confianca_baixa=True, o navegador chama esta rota para
+            pesquisar `q` na web (buscar_atividade_empresa, so requests puro -- nunca
+            chama get_model()/SentenceTransformer aqui) e reembute o texto devolvido antes
+            de chamar POST /api/busca de novo. Ver o retry em webapp/static/js/busca.js."""
+            try:
+                return preparar_texto_enriquecido(q)
+            except Exception as e:
+                logger.exception("enriquecimento indisponivel")
+                return {"erro": f"enriquecimento indisponivel no momento: {e}"}
+
+        @app.post("/api/busca")
+        def busca_com_vetor(body: dict):
+            """Recebe {q, vetor} com o vetor ja calculado no navegador contra o texto de
+            /api/busca/preparar. So faz a matematica (numpy) contra os vetores
+            precalculados do corpus -- nunca chama get_model()."""
+            q = (body or {}).get("q", "")
+            vetor = (body or {}).get("vetor")
+            if not q or not vetor:
+                return {"erro": "parametros 'q' e 'vetor' sao obrigatorios"}
+            try:
+                return buscar_rapido_com_vetor(q, vetor)
+            except Exception as e:
+                logger.exception("motor de busca indisponivel")
+                return {"erro": f"motor de busca indisponivel no momento: {e}"}
+
+        @app.post("/api/busca/termo")
+        def busca_termo_com_vetor(body: dict):
+            """Parte do refino -- busca operacoes por um termo correlato sugerido pela IA
+            (o navegador ja calculou o vetor do termo), sem chamar get_model()."""
+            termo = (body or {}).get("termo", "")
+            vetor = (body or {}).get("vetor")
+            ja_incluidos = (body or {}).get("ja_incluidos", []) or []
+            if not vetor:
+                return {"erro": "parametro 'vetor' e obrigatorio"}
+            try:
+                achados = buscar_por_termo_com_vetor(termo, vetor, set(ja_incluidos))
+                return {"resultados": achados}
+            except Exception as e:
+                logger.exception("busca por termo indisponivel")
+                return {"erro": f"busca por termo indisponivel no momento: {e}"}
+
+    except ImportError as e:
+        @app.get("/api/busca")
+        def busca_indisponivel(q: str = ""):
+            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+        @app.post("/api/busca")
+        def busca_indisponivel_post(body: dict = None):
+            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+        @app.get("/api/busca/preparar")
+        def busca_preparar_indisponivel(q: str = ""):
+            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+        @app.get("/api/busca/preparar_enriquecido")
+        def busca_preparar_enriquecido_indisponivel(q: str = ""):
+            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+
+        @app.post("/api/busca/termo")
+        def busca_termo_indisponivel(body: dict = None):
+            return {"erro": f"motor de busca ainda nao configurado: {e}"}
 
 
 EDITAIS_COLS = [

@@ -102,6 +102,14 @@ REBUILD_EACH_REFRESH = [
 ]
 
 SCHEMA = """
+-- ============ Busca sem IA: extensoes Postgres usadas pelo motor de full-text/trigram
+-- (ver src/search_fts.py) -- unaccent para ignorar acentuacao na comparacao, pg_trgm
+-- para tolerancia a erro de digitação/nomes parecidos. Substituem, no caminho padrao
+-- de producao, a busca por embeddings (ver MOTOR_BUSCA_IA em webapp/main.py) -- o
+-- codigo de embeddings continua intacto e religavel, so nao roda por padrao. ============
+CREATE EXTENSION IF NOT EXISTS unaccent;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- ============ Staging: raw BNDES sheet, columns kept close to the source ============
 -- row_hash: sha256 do conteudo da linha (ver incremental.py) -- usado para o refresh
 -- incremental saber quais linhas do arquivo baixado (que vem com TODO o historico
@@ -277,7 +285,10 @@ CREATE TABLE IF NOT EXISTS operations (
     agente_financeiro TEXT,              -- instituicao financeira credenciada / agente repassador
     raw_table TEXT NOT NULL,             -- which *_raw table to join back to for full drill-down
     raw_id INTEGER NOT NULL,
-    embedding_text TEXT                  -- text that was embedded (for debugging/inspection)
+    embedding_text TEXT,                 -- texto embutido pelo motor de busca por IA (ver src/embeddings.py) -- mantido/religavel, nao usado no caminho padrao
+    search_document TEXT,                -- texto completo normalizado + sinonimos/taxonomia (legivel, para depuracao/exportacao) -- ver src/search_fts.py
+    search_taxonomia_termos TEXT,        -- so os sinonimos/taxonomia (ver src/search_taxonomy.py) -- usado a parte na hora de montar o search_vector com peso por campo
+    search_vector TSVECTOR               -- tsvector (portugues, sem acento) COM PESO POR CAMPO (identificacao > setor/segmento > instrumento > texto livre) -- motor de busca padrao, sem IA
 );
 
 CREATE INDEX IF NOT EXISTS idx_bndes_raw_hash ON bndes_raw(row_hash);
@@ -286,6 +297,9 @@ CREATE INDEX IF NOT EXISTS idx_finep_descentralizado_hash ON finep_credito_desce
 CREATE INDEX IF NOT EXISTS idx_finep_nao_aprovados_hash ON finep_nao_aprovados_raw(row_hash);
 CREATE INDEX IF NOT EXISTS idx_operations_raw ON operations(raw_table, raw_id);
 CREATE INDEX IF NOT EXISTS idx_operations_setor_origem ON operations(setor_origem);
+CREATE INDEX IF NOT EXISTS idx_operations_search_vector ON operations USING GIN(search_vector);
+CREATE INDEX IF NOT EXISTS idx_operations_cliente_trgm ON operations USING GIN(cliente gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_segmento_trgm ON operations USING GIN(segmento gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_operations_setor ON operations(setor_bndes);
 CREATE INDEX IF NOT EXISTS idx_operations_segmento ON operations(segmento);
@@ -370,6 +384,11 @@ MIGRACOES_COLUNAS = [
     # Sub-linha real do BNDES (ver comentario no CREATE TABLE operations acima) --
     # so passou a ser mapeada em unify.py depois que a tabela ja existia em producao.
     ("operations", "instrumento_financeiro", "TEXT"),
+    # Motor de busca sem IA (tsvector/unaccent/pg_trgm, ver src/search_fts.py) --
+    # adicionadas depois que `operations` ja existia em producao.
+    ("operations", "search_document", "TEXT"),
+    ("operations", "search_taxonomia_termos", "TEXT"),
+    ("operations", "search_vector", "TSVECTOR"),
 ]
 
 

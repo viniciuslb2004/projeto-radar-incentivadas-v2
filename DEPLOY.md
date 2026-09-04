@@ -89,6 +89,10 @@ Supabase -- o app hospedado só lê o banco, nunca escreve nele sozinho.
    - `ALLOWED_ORIGINS` pode ficar em branco/sem configurar -- CORS só importava quando
      frontend e backend viviam em domínios diferentes (arquitetura antiga); agora os dois
      estão sempre no mesmo domínio da Vercel.
+   - `MOTOR_BUSCA_IA` -- deixe em branco/não configure para o motor de busca padrão
+     (sem IA, full-text/trigram do Postgres, ver `src/search_fts.py`). Só defina como
+     `1` para voltar ao motor por embeddings (`src/search.py`/`embeddings-client.js`),
+     mantido intacto justamente para permitir religar isso no futuro sem mudar código.
 5. Confirme também que a opção que expõe as variáveis de ambiente de sistema da própria
    Vercel (`VERCEL`, `VERCEL_ENV`, etc.) está habilitada nas configurações do projeto --
    `webapp/main.py` usa a variável `VERCEL` para decidir se deve (ou não) montar o

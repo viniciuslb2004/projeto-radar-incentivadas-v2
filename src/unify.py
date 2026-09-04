@@ -17,6 +17,7 @@ mensal nunca mais seria refletida.
 """
 import pandas as pd
 
+import search_taxonomy
 from db import get_connection, get_engine
 from geo import regiao_de
 from incremental import insert_new_rows
@@ -27,7 +28,7 @@ OPERATIONS_COLS = [
     "setor_bndes", "subsetor_bndes", "segmento", "setor_origem", "porte_cliente",
     "produto", "instrumento_financeiro", "modalidade_apoio", "indexador", "taxa_juros",
     "prazo_carencia_meses", "prazo_amortizacao_meses", "descricao_projeto", "agente_financeiro",
-    "raw_table", "raw_id", "embedding_text",
+    "raw_table", "raw_id", "embedding_text", "search_document", "search_taxonomia_termos",
 ]
 
 
@@ -269,6 +270,94 @@ def _embedding_text(row, boilerplate: set = frozenset()) -> str:
     return " | ".join(str(p) for p in parts if p not in (None, "", "nan"))
 
 
+def _search_taxonomia_termos(row) -> str:
+    """So os sinonimos/taxonomia (ver search_taxonomy.py) para setor/subsetor/segmento
+    -- guardado a parte de search_document porque o tsvector com peso por campo (ver
+    _atualizar_search_vector) precisa colocar esses termos na MESMA zona de peso do
+    setor/segmento (prioridade 2), nao misturados com o resto do texto."""
+    parts = [
+        " ".join(search_taxonomy.termos_para_setor(row.get("setor_bndes"))),
+        " ".join(search_taxonomy.termos_para_subsetor(row.get("subsetor_bndes"))),
+        " ".join(search_taxonomy.termos_para_segmento(row.get("segmento"))),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def _search_document(row, boilerplate: set = frozenset()) -> str:
+    """Texto-fonte LEGIVEL do motor de busca SEM IA (para depuracao/exportacao, ver
+    campo search_document no item 3.2 do pedido) -- o tsvector de busca de verdade
+    (search_vector) e montado a parte, com peso por campo, em _atualizar_search_vector
+    (nao a partir deste texto plano, que trataria todo campo com a mesma importancia).
+    Mesma logica de supressao de boilerplate de _embedding_text(), mais duas diferencas
+    propositais: (1) inclui cliente/CNPJ -- o motor por IA deixa esses campos de fora
+    (busca por "natureza da operacao", nao por nome de empresa), mas a busca sem IA
+    precisa achar por razao social/CNPJ tambem; (2) inclui os sinonimos/taxonomia de
+    setor-subsetor-segmento, que substituem a expansao de vocabulario que a IA fazia em
+    tempo de busca -- aqui ela e pre-calculada e gravada, uma vez, no proprio documento."""
+    uf = row.get("uf")
+    descricao = row.get("descricao_projeto")
+    if _prefixo_descricao(descricao) in boilerplate:
+        descricao = None
+    parts = [
+        row.get("cliente"),
+        row.get("cnpj"),
+        row.get("agencia"),
+        row.get("setor_bndes"),
+        row.get("subsetor_bndes"),
+        row.get("segmento"),
+        _search_taxonomia_termos(row),
+        row.get("produto"),
+        row.get("instrumento_financeiro"),
+        row.get("modalidade_apoio"),
+        row.get("indexador"),
+        descricao,
+        row.get("municipio"),
+        uf,
+        regiao_de(uf),
+    ]
+    return " | ".join(str(p) for p in parts if p not in (None, "", "nan"))
+
+
+def _atualizar_search_vector(conn, ids: list) -> None:
+    """Recalcula o tsvector (portugues, sem acento) COM PESO POR CAMPO para os ids
+    informados, direto das colunas ja gravadas (nao de search_document, que mistura
+    tudo com o mesmo peso) -- chamado depois de qualquer insert/update que mude essas
+    colunas. Pesos (Postgres usa A > B > C > D):
+      A: cliente/CNPJ (identificacao da empresa -- prioridade maxima)
+      B: setor/subsetor/segmento + sinonimos/taxonomia (o que a empresa FAZ)
+      C: produto/instrumento/indexador (caracteristicas da linha de credito)
+      D: descricao do projeto/municipio/UF/agencia (texto livre, contexto)
+    Sem isso, uma palavra generica e frequente (ex: "empresa", "SP") empataria ou
+    ate superaria em ranking uma palavra rara e especifica (ex: "hospital") so por
+    aparecer em mais campos -- confirmado empiricamente: "hospitais em SP" ranqueava
+    fabricante de laticinios (bate "SP" varias vezes) acima do unico hospital real da
+    base antes desta mudanca."""
+    ids = [int(i) for i in dict.fromkeys(ids)]
+    if not ids:
+        return
+    conn.execute(
+        """
+        UPDATE operations SET search_vector =
+            setweight(to_tsvector('portuguese', unaccent(coalesce(cliente, '') || ' ' || coalesce(cnpj, ''))), 'A') ||
+            setweight(to_tsvector('portuguese', unaccent(
+                coalesce(setor_bndes, '') || ' ' || coalesce(subsetor_bndes, '') || ' ' ||
+                coalesce(segmento, '') || ' ' || coalesce(search_taxonomia_termos, '')
+            )), 'B') ||
+            setweight(to_tsvector('portuguese', unaccent(
+                coalesce(produto, '') || ' ' || coalesce(instrumento_financeiro, '') || ' ' ||
+                coalesce(indexador, '') || ' ' || coalesce(modalidade_apoio, '')
+            )), 'C') ||
+            setweight(to_tsvector('portuguese', unaccent(
+                coalesce(descricao_projeto, '') || ' ' || coalesce(municipio, '') || ' ' ||
+                coalesce(uf, '') || ' ' || coalesce(agencia, '')
+            )), 'D')
+        WHERE id = ANY(?)
+        """,
+        [ids],
+    )
+    conn.commit()
+
+
 def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) -> list:
     """Re-checa as operacoes 'pendente' (FINEP cujo CNPJ nao estava no cache cnpj_cnae
     na hora em que a linha foi unificada) contra o cache ATUAL, e atualiza em cima da
@@ -278,7 +367,7 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
         return []
 
     pendentes = pd.read_sql(
-        "SELECT id, cnpj, produto, modalidade_apoio, indexador, valor_contratado, "
+        "SELECT id, cnpj, agencia, cliente, produto, modalidade_apoio, indexador, valor_contratado, "
         "prazo_amortizacao_meses, descricao_projeto, municipio, uf "
         "FROM operations WHERE setor_origem = 'pendente'",
         get_engine(),
@@ -293,7 +382,10 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
 
     updates = []
     for _, row in resolvidos.iterrows():
-        texto = _embedding_text({
+        campos = {
+            "agencia": row["agencia"],
+            "cliente": row["cliente"],
+            "cnpj": row["cnpj"],
             "setor_bndes": row["setor_bndes_mapeado"],
             "subsetor_bndes": row["subsetor_bndes_mapeado"],
             "segmento": row["cnae_descricao"],
@@ -305,19 +397,25 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
             "descricao_projeto": row["descricao_projeto"],
             "municipio": row["municipio"],
             "uf": row["uf"],
-        }, boilerplate)
+        }
+        texto_embedding = _embedding_text(campos, boilerplate)
+        texto_busca = _search_document(campos, boilerplate)
+        texto_taxonomia = _search_taxonomia_termos(campos)
         updates.append((
-            row["setor_bndes_mapeado"], row["subsetor_bndes_mapeado"], row["cnae_descricao"], texto, int(row["id"]),
+            row["setor_bndes_mapeado"], row["subsetor_bndes_mapeado"], row["cnae_descricao"],
+            texto_embedding, texto_busca, texto_taxonomia, int(row["id"]),
         ))
 
     cur = conn.cursor()
     cur.executemany(
         "UPDATE operations SET setor_bndes = ?, subsetor_bndes = ?, segmento = ?, "
-        "setor_origem = 'enriquecido', embedding_text = ? WHERE id = ?",
+        "setor_origem = 'enriquecido', embedding_text = ?, search_document = ?, search_taxonomia_termos = ? WHERE id = ?",
         updates,
     )
     conn.commit()
-    return [u[-1] for u in updates]
+    ids = [u[-1] for u in updates]
+    _atualizar_search_vector(conn, ids)
+    return ids
 
 
 def build_operations():
@@ -341,6 +439,8 @@ def build_operations():
         novos_ids = []
         if not novas.empty:
             novas["embedding_text"] = novas.apply(lambda r: _embedding_text(r, boilerplate), axis=1)
+            novas["search_document"] = novas.apply(lambda r: _search_document(r, boilerplate), axis=1)
+            novas["search_taxonomia_termos"] = novas.apply(_search_taxonomia_termos, axis=1)
             insert_new_rows(conn, "operations", novas, OPERATIONS_COLS)
             conn.commit()
             # recupera os ids autoincrement recem-atribuidos, por (raw_table, raw_id)
@@ -352,6 +452,7 @@ def build_operations():
                     [raw_table] + raw_ids,
                 ).fetchall()
                 novos_ids.extend(r[0] for r in rows)
+            _atualizar_search_vector(conn, novos_ids)
 
         reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
         conn.commit()

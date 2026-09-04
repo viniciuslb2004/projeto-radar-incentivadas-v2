@@ -1,4 +1,6 @@
-// Aba Busca: texto livre -> operacoes parecidas por similaridade (embeddings).
+// Aba Busca: texto livre -> operacoes parecidas. Por padrao usa o motor sem IA
+// (full-text/trigram, ver src/search_fts.py); so usa embeddings se o servidor tiver
+// MOTOR_BUSCA_IA=1 ligado (ver window.BUSCA_IA_ATIVA, definido em common.js).
 
 let ultimosResultados = [];
 
@@ -39,7 +41,7 @@ function renderListaResultados() {
         </div>
         <div class="meta">${r.agencia} · ${r.setor_bndes || "Não classificado"}${r.subsetor_bndes ? " · " + r.subsetor_bndes : ""}${r.segmento ? " · " + r.segmento : ""} · ${r.uf || "-"} · ${r.data_contratacao || "-"}</div>
         <div class="meta">${r.descricao_projeto ? r.descricao_projeto.slice(0, 160) : ""}</div>
-        <div class="score">similaridade: ${(r.score * 100).toFixed(0)}%</div>
+        <div class="score">${typeof r.score === "number" ? `similaridade: ${(r.score * 100).toFixed(0)}%` : r.motivo || ""}</div>
       </div>`
     )
     .join("");
@@ -110,6 +112,7 @@ function renderResultados(data) {
       { chave: "valor_desembolsado", rotulo: "Valor desembolsado" },
       { chave: "descricao_projeto", rotulo: "Descrição do projeto" },
       { chave: "score", rotulo: "Similaridade" },
+      { chave: "motivo", rotulo: "Motivo da correspondência" },
     ]);
   });
   renderListaResultados();
@@ -121,7 +124,10 @@ async function runBusca(q) {
 
   let data;
   try {
-    if (window.MODO_HOSPEDADO) {
+    if (window.BUSCA_IA_ATIVA) {
+      // Modo por IA (embeddings) -- so ativo se MOTOR_BUSCA_IA=1 no servidor (ver
+      // webapp/main.py). Calcula o vetor da query no navegador (transformers.js) e
+      // manda pronto -- o servidor so faz numpy contra os vetores do corpus.
       const prep = await fetchJSON("/api/busca/preparar?" + qs({ q }));
       if (prep.erro) {
         container.innerHTML = `<p class="empty-state">${prep.erro}</p>`;
@@ -133,7 +139,30 @@ async function runBusca(q) {
         }
       });
       data = await postJSON("/api/busca", { q, vetor });
+
+      // A 1a passada pode vir com confianca baixa (nome de empresa/termo que a base
+      // nao conhece, ex: "Quicksoft") -- tenta UMA 2a passada pesquisando `q` na web e
+      // reembute com o texto descoberto. So substitui o resultado original se o novo
+      // melhor_score vier melhor; qualquer falha aqui so mantem o resultado original.
+      if (!data.erro && data.confianca_baixa) {
+        try {
+          const prepEnriquecido = await fetchJSON("/api/busca/preparar_enriquecido?" + qs({ q }), 10000);
+          if (!prepEnriquecido.erro && prepEnriquecido.enriquecido_via_web && prepEnriquecido.query_expandida) {
+            const vetorEnriquecido = await embutirQuery(prepEnriquecido.query_expandida);
+            const dataEnriquecida = await postJSON("/api/busca", { q, vetor: vetorEnriquecido });
+            if (!dataEnriquecida.erro && dataEnriquecida.melhor_score > data.melhor_score) {
+              dataEnriquecida.query_original = q;
+              dataEnriquecida.enriquecido_via_web = true;
+              data = dataEnriquecida;
+            }
+          }
+        } catch (e) {
+          // enriquecimento opcional -- se falhar, so mantem o resultado original.
+        }
+      }
     } else {
+      // Modo padrao: sem IA -- uma chamada so, full-text/trigram no servidor (ver
+      // src/search_fts.py), sem calculo de vetor em lugar nenhum.
       data = await fetchJSON("/api/busca?" + qs({ q }));
     }
   } catch (e) {
@@ -144,29 +173,6 @@ async function runBusca(q) {
   if (data.erro) {
     container.innerHTML = `<p class="empty-state">${data.erro}</p>`;
     return;
-  }
-
-  // Modo HOSPEDADO: a 1a passada ja veio com confianca baixa (nome de empresa/termo
-  // que a base nao conhece, ex: "Quicksoft") -- tenta UMA 2a passada pesquisando `q` na
-  // web (equivalente ao que buscar_rapido() ja faz sozinho no modo local, ver
-  // search.py) e reembute com o texto descoberto. So substitui o resultado original se
-  // o novo melhor_score vier melhor; qualquer falha aqui so mantem o resultado original
-  // (nunca deixa a busca sem resposta por causa de um enriquecimento que nao deu certo).
-  if (window.MODO_HOSPEDADO && data.confianca_baixa) {
-    try {
-      const prepEnriquecido = await fetchJSON("/api/busca/preparar_enriquecido?" + qs({ q }), 10000);
-      if (!prepEnriquecido.erro && prepEnriquecido.enriquecido_via_web && prepEnriquecido.query_expandida) {
-        const vetorEnriquecido = await embutirQuery(prepEnriquecido.query_expandida);
-        const dataEnriquecida = await postJSON("/api/busca", { q, vetor: vetorEnriquecido });
-        if (!dataEnriquecida.erro && dataEnriquecida.melhor_score > data.melhor_score) {
-          dataEnriquecida.query_original = q;
-          dataEnriquecida.enriquecido_via_web = true;
-          data = dataEnriquecida;
-        }
-      }
-    } catch (e) {
-      // enriquecimento opcional -- se falhar, so mantem o resultado original.
-    }
   }
 
   renderResultados(data);
