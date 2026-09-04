@@ -592,17 +592,39 @@ def operacao_detalhe(op_id: int):
     try:
         cur = conn.cursor()
         row = cur.execute(
-            "SELECT raw_table, raw_id, agencia, instrumento, setor_bndes FROM operations WHERE id = ?", (op_id,)
+            "SELECT raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj FROM operations WHERE id = ?", (op_id,)
         ).fetchone()
         if not row:
             return {"erro": "operacao nao encontrada"}
-        raw_table, raw_id, agencia, instrumento, setor_bndes = row
+        raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj = row
         raw_row = cur.execute(f"SELECT * FROM {raw_table} WHERE id = ?", (raw_id,)).fetchone()
         if not raw_row:
             return {"raw_table": raw_table, "secoes": []}
         col_names = [d[0] for d in cur.description]
         raw = dict(zip(col_names, raw_row))
         secoes = montar_detalhe_amigavel(raw_table, raw)
+
+        # Identificacao da empresa (item 3.2 do pedido) -- CNAE/razao social oficial/
+        # natureza juridica/porte/capital social, ja enriquecidos localmente em
+        # cnpj_cnae (ver enrich_cnae.py); so aparece quando o CNPJ ja foi resolvido.
+        if cnpj:
+            empresa = cur.execute(
+                "SELECT razao_social_oficial, natureza_juridica, porte_empresa, capital_social, "
+                "cnae_codigo, cnae_descricao FROM cnpj_cnae WHERE cnpj = ?", (cnpj,)
+            ).fetchone()
+            if empresa and any(v is not None for v in empresa):
+                razao_oficial, natureza, porte, capital, cnae_codigo, cnae_descricao = empresa
+                campos_empresa = [
+                    {"label": "Razão social", "tipo": "texto", "valor": razao_oficial},
+                    {"label": "Natureza jurídica", "tipo": "texto", "valor": natureza},
+                    {"label": "Porte", "tipo": "texto", "valor": porte},
+                    {"label": "Capital social", "tipo": "moeda", "valor": capital},
+                    {"label": "CNAE principal", "tipo": "texto", "valor": f"{cnae_codigo} - {cnae_descricao}" if cnae_codigo else None},
+                ]
+                campos_empresa = [c for c in campos_empresa if c["valor"] not in (None, "")]
+                if campos_empresa:
+                    secoes = [{"titulo": "Identificação da empresa", "campos": campos_empresa}] + secoes
+
         return {"raw_table": raw_table, "agencia": agencia, "instrumento": instrumento, "setor_bndes": setor_bndes, "secoes": secoes}
     finally:
         conn.close()
