@@ -258,6 +258,309 @@ _BNDES_MANUAL = [
         "temas_sustentabilidade": None,
         "sinonimos_termos": "inovacao tecnologia digitalizacao industria 4.0 P&D&I pesquisa e desenvolvimento",
     },
+    {
+        # Achado via a API de busca real do site (WCMUtil/api/busca/) -- o portal WCM
+        # do BNDES nao tem um indice/catalogo navegavel por clique, mas a busca interna
+        # devolve URLs reais e estaveis de /financiamento/produto/<slug>. Conteudo
+        # capturado via os acordeoes (.collapsible-header/.collapsible-body) da propria
+        # pagina, que ficam fechados por padrao e nao aparecem no texto visivel comum.
+        "instituicao": "BNDES",
+        "nome_oficial": "Cartão BNDES",
+        "nome_simplificado": "Cartão BNDES",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Crédito pré-aprovado para aquisição de bens e serviços credenciados no Portal de Operações do Cartão BNDES.",
+        "descricao_completa": "Crédito pré-aprovado para aquisição de bens e serviços credenciados no Portal de Operações do Cartão BNDES. Financiamento de até 100% do item adquirido.",
+        "modalidade": "Indireta",
+        "tipo_apoio": "Financiamento (cartão de crédito)",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nacional",
+        "destinacao": "Aquisição de bens e serviços credenciados",
+        "itens_financiaveis": "Bens e serviços credenciados no Portal de Operações do Cartão BNDES",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 2_000_000,
+        "percentual_financiavel": "100% do item adquirido",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Definida mensalmente no Portal de Operações do Cartão BNDES; TAC de até 2% do limite de crédito concedido",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 48 prestações mensais, fixas e iguais",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "A critério do banco emissor (reais ou pessoais)",
+        "restricoes": "Limite de crédito de até R$ 2 milhões por banco emissor (somável entre emissores diferentes)",
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "Bancos emissores credenciados ao Cartão BNDES",
+        "canal_contratacao": "Portal de Operações do Cartão BNDES",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/cartao-bndes",
+        "data_vigencia": "Circular 36/2020, de 16.06.2025 e alterações posteriores",
+        "trecho_fonte": (
+            "\"Crédito pré-aprovado para aquisição de bens e serviços credenciados no "
+            "Portal de Operações do Cartão BNDES... Até 48 prestações mensais, fixas e "
+            "iguais... Limite de crédito de até R$ 2 milhões por banco emissor.\" "
+            "(capturado ao vivo da página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # produto cross-setorial (qualquer bem/servico credenciado), sem mapeamento honesto para 1 categoria
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": NAO_INFORMADO,
+        "destinacao_padronizada": "Aquisição de bens e serviços",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "cartao de credito bens e servicos aquisicao",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "BNDES Finem - Geração de energia",
+        "nome_simplificado": "Finem Energia",
+        "sigla": "Finem",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento a projetos de geração de energia elétrica (apoio direto e indireto).",
+        "descricao_completa": (
+            "Financiamento a projetos de geração de energia elétrica. Apoio direto (solicitação "
+            "feita diretamente ao BNDES): taxa composta pelo Custo Financeiro e Remuneração do "
+            "BNDES. Empreendimentos de geração termelétrica a gás natural, biomassa e unidades de "
+            "recuperação energética a partir de resíduos sólidos urbanos devem observar critérios "
+            "ambientais específicos."
+        ),
+        "modalidade": "Direta e Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Geração de energia elétrica",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nacional",
+        "destinacao": "Geração de energia elétrica",
+        "itens_financiaveis": "Projetos de geração de energia (termelétrica, biomassa, recuperação energética de resíduos, entre outros)",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": 40_000_000,
+        "valor_maximo": None,
+        "percentual_financiavel": "Até 80% do valor total do projeto, limitado a 100% dos itens financiáveis",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Custo Financeiro + Remuneração do BNDES (apoio direto)",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 24 anos de amortização",
+        "carencia": "Até 6 meses após entrada em operação comercial",
+        "amortizacao": "Determinada pela capacidade de pagamento do empreendimento/cliente/grupo econômico, máximo 24 anos",
+        "garantias": "Apoio direto: reais (hipoteca, penhor, propriedade fiduciária, recebíveis) e/ou pessoais (fiança, aval); apoio indireto: negociadas com a instituição financeira credenciada",
+        "restricoes": "Critérios ambientais específicos para geração termelétrica a gás natural, biomassa e resíduos sólidos urbanos",
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "BNDES (direto) ou instituições financeiras credenciadas (indireto)",
+        "canal_contratacao": NAO_INFORMADO,
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/bndes-finem-energia",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": (
+            "\"Valor mínimo de financiamento: R$ 40 milhões... Até 80% do valor total do "
+            "projeto, limitada a 100% dos itens financiáveis... limite máximo de 24 anos.\" "
+            "(capturado ao vivo da página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INFRAESTRUTURA",
+        "subsetor_padronizado": "ENERGIA ELÉTRICA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": NAO_INFORMADO,
+        "destinacao_padronizada": "Geração de energia elétrica",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Geração de energia, biomassa, recuperação energética de resíduos",
+        "sinonimos_termos": "energia eletricidade geracao termeletrica biomassa usina",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "BNDES Automático - Projeto de Investimento",
+        "nome_simplificado": "BNDES Automático",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento indireto (via instituições financeiras credenciadas) para projetos de investimento de qualquer setor.",
+        "descricao_completa": (
+            "Financiamento indireto para projetos de investimento, contratado através de "
+            "instituições financeiras credenciadas. Taxa composta pelo Custo Financeiro, Taxa "
+            "do BNDES e Taxa do Agente Financeiro, com condições diferenciadas por porte da "
+            "empresa e setor (incentivado ou padrão)."
+        ),
+        "modalidade": "Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Todos os setores (condições diferenciadas para setores prioritários/incentivados)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Micro, pequenas, médias e grandes empresas",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nacional",
+        "destinacao": "Projetos de investimento",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Até 100% dos itens financiáveis",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Custo Financeiro (TFB/TLP/Taxa LCD/Taxa Pré FAT) + Taxa do BNDES (0,75% a 0,95% a.a. conforme porte/setor) + Taxa do Agente Financeiro",
+        "indexador": "TLP",
+        "spread": "Taxa do BNDES: 0,75% a.a. (MPME) a 0,95% a.a. (grandes empresas incentivadas)",
+        "prazo_total": "Até 20 anos",
+        "carencia": "Até 3 anos",
+        "amortizacao": "Definida pela instituição financeira credenciada conforme capacidade de pagamento",
+        "garantias": "Livre negociação com a instituição financeira credenciada; admite FGI (Tradicional ou PEAC) e FG BNDES-SEBRAE",
+        "restricoes": "Taxa LCD: prazo total máximo de 120 meses e carência máxima de 24 meses",
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "Instituições financeiras credenciadas",
+        "canal_contratacao": "Instituições financeiras credenciadas",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/bndes-automatico",
+        "data_vigencia": "Circular n° 15/2022, de 26.05.2022",
+        "trecho_fonte": (
+            "\"Até 100% dos itens financiáveis... O prazo de carência não poderá ultrapassar "
+            "3 anos e o prazo total não poderá ultrapassar 20 anos.\" (capturado ao vivo da "
+            "página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # produto cross-setorial (qualquer projeto de investimento), sem mapeamento honesto para 1 categoria
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Micro, pequenas, médias e grandes empresas",
+        "destinacao_padronizada": "Projetos de investimento",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "investimento financiamento indireto agente financeiro credenciado",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "Pronaf - Programa Nacional de Fortalecimento da Agricultura Familiar",
+        "nome_simplificado": "Pronaf",
+        "sigla": "Pronaf",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento para custeio e investimentos na agricultura familiar.",
+        "descricao_completa": (
+            "Financiamento para custeio e investimentos em implantação, ampliação ou "
+            "modernização da estrutura de produção, beneficiamento, industrialização e de "
+            "serviços no estabelecimento rural ou em áreas comunitárias rurais próximas, "
+            "visando à geração de renda e à melhora do uso da mão de obra familiar. Possui "
+            "subprogramas: Custeio, Agroindústria, Mulher, Agroecologia, Bioeconomia, Mais "
+            "Alimentos, Jovem e Microcrédito (Grupo B)."
+        ),
+        "modalidade": "Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agricultura familiar",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Agricultores e produtores rurais familiares (pessoas físicas e jurídicas), cooperativas",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nacional",
+        "destinacao": "Custeio e investimento na agricultura familiar",
+        "itens_financiaveis": "Implantação, ampliação ou modernização da estrutura de produção, beneficiamento, industrialização e serviços rurais",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Enquadramento no Pronaf (agricultor/produtor rural familiar)",
+        "agente_financeiro": "Instituições financeiras credenciadas",
+        "canal_contratacao": NAO_INFORMADO,
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/pronaf",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": (
+            "\"Financiamento para custeio e investimentos em implantação, ampliação ou "
+            "modernização da estrutura de produção... visando à geração de renda e à melhora "
+            "do uso da mão de obra familiar.\" (capturado ao vivo da página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Agricultura familiar",
+        "destinacao_padronizada": "Agricultura familiar",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Agroecologia, bioeconomia (subprogramas)",
+        "sinonimos_termos": "agricultura familiar rural custeio agroindustria agroecologia",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "BNDES Microcrédito - Condições ao Microempreendedor",
+        "nome_simplificado": "BNDES Microcrédito",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Microcrédito produtivo orientado para microempreendedores.",
+        "descricao_completa": (
+            "Linha Microcrédito Produtivo Orientado, com taxa de juros efetiva máxima de até 4% "
+            "ao mês e TAC de até 3% do valor do crédito concedido, conforme Resolução CMN nº "
+            "4.854/2020."
+        ),
+        "modalidade": "Indireta",
+        "tipo_apoio": "Microcrédito",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Microempreendedor",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nacional",
+        "destinacao": NAO_INFORMADO,
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 21_000,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Até 4% a.m. (taxa efetiva máxima) + TAC de até 3% do valor do crédito",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Negociado com o agente operador, mínimo de 120 dias",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Negociadas com o agente operador (conforme art. 5º da Lei 13.636/2018)",
+        "restricoes": "Limite de R$ 80 mil somando saldos devedores de crédito do tomador no Sistema Financeiro Nacional (exceto crédito habitacional)",
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "Agentes operadores de microcrédito credenciados",
+        "canal_contratacao": NAO_INFORMADO,
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/bndes-microcredito-empreendedor",
+        "data_vigencia": "Resolução CMN nº 4.854, de 24.09.2020",
+        "trecho_fonte": (
+            "\"Taxa de juros efetiva máxima de até 4% ao mês... Até R$ 21 mil por instituição "
+            "financeira. Respeitando-se o limite de R$ 80 mil.\" (capturado ao vivo da página "
+            "oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # microcredito cross-setorial, sem mapeamento honesto para 1 categoria
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Microempreendedor",
+        "destinacao_padronizada": "Microcrédito produtivo orientado",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "microcredito microempreendedor MEI credito popular",
+    },
 ]
 
 
@@ -317,8 +620,13 @@ def _linha_desenvolve_sp(nome, categoria_nome, categoria_url, valor_max, prazo, 
         "trecho_fonte": trecho,
         "origem_dado": "curadoria_manual_verificada",
         "origem_raw_id": None,
-        "setor_padronizado": NAO_INFORMADO,  # taxonomia da Desenvolve SP nao usa as 4 categorias BNDES -- ver item 8
-        "subsetor_padronizado": None,
+        # Cruzamento com a taxonomia nativa do BNDES (item 8): so "Desenvolve Agro" e
+        # genuinamente setorial (agropecuaria) -- as outras 6 categorias (Investimento,
+        # Giro, Maquinas, Inovacao, Sustentaveis, Mulher) sao PRODUTOS TRANSVERSAIS
+        # (aplicaveis a qualquer setor de negocio), entao mapear para 1 categoria BNDES
+        # seria arbitrario/enganoso -- ficam NAO_INFORMADO de proposito.
+        "setor_padronizado": "AGROPECUÁRIA" if categoria_nome == "Desenvolve Agro" else NAO_INFORMADO,
+        "subsetor_padronizado": "AGROPECUÁRIA" if categoria_nome == "Desenvolve Agro" else None,
         "cnaes_relacionados": None,
         "porte_padronizado": ", ".join(elegiveis),
         "destinacao_padronizada": categoria_nome,

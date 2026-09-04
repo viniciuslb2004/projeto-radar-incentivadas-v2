@@ -169,6 +169,154 @@ def _commit_rows(conn, rows: list) -> None:
     conn.commit()
 
 
+EMPRESAS_COLS = [
+    "cnpj_basico", "razao_social", "natureza_juridica", "qualificacao_responsavel",
+    "capital_social", "porte_empresa", "ente_federativo_responsavel",
+]
+EMPRESAS_KEEP_COLS = ["cnpj_basico", "razao_social", "natureza_juridica", "capital_social", "porte_empresa"]
+
+# Layout oficial da RFB para porte_empresa (documentado no dicionario de dados que
+# acompanha os arquivos Empresas*.zip) -- nao inventado, so decodificado.
+PORTE_EMPRESA_RFB = {
+    "00": "Não informado pela fonte",
+    "01": "Micro Empresa",
+    "03": "Empresa de Pequeno Porte",
+    "05": "Demais",
+}
+
+
+def _baixar_naturezas(month: str) -> dict:
+    """Naturezas.zip: tabela oficial codigo -> nome da natureza juridica (ex:
+    "206-2" -> "Sociedade Empresaria Limitada"). Arquivo minusculo, mesmo padrao de
+    _baixar_cnae_nomes."""
+    url = f"{CNPJ_DIR}/{month}/Naturezas.zip"
+    resp = requests.get(url, auth=AUTH, timeout=60)
+    resp.raise_for_status()
+    nomes = {}
+    with zipfile.ZipFile(__import__("io").BytesIO(resp.content)) as zf:
+        inner_name = zf.namelist()[0]
+        with zf.open(inner_name) as f:
+            for linha in f.read().decode("latin1").splitlines():
+                partes = linha.split(";")
+                if len(partes) != 2:
+                    continue
+                codigo = partes[0].strip('"').strip()
+                nome = partes[1].strip('"').strip()
+                nomes[codigo] = nome
+    return nomes
+
+
+def _target_cnpj_basicos(conn) -> dict:
+    """CNPJs (basico -> lista de CNPJs completos) ja presentes em cnpj_cnae mas ainda
+    SEM razao_social_oficial -- Empresas.zip e chaveado por cnpj_basico (8 digitos, a
+    empresa), nao pelo CNPJ completo (14 digitos, o estabelecimento/filial); uma
+    empresa pode ter varios estabelecimentos com o MESMO cnpj_basico, entao um
+    resultado de Empresas.zip pode precisar atualizar mais de uma linha de
+    cnpj_cnae."""
+    df = pd.read_sql(
+        "SELECT cnpj FROM cnpj_cnae WHERE razao_social_oficial IS NULL",
+        get_engine(),
+    )
+    basico_para_cnpjs = {}
+    for cnpj in df["cnpj"].dropna().astype(str):
+        if len(cnpj) < 8:
+            continue
+        basico_para_cnpjs.setdefault(cnpj[:8], []).append(cnpj)
+    return basico_para_cnpjs
+
+
+def _scan_empresas_zip_for_targets(zip_path: Path, targets_basico: set, found: dict):
+    with zipfile.ZipFile(zip_path) as zf:
+        inner_name = zf.namelist()[0]
+        with zf.open(inner_name) as f:
+            reader = pd.read_csv(
+                f, sep=";", header=None, names=EMPRESAS_COLS, usecols=EMPRESAS_KEEP_COLS,
+                dtype=str, encoding="latin1", chunksize=200_000, on_bad_lines="skip",
+            )
+            for chunk in reader:
+                chunk = chunk.dropna(subset=["cnpj_basico"])
+                matches = chunk[chunk["cnpj_basico"].isin(targets_basico)]
+                for _, row in matches.iterrows():
+                    found[row["cnpj_basico"]] = (row["razao_social"], row["natureza_juridica"], row["capital_social"], row["porte_empresa"])
+
+
+def _capital_social_para_float(valor: str):
+    if not valor:
+        return None
+    try:
+        return float(str(valor).replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _commit_rows_empresas(conn, novos: dict, basico_para_cnpjs: dict, naturezas: dict, now: str) -> int:
+    rows = []
+    for basico, (razao_social, natureza_codigo, capital_social, porte_codigo) in novos.items():
+        natureza_nome = naturezas.get(natureza_codigo, natureza_codigo)
+        porte_nome = PORTE_EMPRESA_RFB.get(porte_codigo, porte_codigo)
+        capital = _capital_social_para_float(capital_social)
+        for cnpj in basico_para_cnpjs.get(basico, []):
+            rows.append((razao_social, natureza_nome, porte_nome, capital, now, cnpj))
+    if not rows:
+        return 0
+    cur = conn.cursor()
+    cur.executemany(
+        "UPDATE cnpj_cnae SET razao_social_oficial = ?, natureza_juridica = ?, porte_empresa = ?, "
+        "capital_social = ?, atualizado_em = ? WHERE cnpj = ?",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def enrich_empresas(month: str = None, keep_downloads: bool = False) -> int:
+    """Complementa cnpj_cnae (ja populada por enrich(), CNPJ->CNAE) com identificacao
+    da empresa (item 3.2 do pedido): razao social oficial, natureza juridica e porte,
+    a partir de Empresas*.zip da RFB -- mesma fonte, arquivos diferentes de
+    Estabelecimentos*.zip. So enriquece linhas que JA existem em cnpj_cnae (nunca cria
+    CNPJ novo aqui -- isso e trabalho de enrich())."""
+    conn = get_connection()
+    try:
+        basico_para_cnpjs = _target_cnpj_basicos(conn)
+        targets_basico = set(basico_para_cnpjs.keys())
+        print(f"CNPJs basicos alvo (empresas ja em cnpj_cnae, ainda sem razao social oficial): {len(targets_basico)}")
+        if not targets_basico:
+            print("Nada pendente de identificacao de empresa.")
+            return 0
+
+        month = month or latest_month()
+        print(f"Usando snapshot RFB: {month}")
+        print("Baixando tabela de naturezas juridicas (Naturezas.zip)...")
+        naturezas = _baixar_naturezas(month)
+        print(f"  {len(naturezas)} naturezas juridicas carregadas.")
+
+        found = {}
+        total_gravados = 0
+        for i in range(10):
+            if len(found) >= len(targets_basico):
+                print("Todos os CNPJs basicos alvo ja encontrados, parando antecipadamente.")
+                break
+            filename = f"Empresas{i}.zip"
+            zip_path = _download_to_disk(month, filename)
+            antes = set(found.keys())
+            try:
+                _scan_empresas_zip_for_targets(zip_path, targets_basico, found)
+            finally:
+                if not keep_downloads:
+                    zip_path.unlink(missing_ok=True)
+            novos = {basico: found[basico] for basico in found.keys() - antes}
+            if novos:
+                now = datetime.now(timezone.utc).isoformat()
+                total_gravados += _commit_rows_empresas(conn, novos, basico_para_cnpjs, naturezas, now)
+            print(f"  progresso: {len(found)}/{len(targets_basico)} empresas encontradas ate agora ({total_gravados} linhas de cnpj_cnae ja atualizadas)", flush=True)
+
+        nao_encontrados = len(targets_basico) - len(found)
+        print(f"cnpj_cnae: {total_gravados} linhas atualizadas com identificacao de empresa. {nao_encontrados} CNPJs basicos nao encontrados na base da RFB.")
+        return total_gravados
+    finally:
+        conn.close()
+
+
 def enrich(month: str = None, keep_downloads: bool = False, targets: set = None) -> int:
     """targets=None (padrao): resolve automaticamente os CNPJs da FINEP que ainda nao
     estao em cnpj_cnae (ver _target_cnpjs). Passe um set explicito para escopar a um
@@ -226,3 +374,4 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
 
 if __name__ == "__main__":
     enrich()
+    enrich_empresas()

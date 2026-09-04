@@ -239,6 +239,10 @@ CREATE TABLE IF NOT EXISTS de_para_cnae (
 
 -- ============ Persistent cache: CNPJ -> CNAE (from Receita Federal Dados Abertos) ============
 -- NOT dropped on refresh; enrich_cnae.py only inserts/updates rows.
+-- NOTA: `razao_social` historicamente guarda o nome_fantasia (Estabelecimentos.zip),
+-- nao a razao social oficial -- mantido como esta para nao quebrar quem ja le esse
+-- campo. `razao_social_oficial` (Empresas.zip, ver enrich_empresas() em
+-- enrich_cnae.py) e o dado real de identificacao da empresa (item 3.2 do pedido).
 CREATE TABLE IF NOT EXISTS cnpj_cnae (
     cnpj TEXT PRIMARY KEY,
     razao_social TEXT,
@@ -247,7 +251,11 @@ CREATE TABLE IF NOT EXISTS cnpj_cnae (
     cnae_divisao TEXT,
     setor_bndes_mapeado TEXT,
     subsetor_bndes_mapeado TEXT,
-    atualizado_em TEXT
+    atualizado_em TEXT,
+    razao_social_oficial TEXT,   -- Empresas.zip: nome legal registrado na Receita Federal
+    natureza_juridica TEXT,      -- Empresas.zip + Naturezas.zip: ex "Sociedade Empresária Limitada"
+    porte_empresa TEXT,          -- Empresas.zip: "Micro Empresa" | "Empresa de Pequeno Porte" | "Demais" | "Nao informado pela fonte"
+    capital_social REAL          -- Empresas.zip: capital social declarado (R$)
 );
 
 -- ============ Unified operations table (BNDES + FINEP credito) ============
@@ -477,6 +485,12 @@ MIGRACOES_COLUNAS = [
     ("operations", "search_document", "TEXT"),
     ("operations", "search_taxonomia_termos", "TEXT"),
     ("operations", "search_vector", "TSVECTOR"),
+    # Identificacao da empresa (Empresas.zip da RFB, ver enrich_empresas() em
+    # enrich_cnae.py) -- adicionadas depois que `cnpj_cnae` ja existia em producao.
+    ("cnpj_cnae", "razao_social_oficial", "TEXT"),
+    ("cnpj_cnae", "natureza_juridica", "TEXT"),
+    ("cnpj_cnae", "porte_empresa", "TEXT"),
+    ("cnpj_cnae", "capital_social", "REAL"),
 ]
 
 
