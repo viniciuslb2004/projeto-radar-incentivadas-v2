@@ -120,8 +120,158 @@ def _upsert_many(conn, linhas: list, lote: int = 100) -> int:
 NAO_INFORMADO = "Não informado pela fonte"
 
 
+# FINEP: curadoria manual VERIFICADA das linhas de CREDITO PERMANENTES (fluxo=
+# "continuo"), no mesmo padrao de BNDES/Desenvolve SP/BNB -- NAO confundir com os
+# EDITAIS (chamadas publicas com prazo, ja cobertas pela aba "Editais" do site, ver
+# tabela editais_raw). A funcao importar_finep_editais() abaixo foi a abordagem
+# ORIGINAL (1 linha_incentivada por edital), mas isso duplicava a aba Editais dentro
+# do catalogo de "Linhas Incentivadas" (que deveria mostrar produtos permanentes,
+# nao chamadas com prazo) -- pedido explicito do usuario pra tirar. Mantida definida
+# (nao chamada em build_linhas_incentivadas) caso sirva de referencia futura.
+#
+# Fonte real verificada ao vivo em 2026-09-04: legacy.finep.gov.br/area-para-
+# clientes-externo/finep-inovacao ("Crédito (Financiamento Reembolsável Direto)") --
+# a pagina de detalhe de cada instrumento ("Conheça o instrumento") retorna 404 no
+# site da FINEP (link quebrado no proprio site oficial, confirmado), entao os campos
+# de valor/taxa/prazo ficam NAO_INFORMADO (nao ha onde verificar, nunca inventado).
+_FINEP_MANUAL = [
+    {
+        "instituicao": "FINEP",
+        "nome_oficial": "Apoio Direto à Inovação",
+        "nome_simplificado": "Apoio Direto à Inovação",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento reembolsável direto da FINEP para atividades inovadoras de empresas brasileiras.",
+        "descricao_completa": (
+            "Tem por objetivo apoiar as atividades inovadoras das empresas brasileiras, com "
+            "vistas a aumentar a competitividade nacional e internacional de empresas "
+            "brasileiras; incrementar atividades de Pesquisa, Desenvolvimento e Inovação "
+            "realizadas no país; e contribuir para o adensamento tecnológico das cadeias "
+            "produtivas nacionais e para maior inserção das empresas brasileiras nas cadeias "
+            "globais de valor. A FINEP utiliza metodologia própria para avaliação de planos "
+            "estratégicos de inovação, reduzindo prazos e aumentando qualidade e transparência "
+            "das análises."
+        ),
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento reembolsável",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Atividades inovadoras (Pesquisa, Desenvolvimento e Inovação) de empresas brasileiras",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "FINEP",
+        "canal_contratacao": "Sistema próprio da FINEP (área para clientes)",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://legacy.finep.gov.br/area-para-clientes-externo/finep-inovacao",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": (
+            '"O Apoio Direto a Inovação tem por objetivo apoiar as atividades inovadoras das '
+            'empresas brasileiras... A Finep utiliza metodologia inovadora para avaliação de '
+            'planos estratégicos de inovação" (capturado ao vivo da página oficial em '
+            '2026-09-04; a página de detalhe do instrumento, "Conheça o instrumento", retorna '
+            "404 no próprio site da FINEP)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Inovação",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": "Pesquisa, Desenvolvimento e Inovação (P&D&I)",
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "credito inovacao pesquisa e desenvolvimento P&D&I financiamento reembolsavel",
+    },
+    {
+        "instituicao": "FINEP",
+        "nome_oficial": "Apoio Direto a Pré-Investimento",
+        "nome_simplificado": "Apoio Direto a Pré-Investimento",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento reembolsável direto da FINEP para consolidação de conhecimento técnico em serviços de engenharia.",
+        "descricao_completa": (
+            "Tem por objetivo apoiar a consolidação de conhecimento técnico em serviços de "
+            "engenharia no País."
+        ),
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento reembolsável",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Serviços de engenharia (consolidação de conhecimento técnico)",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "FINEP",
+        "canal_contratacao": "Sistema próprio da FINEP (área para clientes)",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://legacy.finep.gov.br/area-para-clientes-externo/finep-inovacao",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": (
+            '"Já o Apoio Direto a Pré-Investimento tem por objetivo apoiar a consolidação de '
+            'conhecimento técnico em serviços de engenharia no País" (capturado ao vivo da '
+            'página oficial em 2026-09-04; a página de detalhe do instrumento retorna 404 no '
+            "próprio site da FINEP)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Engenharia",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "credito pre-investimento engenharia financiamento reembolsavel",
+    },
+]
+
+
+def seed_finep_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _FINEP_MANUAL])
+
+
 def importar_finep_editais(conn) -> int:
-    """FINEP: uma linha_incentivada por edital em editais_raw -- fluxo='edital'."""
+    """FINEP: uma linha_incentivada por edital em editais_raw -- fluxo='edital'.
+
+    NAO chamada mais em build_linhas_incentivadas() (ver seed_finep_manual acima) --
+    mantida so como referencia/caso sirva pra outro uso no futuro."""
     rows = conn.execute(
         "SELECT id, titulo, tema_principal, temas, situacao, tipo_oportunidade, contrapartida, "
         "regiao, publico_alvo, data_publicacao, vigencia_inicio, vigencia_fim, prazo_proposto, "
@@ -3171,7 +3321,7 @@ def seed_bnb_manual(conn) -> int:
 def build_linhas_incentivadas():
     conn = get_connection()
     try:
-        n_finep = importar_finep_editais(conn)
+        n_finep = seed_finep_manual(conn)
         n_bndes = seed_bndes_manual(conn)
         n_desenvolve_sp = seed_desenvolve_sp_manual(conn)
         n_bnb = seed_bnb_manual(conn)
@@ -3179,7 +3329,7 @@ def build_linhas_incentivadas():
     finally:
         conn.close()
     print(
-        f"linhas_incentivadas: {n_finep} da FINEP (editais_raw) + {n_bndes} do BNDES + "
+        f"linhas_incentivadas: {n_finep} da FINEP (curadoria manual verificada) + {n_bndes} do BNDES + "
         f"{n_desenvolve_sp} da Desenvolve SP + {n_bnb} do BNB (curadoria manual verificada) "
         f"processadas -- {total} linhas no total."
     )
