@@ -11,8 +11,9 @@ Prioridade de ranking (da mais forte para a mais fraca -- ver PRIORIDADE_MOTIVO)
 1. Correspondencia exata/prefixo com CNPJ ou nome do cliente.
 2. Correspondencia com setor/subsetor/segmento (CNAE).
 3. Correspondencia com produto/instrumento/indexador.
-4. Correspondencia no texto completo (full-text search, inclui sinonimos/taxonomia).
-5. Correspondencia aproximada por trigrama (tolera erro de digitacao / nome parecido).
+4. Correspondencia de FRASE (ordem das palavras preservada) no texto completo.
+5. Correspondencia por QUALQUER palavra (OR) no texto completo, inclui sinonimos/taxonomia.
+6. Correspondencia aproximada por trigrama (tolera erro de digitacao / nome parecido).
 """
 import re
 
@@ -27,8 +28,9 @@ PRIORIDADE_MOTIVO = {
     1: "Correspondência exata com CNPJ ou nome da empresa",
     2: "Correspondência com setor, subsetor ou segmento (CNAE)",
     3: "Correspondência com produto, instrumento ou indexador",
-    4: "Correspondência no texto completo (descrição, sinônimos e taxonomia)",
-    5: "Correspondência aproximada (nome parecido, possível erro de digitação)",
+    4: "Correspondência de frase no texto completo (descrição, sinônimos e taxonomia)",
+    5: "Correspondência por palavra no texto completo (descrição, sinônimos e taxonomia)",
+    6: "Correspondência aproximada (nome parecido, possível erro de digitação)",
 }
 
 LIMIAR_SIMILARIDADE_TRGM = 0.25
@@ -118,6 +120,15 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
     palavras = [p for p in query.split() if p.lower() not in PALAVRAS_GENERICAS_QUERY] or query.split()
     uf_detectada, palavras = _extrair_uf(palavras)
     query_fts = " or ".join(palavras) or query
+    # Frase (tier 4): mesmas palavras, mas em ORDEM -- phraseto_tsquery exige que os
+    # lexemas apareçam ADJACENTES no documento (ignora stopwords no meio). Isso separa
+    # "parque de diversao" (deve achar o segmento oficial "PARQUES DE DIVERSAO E
+    # PARQUES TEMATICOS", onde os lexemas 'parqu' e 'diversa' sao vizinhos) de um
+    # falso-positivo tipo "parque eolico" (so bate a palavra solta "parque" via OR,
+    # nunca "parque" seguido de "diversao") -- confirmado empiricamente: sem essa
+    # tier, os dois ficavam empatados no mesmo tier 4 (agora 5), com "parque eolico"
+    # as vezes rankeando ACIMA por repetir "parque" em mais campos.
+    query_fts_frase = " ".join(palavras) or query
 
     conn = get_connection()
     try:
@@ -138,7 +149,8 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
                           OR unaccent(lower(coalesce(instrumento_financeiro,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
                           OR unaccent(lower(coalesce(indexador,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
                         THEN 3
-                        WHEN search_vector @@ websearch_to_tsquery('portuguese', unaccent(?)) THEN 4
+                        WHEN search_vector @@ phraseto_tsquery('portuguese', unaccent(?)) THEN 4
+                        WHEN search_vector @@ websearch_to_tsquery('portuguese', unaccent(?)) THEN 5
                         ELSE NULL
                     END AS prioridade,
                     ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', unaccent(?))) AS rank_fts
@@ -154,8 +166,9 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
             query,  # tier 1 cliente prefixo
             query, query, query,  # tier 2 setor/subsetor/segmento
             query, query, query,  # tier 3 produto/instrumento/indexador
-            query_fts,  # tier 4 fts (WHEN)
-            query_fts,  # tier 4 fts (rank_fts)
+            query_fts_frase,  # tier 4 frase (WHEN)
+            query_fts,  # tier 5 fts OR (WHEN)
+            query_fts,  # rank_fts (usa a query OR pra ordenar dentro de cada tier)
         ]
         if uf_detectada:
             params_principal.append(uf_detectada)
@@ -164,7 +177,7 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
 
         if len(rows) < MINIMO_ANTES_DE_TRIGRAMA:
             sql_trigrama = f"""
-                SELECT {", ".join(_COLS_OPERACAO)}, 5 AS prioridade,
+                SELECT {", ".join(_COLS_OPERACAO)}, 6 AS prioridade,
                     GREATEST(
                         similarity(unaccent(lower(cliente)), unaccent(lower(?))),
                         similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?)))
