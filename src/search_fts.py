@@ -101,6 +101,11 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
 
     cnpj_digitos = _so_digitos(query)
     eh_cnpj = len(cnpj_digitos) >= 8  # CNPJ parcial (raiz) ou completo (14 digitos)
+    # So usa o fragmento numerico no tier 1 (match de CNPJ) se ele proprio parecer um
+    # CNPJ (>=8 digitos): sem isso, uma query como "xyzabc123nada" extraia "123" e
+    # desse falso-positivo de "correspondencia exata" com qualquer CNPJ que comece
+    # com 123, no topo do ranking -- bug real encontrado ao validar a busca.
+    cnpj_para_match = cnpj_digitos if eh_cnpj else ""
 
     # websearch_to_tsquery, por padrao, combina palavras separadas por espaco com AND
     # (exige TODAS as palavras no mesmo documento) -- bom pra 2-3 palavras-chave, ruim
@@ -145,7 +150,7 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
             LIMIT ?
         """
         params_principal = [
-            cnpj_digitos, cnpj_digitos,  # tier 1 cnpj
+            cnpj_para_match, cnpj_para_match,  # tier 1 cnpj
             query,  # tier 1 cliente prefixo
             query, query, query,  # tier 2 setor/subsetor/segmento
             query, query, query,  # tier 3 produto/instrumento/indexador
