@@ -15,10 +15,17 @@ Quatro fontes hoje:
    navegando as 7 paginas de categoria (https://www.desenvolvesp.com.br/empresas/
    opcoes-de-credito/<categoria>), cada uma com prazo/carencia/taxa/elegibilidade
    estruturados na propria pagina publica.
-4. BNB (Banco do Nordeste): curadoria manual verificada -- 1 linha (FNE Inovação),
-   capturada da pagina oficial (estrutura rica: objetivo/publico/prazo por
-   finalidade/garantias/limites por porte). O FNE tem dezenas de linhas por
-   segmento/publico (rural, MPE, corporate, etc.) -- cobertura pequena e deliberada.
+4. BNB (Banco do Nordeste): curadoria manual verificada -- 23 linhas, capturadas
+   navegando o menu real de bnb.gov.br (pagina /fne + /mapa-do-site, sem API de
+   busca nem JS -- diferente do BNDES): 16 produtos FNE por segmento (Industrial,
+   Agrin, Agro Conectado, Aquipesca, Comercio e Servicos, Giro, Inovacao,
+   Irrigacao, MPE, P-Fies, Proatur, Proinfra, Rural, Saude Nordeste, Sol, Startup,
+   Verde), 1 linha de custeio agricola/pecuario (FNE), 4 produtos "Cartao BNB"
+   (FNE e/ou recursos proprios) e o FDNE (Fundo de Desenvolvimento do Nordeste,
+   gerido pela Sudene, BNB como agente operador -- nao e FNE). Nao encontrada
+   pagina publica para "FNE Exportacao" nem para uma linha isolada de "FNE Mulher
+   Negocios" (o beneficio a empresas controladas por mulheres e uma clausula
+   transversal dentro de cada linha, nao um produto proprio).
 
 Nenhuma das 4 fontes usa scraping automatizado continuo (so a FINEP tem uma API
 oficial estruturada ja consumida por outro modulo) -- BNDES/Desenvolve SP/BNB sao
@@ -2164,9 +2171,10 @@ def seed_desenvolve_sp_manual(conn) -> int:
 
 # BNB (Banco do Nordeste): curadoria manual VERIFICADA -- FNE Inovacao capturado ao
 # vivo da pagina oficial (estrutura rica: objetivo/publico/prazo por finalidade/
-# garantias/limites de financiamento por porte). Cobertura pequena e deliberada
-# (o catalogo completo do FNE tem dezenas de linhas por segmento/publico -- ver
-# docstring do modulo).
+# garantias/limites de financiamento por porte). Expandido em 2026-09-04 (ver
+# _BNB_MANUAL_EXPANSAO abaixo) navegando o menu real do site bnb.gov.br (pagina
+# /fne e /mapa-do-site) -- painel de link estatico, sem necessidade de API de
+# busca interna nem de JS para acordeons (diferente do BNDES).
 _BNB_MANUAL = [
     {
         "instituicao": "BNB",
@@ -2235,8 +2243,929 @@ _BNB_MANUAL = [
 ]
 
 
+def _linha_fne(
+    nome_oficial, descricao_resumida, descricao_completa, setores_elegiveis,
+    porte_elegivel, destinacao, itens_financiaveis, percentual_financiavel,
+    prazo_total, carencia, garantias, taxa_completa, url_slug, trecho_fonte,
+    *, sigla="FNE", valor_minimo=None, valor_maximo=None, contrapartida=NAO_INFORMADO,
+    indexador=NAO_INFORMADO, spread=NAO_INFORMADO, amortizacao=NAO_INFORMADO,
+    restricoes=NAO_INFORMADO,
+    criterios_elegibilidade="Cadastro e limite de crédito aprovados no Banco do Nordeste",
+    documentos_necessarios="Projeto de Financiamento ou Proposta de Crédito",
+    prazo_inscricao=NAO_INFORMADO, data_vigencia=NAO_INFORMADO,
+    setor_padronizado=NAO_INFORMADO, subsetor_padronizado=None, porte_padronizado=None,
+    destinacao_padronizada=None, temas_inovacao=None, temas_sustentabilidade=None,
+    sinonimos_termos=None, itens_nao_financiaveis=NAO_INFORMADO,
+    setores_nao_elegiveis=NAO_INFORMADO, faixa_receita=NAO_INFORMADO,
+    tipo_apoio="Financiamento", modalidade="Direta",
+    regiao_elegivel="Nordeste e Norte de Minas Gerais e Espírito Santo (área de atuação do FNE)",
+    agente_financeiro="Banco do Nordeste (Fundo Constitucional de Financiamento do Nordeste - FNE)",
+    canal_contratacao="Gerente de relacionamento / agências do Banco do Nordeste",
+    fluxo="continuo",
+):
+    """Helper pra reduzir repeticao das dezenas de linhas do FNE -- cada pagina de
+    produto em bnb.gov.br segue a MESMA estrutura estatica (Objetivo / Publico /
+    O que Financia / Fonte de Recursos / tabela Prazo x Finalidade x Carencia x
+    Total / Garantias / Juros e Bonus de Adimplencia / Limites de Financiamento /
+    Acesso ao Financiamento), sem paginacao JS nem acordeao -- diferente do BNDES.
+    Campos com estrutura tabular (prazo/carencia por finalidade, percentual por
+    porte) sao condensados em texto (mesmo padrao usado no FNE Inovacao original),
+    nunca inventados quando a pagina nao detalha."""
+    return {
+        "instituicao": "BNB",
+        "nome_oficial": nome_oficial,
+        "nome_simplificado": nome_oficial,
+        "sigla": sigla,
+        "status": "aberta",
+        "descricao_resumida": descricao_resumida,
+        "descricao_completa": descricao_completa,
+        "modalidade": modalidade,
+        "tipo_apoio": tipo_apoio,
+        "setores_elegiveis": setores_elegiveis,
+        "setores_nao_elegiveis": setores_nao_elegiveis,
+        "porte_elegivel": porte_elegivel,
+        "faixa_receita": faixa_receita,
+        "regiao_elegivel": regiao_elegivel,
+        "destinacao": destinacao,
+        "itens_financiaveis": itens_financiaveis,
+        "itens_nao_financiaveis": itens_nao_financiaveis,
+        "valor_minimo": valor_minimo,
+        "valor_maximo": valor_maximo,
+        "percentual_financiavel": percentual_financiavel,
+        "contrapartida": contrapartida,
+        "taxa_completa": taxa_completa,
+        "indexador": indexador,
+        "spread": spread,
+        "prazo_total": prazo_total,
+        "carencia": carencia,
+        "amortizacao": amortizacao,
+        "garantias": garantias,
+        "restricoes": restricoes,
+        "criterios_elegibilidade": criterios_elegibilidade,
+        "agente_financeiro": agente_financeiro,
+        "canal_contratacao": canal_contratacao,
+        "prazo_inscricao": prazo_inscricao,
+        "fluxo": fluxo,
+        "documentos_necessarios": documentos_necessarios,
+        "url_oficial": url_slug,
+        "data_vigencia": data_vigencia,
+        "trecho_fonte": trecho_fonte,
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": setor_padronizado,
+        "subsetor_padronizado": subsetor_padronizado,
+        "cnaes_relacionados": None,
+        "porte_padronizado": porte_padronizado or porte_elegivel,
+        "destinacao_padronizada": destinacao_padronizada or destinacao,
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": temas_inovacao,
+        "temas_sustentabilidade": temas_sustentabilidade,
+        "sinonimos_termos": sinonimos_termos,
+    }
+
+
+# Expansao de 2026-09-04: navegado o menu real de bnb.gov.br (pagina /fne lista os
+# hrefs /fne-<produto>; /mapa-do-site confirma nao haver outras linhas FNE fora
+# desse menu). 17 produtos FNE (alem do FNE Inovacao ja existente) + 1 linha de
+# custeio agricola/pecuario (FNE) + 4 produtos "Cartao BNB" (FNE e/ou recursos
+# proprios) + o FDNE (Fundo de Desenvolvimento do Nordeste, gerido pela Sudene,
+# NAO e FNE -- BNB atua como agente operador). NAO encontradas paginas
+# publicamente navegaveis para "FNE Exportacao" nem para uma linha isolada de
+# "FNE Mulher Negocios" -- o beneficio para empresas controladas por mulheres
+# (carencia/prazo adicional, capital de giro ampliado) aparece como CLAUSULA
+# TRANSVERSAL dentro de cada linha acima, nao como produto proprio; "Agroamigo
+# Sol" (microcredito Pronaf para agricultura familiar) e "Prodeter" (metodologia
+# de desenvolvimento territorial, sem termos de credito) foram verificados e
+# EXCLUIDOS por estarem fora do escopo de credito empresarial/produtivo do FNE
+# coberto pelas demais fontes deste catalogo.
+_BNB_MANUAL_EXPANSAO = [
+    _linha_fne(
+        "FNE Industrial",
+        "Programa de Apoio ao Setor Industrial do Nordeste, com recursos do FNE.",
+        "Desenvolver o setor industrial, por meio da modernização, aumento da competitividade, "
+        "ampliação da capacidade produtiva e inserção internacional.",
+        "Indústria", "Pequena-média Empresa, Média Empresa, Grande Empresa",
+        "Modernização, aumento da competitividade, ampliação da capacidade produtiva e inserção "
+        "internacional do setor industrial",
+        "Investimentos, inclusive aquisição de empreendimentos com unidades industriais já construídas "
+        "ou em construção; construção/reforma/ampliação de benfeitorias e instalações (vedada reforma de "
+        "moradia); pesquisa mineral e caracterização de minérios; aquisição de veículos utilitários; "
+        "modernização de máquinas e equipamentos; móveis e utensílios; aquisição de imóvel urbano com "
+        "edificações concluídas para empresas com faturamento até R$ 16 milhões; reforma/requalificação/"
+        "retrofit de prédios degradados em áreas centrais/históricas; consultorias de acompanhamento e "
+        "monitoramento de impactos sociais e ambientais; capital de giro associado ao investimento",
+        "Pequena-Média (receita R$ 4,8mi-R$16mi): 90 a 100% (mínimo de recursos próprios até 10%); "
+        "Média I (R$16mi-R$90mi): 80 a 95% (mínimo 5 a 20%); Média II (R$90mi-R$300mi): 70 a 85% "
+        "(mínimo 15 a 30%); Grande PRDNE (>R$300mi): 70 a 80% (mínimo 20 a 30%); Grande (>R$300mi): 50% "
+        "(mínimo 50%); projetos aderentes ao PTE ou às missões nº1/3/4/5 da Nova Indústria Brasil: até "
+        "100%, independente do porte. Capital de giro associado limitado a 1/3 do total financiado (40% "
+        "para empresas controladas por mulheres com participação >40%).",
+        "Investimentos Fixos e Mistos: até 12 anos; projetos de alta relevância/estruturantes no "
+        "Semiárido, municípios de baixa renda/estagnados ou áreas prioritárias do PRDNE: até 15 anos; "
+        "Aquisição de Móveis e Utensílios: até 6 anos; Aquisição Isolada de Meios de Transportes: até 8 "
+        "anos; Aquisição Isolada de Ônibus/Micro-ônibus/Caminhões: até 10 anos",
+        "Investimentos Fixos e Mistos: até 4 anos; projetos de alta relevância: até 5 anos; demais "
+        "finalidades isoladas: até 1 ano; +1 a 2 anos adicionais para empresas controladas por mulheres "
+        "ou com participação acionária feminina superior a 40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-industrial",
+        "\"Desenvolver o setor industrial, por meio da modernização, aumento da competitividade, "
+        "ampliação da capacidade produtiva e inserção internacional... Fonte de Recursos: Fundo "
+        "Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em "
+        "2026-09-04)",
+        setor_padronizado="INDUSTRIA",
+        sinonimos_termos="industria industrial modernizacao competitividade nordeste",
+    ),
+    _linha_fne(
+        "FNE Agrin",
+        "Programa de Financiamento para Comercialização, Beneficiamento ou Industrialização de Produtos "
+        "de Origem Agropecuária, com recursos do FNE.",
+        "Desenvolver o segmento agroindustrial por meio da expansão, diversificação e aumento da "
+        "competitividade das empresas.",
+        "Agroindústria", "Pequeno-médio Produtor, Médio Produtor, Grande Produtor, Pequena-média "
+        "Empresa, Média Empresa, Grande Empresa, Cooperativas Rurais, Associações Rurais",
+        "Comercialização, beneficiamento ou industrialização de produtos de origem agropecuária",
+        "Aquisição de bens de capital e implantação/modernização/reforma/relocalização/ampliação de "
+        "empreendimentos agroindustriais; construção para reforma e ampliação de benfeitorias e "
+        "instalações; aquisição de veículos utilitários; modernização de máquinas e equipamentos; frete "
+        "para transporte e montagem de máquinas e equipamentos financiados; aquisição de móveis e "
+        "utensílios; elaboração de estudos ambientais; prêmios de seguro dos bens dados em garantia; "
+        "aquisição da produção agropecuária para industrialização ou beneficiamento; aquisição/ampliação/"
+        "modernização/reforma/construção de estruturas de armazenagem (armazéns, silos, câmaras frias); "
+        "aquisição de imóvel urbano para empresas com faturamento até R$ 16 milhões; capital de giro "
+        "associado ao investimento",
+        "Pequena-Média: 90 a 100% (mínimo até 10%); Média I: 80 a 95% (mínimo 5 a 20%); Média II: 70 a "
+        "85% (mínimo 15 a 30%); Grande PRDNE: 70 a 80% (mínimo 20 a 30%); Grande: 50% (mínimo 50%); "
+        "projetos PTE ou Nova Indústria Brasil (missões 1/3/4/5): até 100%. Capital de giro associado "
+        "limitado a 1/3 do total financiado (40% para empresas controladas por mulheres >40%).",
+        "Investimentos Fixos e Mistos: até 12 anos; projetos de alta relevância/semiárido/áreas "
+        "prioritárias PRDNE: até 15 anos; estruturas de armazenagem: até 15 anos; móveis e utensílios: "
+        "até 6 anos; meios de transporte isolados: até 8 anos; capital de giro: até 8 meses",
+        "Investimentos Fixos e Mistos: até 4 anos; alta relevância/armazenagem: até 5 anos; móveis e "
+        "utensílios/meios de transporte: até 1 ano; capital de giro: sem carência específica informada; "
+        "+1 a 2 anos adicionais para empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-agrin",
+        "\"Desenvolver o segmento agroindustrial por meio da expansão, diversificação e aumento da "
+        "competitividade das empresas... Fonte de Recursos: Fundo Constitucional de Financiamento do "
+        "Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="agroindustria beneficiamento industrializacao produtos agropecuarios",
+    ),
+    _linha_fne(
+        "FNE Agro Conectado",
+        "Iniciativa de incentivo à conexão no campo, com recursos do FNE.",
+        "Possibilitar a conexão no campo por meio do financiamento de equipamentos e estruturas de "
+        "ligação à internet e de programas de software para incorporação de novas tecnologias de "
+        "informação e comunicação (TIC) em empreendimentos rurais.",
+        "Agronegócio", "Produtores Rurais, Associações Rurais, Cooperativas Rurais",
+        "Conectividade no meio rural",
+        "Estação Rádio Base (torre/poste, antenas e rádios transmissores); equipamentos de ponto de "
+        "acesso (eNodeB LTE, NB-IoT, Access Point Wi-Fi); infraestrutura civil/elétrica/climatização/"
+        "cabeamento/rack/nobreak para instalação dos equipamentos; dispositivos de última milha "
+        "(roteadores, switches, conversores ópticos, rádios clientes, terminais de conectividade em "
+        "máquinas agrícolas, computadores, dispositivos móveis, backhaul); softwares de gestão e "
+        "controle; serviços de instalação; torres e antenas de transmissão/recepção; outros itens "
+        "relacionados à conectividade no meio rural",
+        NAO_INFORMADO,
+        "Investimento Fixo (Setor Rural): até 15 anos; Investimento Semifixo (Setor Rural): até 8 anos; "
+        "Investimento Fixo e Misto (Setores Não Rurais): até 15 anos",
+        "Investimento Fixo (Rural): até 5 anos; Investimento Semifixo (Rural): até 3 anos; Investimento "
+        "Fixo e Misto (Não Rural): até 5 anos; +1 a 2 anos adicionais para produtoras rurais/empresas "
+        "controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/fne-agro-conectado",
+        "\"Possibilitar a conexão no campo por meio do financiamento de equipamentos e estruturas de "
+        "ligação à internet... Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste "
+        "(FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="conectividade rural internet banda larga campo tic",
+    ),
+    _linha_fne(
+        "FNE Aquipesca",
+        "Programa de Apoio ao Desenvolvimento da Aquicultura e Pesca, com recursos do FNE.",
+        "Desenvolver a aquicultura e pesca por meio do fortalecimento e modernização da infraestrutura "
+        "produtiva, embarcações oceânicas, uso sustentável dos recursos pesqueiros e preservação do "
+        "meio ambiente.",
+        "Agronegócio (aquicultura e pesca)", "Miniprodutor Rural, Pequeno-médio Produtor, Médio "
+        "Produtor, Grande Produtor, Empresas, Cooperativas Rurais, Associações Rurais",
+        "Aquicultura e pesca",
+        "Implantação, ampliação, modernização e reforma de empreendimentos de aquicultura e pesca "
+        "(investimentos fixos e semifixos), inclusive produção de insumos, beneficiamento, preparação, "
+        "comercialização, armazenamento e embarcações oceânicas; aquisição/ampliação/modernização/"
+        "reforma/construção de estruturas de armazenagem; consultorias de acompanhamento e monitoramento "
+        "de impactos sociais e ambientais",
+        "Miniprodutor (receita até R$360mil): 100%; Pequeno produtor (até R$4,8mi): 100%; "
+        "Pequeno-médio (R$4,8mi-R$16mi): 90 a 100% (mínimo até 10%); Médio I (R$16mi-R$90mi): 80 a 95% "
+        "(mínimo 5 a 20%); Médio II (R$90mi-R$300mi): 70 a 85% (mínimo 15 a 30%); Grande PRDNE "
+        "(>R$300mi): 70 a 80% (mínimo 20 a 30%); Grande (>R$300mi): 50% (mínimo 50%)",
+        "Investimentos fixos: até 12 anos; investimentos semifixos: até 8 anos; construção/substituição "
+        "de embarcação oceânica: até 20 anos; aquisição de embarcação oceânica: até 20 anos; "
+        "modernização de embarcação: até 10 anos; conversão de embarcação: até 15 anos; equipagem de "
+        "embarcação: até 5 anos; reparo de embarcações: até 3 anos",
+        "Investimentos fixos: até 4 anos; investimentos semifixos: até 3 anos; construção/substituição "
+        "de embarcação: até 4 anos; aquisição de embarcação: até 2 anos; modernização de embarcação: até "
+        "3 anos; conversão de embarcação: até 4 anos; equipagem: até 3 anos; reparo: até 2 anos; +1 a 2 "
+        "anos adicionais para produtoras rurais/empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.329/2026.",
+        "https://www.bnb.gov.br/fne-aquipesca",
+        "\"Desenvolver a aquicultura e pesca por meio do fortalecimento e modernização da infraestrutura "
+        "produtiva, embarcações oceânicas, uso sustentável dos recursos pesqueiros e preservação do meio "
+        "ambiente... Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste (FNE)\" "
+        "(capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="aquicultura pesca embarcacoes oceanicas piscicultura",
+    ),
+    _linha_fne(
+        "FNE Comércio e Serviços",
+        "Programa de Financiamento para os Setores Comercial e de Serviços, com recursos do FNE.",
+        "Desenvolver os setores de comércio e serviços, apoiando a integração, a estruturação e o "
+        "aumento da competitividade.",
+        "Comércio e Serviços", "Pequena-média Empresa, Média Empresa, Grande Empresa (comércio e "
+        "prestação de serviços)",
+        "Integração, estruturação e aumento da competitividade dos setores de comércio e serviços",
+        "Aquisição de bens de capital e implantação/modernização/reforma/relocalização/ampliação de "
+        "empreendimentos; construção/reforma/ampliação de benfeitorias e instalações; móveis e "
+        "utensílios; veículos utilitários; carros de passeio para autoescola/locadoras (pequeno-médio "
+        "porte); embarcações; complexos prisionais de ressocialização via PPP; frete para transporte e "
+        "montagem de máquinas e equipamentos; estudos ambientais; prêmios de seguro; imóvel urbano para "
+        "empresas com faturamento até R$ 16 milhões; software nacional ou importado; consultorias de "
+        "acompanhamento de impactos sociais e ambientais; capital de giro associado ao investimento",
+        "Pequeno-Médio: 90 a 100% (mínimo até 10%); Médio I: 80 a 95% (mínimo 5 a 20%); Médio II: 70 a "
+        "85% (mínimo 15 a 30%); Grande PRDNE: 70 a 80% (mínimo 20 a 30%); Grande: 50% (mínimo 50%). "
+        "Capital de giro associado limitado a 1/3 do total financiado (40% para empresas controladas "
+        "por mulheres >40%).",
+        "Reforma/Reparação de Embarcações: até 5 anos; Móveis e Utensílios: até 6 anos; Meios de "
+        "Transporte: até 8 anos; Veículos para Locadora: até 3 anos; Aquisição/Conversão/Modernização de "
+        "Embarcações: até 12 anos; projetos de alta relevância/semiárido/PRDNE: até 15 anos; Serviços de "
+        "Complexos Prisionais via PPP: até 20 anos; demais Investimentos Fixos e Mistos: até 12 anos; "
+        "Ônibus/Micro-ônibus/Caminhão: até 10 anos",
+        "Reforma/Reparação de Embarcações: até 2 anos; Móveis e Utensílios/Meios de Transporte/Ônibus: "
+        "até 1 ano; Veículos para Locadora: até 3 meses; Embarcações/alta relevância: até 4-5 anos; "
+        "Complexos Prisionais: até 5 anos; demais Investimentos Fixos e Mistos: até 4 anos; +1 a 2 anos "
+        "adicionais para empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-comercio-e-servicos",
+        "\"Desenvolver os setores de comércio e serviços, apoiando a integração, a estruturação e o "
+        "aumento da competitividade... Fonte de Recursos: Fundo Constitucional de Financiamento do "
+        "Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="COMERCIO/SERVICOS",
+        sinonimos_termos="comercio servicos varejo prestacao de servicos",
+    ),
+    _linha_fne(
+        "FNE Giro",
+        "Programa de Financiamento da Aquisição Isolada de Matérias-Primas, Insumos, Mercadorias e "
+        "Gastos Gerais para o Funcionamento do Empreendimento, com recursos do FNE.",
+        "Apoiar a produção industrial e agroindustrial e as atividades turística, comercial, de "
+        "prestação de serviços e de infraestrutura da Região, exceto para Empresas de Médio e Grande "
+        "Porte.",
+        "Comércio, Turismo, Prestação de Serviços, Indústria, Cooperativas Rurais",
+        "Microempresa, Pequena Empresa, Microempreendedor Individual, Cooperativas Rurais",
+        "Capital de giro para aquisição isolada de matérias-primas, insumos, mercadorias e gastos gerais "
+        "de funcionamento",
+        "Matérias-primas e insumos do processo produtivo de indústrias/agroindústrias; mercadorias "
+        "(inclusive máquinas, veículos, aeronaves, embarcações ou equipamentos) para constituição de "
+        "estoques de empresas comerciantes; insumos de empresas de prestação de serviços (inclusive "
+        "turísticas e de infraestrutura); gastos gerais na modalidade ressarcimento/reembolso (folha de "
+        "pagamento exceto tributos, água/energia/comunicação, combustíveis e lubrificantes, manutenção "
+        "de veículos/máquinas/equipamentos, postagem e frete, aluguel e condomínio)",
+        NAO_INFORMADO,
+        "Até 36 meses",
+        "Até 6 meses",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor, Fundo de Liquidez",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/fne-giro",
+        "\"Apoiar a produção industrial e agroindustrial e as atividades turística, comercial, de "
+        "prestação de serviços e de infraestrutura da Região, exceto para Empresas de Médio e Grande "
+        "Porte... Financiamento: Até 06 (seis) meses de carência / Até 36 meses\" (capturado ao vivo da "
+        "página oficial em 2026-09-04)",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (industria/agroindustria/comercio/turismo/servicos), sem 1 setor honesto
+        sinonimos_termos="capital de giro materias primas insumos mercadorias mpe",
+    ),
+    _linha_fne(
+        "FNE Irrigação",
+        "Programa de Financiamento à Agropecuária Irrigada, com recursos do FNE.",
+        "Desenvolver a agropecuária irrigada na área de atuação da Sudene, visando à diversificação das "
+        "atividades produtivas, adoção de práticas sustentáveis, utilização de tecnologias modernas e "
+        "ecoeficientes e o incremento da oferta de alimentos e matérias-primas agroindustriais.",
+        "Agronegócio (agropecuária irrigada)", "Miniprodutor, Pequeno Produtor, Pequeno-médio Produtor, "
+        "Médio Produtor, Grande Produtor, Associações Rurais, Cooperativas Rurais",
+        "Agropecuária irrigada",
+        "Elaboração de projetos básicos e executivos de irrigação/drenagem e estudos ambientais e "
+        "investimentos das condicionantes de licenças ambientais; investimentos para viabilização de "
+        "projetos de irrigação e drenagem (inclusive mitigação de impactos e controle ambiental); "
+        "capacitação tecnológica, treinamento e qualificação profissional até a fase pré-produtiva; "
+        "aquisição/ampliação/modernização/reforma/construção de estruturas de armazenagem; consultorias "
+        "de acompanhamento de impactos sociais e ambientais",
+        "Miniprodutor: 100%; Pequeno produtor: 100%; Pequeno-médio: 90 a 100% (mínimo até 10%); Médio I: "
+        "80 a 95% (mínimo 5 a 20%); Médio II: 70 a 85% (mínimo 15 a 30%); Grande PRDNE: 70 a 80% (mínimo "
+        "20 a 30%); Grande: 50% (mínimo 50%)",
+        "Projetos público-privados: até 20 anos; projetos de perímetros irrigados: até 24 anos; "
+        "investimentos fixos: até 15 anos; investimentos semifixos: até 10 anos; acessórios/peças de "
+        "reposição/manutenção: até 2 anos; utensílios agrícolas isolados: até 5 anos",
+        "Projetos público-privados/perímetros irrigados: até 4 anos; investimentos fixos: até 4 anos; "
+        "investimentos semifixos: até 3 anos; acessórios/manutenção: até 1 ano; utensílios agrícolas: "
+        "até 1 ano; +1 a 2 anos adicionais para produtoras rurais/empresas controladas por mulheres com "
+        "participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.329/2026.",
+        "https://www.bnb.gov.br/fne-irrigacao",
+        "\"Desenvolver a agropecuária irrigada na área de atuação da Sudene... Fonte de Recursos: Fundo "
+        "Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em "
+        "2026-09-04)",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="irrigacao drenagem agropecuaria irrigada perimetros irrigados",
+    ),
+    _linha_fne(
+        "FNE MPE",
+        "Programa de Financiamento às Microempresas, Empresas de Pequeno Porte e ao Empreendedor "
+        "Individual, com recursos do FNE.",
+        "Desenvolver as microempresas, empresas de pequeno porte e microempreendedores individuais "
+        "(MEIs) dos setores industrial, agroindustrial, mineração, turismo, comércio, prestação de "
+        "serviços e empreendimentos culturais, bem como a produção, circulação, divulgação e "
+        "comercialização de produtos e serviços culturais.",
+        "Industrial, Agroindustrial, Mineração, Turismo, Comércio, Prestação de Serviços, Cultural",
+        "Microempresa, Pequena Empresa, Microempreendedor Individual (MEI)",
+        "Modernização, implantação, ampliação e capital de giro de micro e pequenas empresas e MEIs",
+        "Aquisição de bens de capital e implantação/modernização/reforma/relocalização/ampliação; "
+        "construção/reforma/ampliação de benfeitorias (exceto moradia); retrofit de prédios degradados "
+        "em áreas centrais/históricas via PPP; veículos necessários ao funcionamento; máquinas e "
+        "equipamentos e sua modernização; frete e montagem; unidades industriais construídas ou em "
+        "construção; imóvel com edificações concluídas em área urbana; estudos ambientais; capital de "
+        "giro associado ao investimento (exceto MEI); aquisição de produção agropecuária de produtores "
+        "financiados pelo BNB via termos de parceria; adequação à LGPD (Lei nº 13.709/2018)",
+        "Micro (receita até R$360mil): 100%; Pequeno (até R$4,8mi): 100%; MEI: até R$ 60 mil somadas "
+        "todas as finalidades (capital de giro + investimento); MEI Transportador Autônomo de Cargas: "
+        "até R$ 150 mil; MEI Transportador Autônomo de Passageiros: até R$ 100 mil; MEI demais casos: "
+        "até a margem disponível no limite de crédito do cliente. Capital de giro associado limitado a "
+        "1/3 do total financiado (40% para empresas controladas por mulheres >40%).",
+        "MEI: até 60 meses; MEI Transportador Autônomo de Cargas: até 10 anos; embarcações de "
+        "passageiros para MPE: até 5-15 anos; hotéis e meios de hospedagem para MPE: até 20 anos; "
+        "embarcações de transporte de cargas/coletivo: até 12 anos; imóveis urbanos: até 15 anos; "
+        "veículos para locadoras: até 3 anos; meio de transporte isolado: até 8 anos; móveis e "
+        "utensílios: até 6 anos; investimentos fixos e mistos (turismo): até 15 anos; investimentos "
+        "fixos e mistos (indústria/agroindústria/comércio/serviços): até 12 anos; ônibus/micro-ônibus/"
+        "caminhão: até 10 anos; adequação LGPD: até 6 anos",
+        "MEI: até 3 meses; MEI Transportador de Cargas: até 1 ano; embarcações de passageiros: até 2-5 "
+        "anos; hotéis: até 5 anos; embarcações de transporte: até 4 anos; capital de giro para aquisição "
+        "de produção agropecuária: sem carência; veículos para locadoras: até 3 meses; meio de "
+        "transporte isolado/móveis e utensílios/ônibus/adequação LGPD: até 1 ano; investimentos fixos e "
+        "mistos: até 4-5 anos; +1 a 2 anos adicionais para empresas controladas por mulheres com "
+        "participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-mpe",
+        "\"Desenvolver as microempresas, empresas de pequeno porte e de microempreendedores individuais "
+        "(MEIs) dos setores industrial, agroindustrial, mineração, turismo, comércio, prestação de "
+        "serviços e empreendimentos culturais... Fonte de Recursos: Fundo Constitucional de "
+        "Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        criterios_elegibilidade="Cadastro e limite de crédito aprovados no Banco do Nordeste",
+        documentos_necessarios="Proposta de Crédito",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (varios setores + cultura), sem 1 setor honesto
+        sinonimos_termos="micro pequena empresa mei microempreendedor individual mpe",
+    ),
+    _linha_fne(
+        "FNE P-Fies",
+        "Programa de Financiamento Estudantil com recursos do FNE, para mensalidades de cursos "
+        "superiores não gratuitos.",
+        "Financiar estudantes regularmente matriculados em cursos superiores não gratuitos e com "
+        "avaliação positiva nos processos conduzidos pelo Ministério da Educação.",
+        NAO_INFORMADO, "Pessoa Física (estudante)",
+        "Financiamento estudantil (mensalidades de ensino superior)",
+        "Mensalidades de instituições de ensino de cursos superiores não gratuitos, incluindo unidades "
+        "de ensino de educação profissional, técnica e tecnológica",
+        "Até 100% do valor da mensalidade; durante o curso, o estudante paga apenas 35% do valor da "
+        "mensalidade mais os juros (\"Parcela Reduzida\")",
+        "Até três vezes o tempo de permanência do estudante na condição de financiado, tendo como "
+        "referência o período regular de duração do curso",
+        "Sem carência; o pagamento é iniciado a partir do segundo mês de financiamento",
+        "Aval, Hipoteca",
+        "Conforme Resolução CMN nº 4.642, de 28/02/2018.",
+        "https://www.bnb.gov.br/fne-p-fies",
+        "\"Financiar estudantes regularmente matriculados em cursos superiores não gratuitos e com "
+        "avaliação positiva nos processos conduzidos pelo Ministério da Educação... Fonte de Recursos: "
+        "Fundo Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial "
+        "em 2026-09-04)",
+        criterios_elegibilidade="Estudante matriculado em instituição de ensino conveniada, com renda "
+        "própria ou dependência financeira de responsável com cadastro ativo no Banco do Nordeste",
+        documentos_necessarios="Identificação e CPF, comprovante de endereço, comprovante de renda ou "
+        "declaração de dependência financeira, DRI (Documento de Regularidade de Inscrição) emitido pela "
+        "instituição de ensino, documentação do avalista/responsável financeiro",
+        canal_contratacao="Portal do aluno (solicitação digital) / agências do Banco do Nordeste",
+        setor_padronizado=NAO_INFORMADO,  # credito pessoa fisica (educacao), fora da taxonomia setorial empresarial
+        sinonimos_termos="fies financiamento estudantil ensino superior mensalidades pessoa fisica",
+    ),
+    _linha_fne(
+        "FNE Proatur",
+        "Programa de Apoio ao Turismo Regional, com recursos do FNE.",
+        "Integrar e fortalecer a cadeia produtiva do turismo, contribuindo para a geração de emprego e "
+        "para o desenvolvimento das potencialidades turísticas da região.",
+        "Turismo", "Pequena-média Empresa, Média Empresa, Grande Empresa (setor de turismo)",
+        "Integração e fortalecimento da cadeia produtiva do turismo",
+        "Investimentos, inclusive aquisição de meios de hospedagem já construídos ou em construção; "
+        "construção/reforma/ampliação de benfeitorias e instalações; aquisição de veículos; aquisição/"
+        "conversão/modernização/reforma/reparação de embarcações de transporte turístico de passageiros; "
+        "móveis e utensílios; imóvel urbano para empresas com faturamento até R$ 16 milhões; shoppings e "
+        "outlets em cidades das Rotas Estratégicas do Turismo (MTur), exceto capitais; consultorias de "
+        "acompanhamento de impactos sociais e ambientais; capital de giro associado ao investimento fixo",
+        "Pequena-média: 90 a 100% (mínimo até 10%); Média I: 80 a 95% (mínimo 5 a 20%); Média II: 70 a "
+        "85% (mínimo 15 a 30%); Grande PRDNE: 70 a 80% (mínimo 20 a 30%); Grande: 50% (mínimo 50%). "
+        "Capital de giro associado limitado a 1/3 do total financiado (40% para empresas controladas "
+        "por mulheres >40%).",
+        "Meios de transporte isolados (exceto embarcações): até 8 anos; veículos para locadoras: até 3 "
+        "anos; reforma/reparação de embarcação: até 5 anos; aquisição/conversão/modernização de "
+        "embarcações de transporte turístico: até 15 anos; implantação de hotéis e meios de hospedagem: "
+        "até 20 anos; móveis e utensílios: até 6 anos; ônibus/micro-ônibus/caminhão: até 10 anos; "
+        "implantação de arenas multiuso: até 20 anos; demais investimentos fixos e mistos: até 15 anos",
+        "Meios de transporte isolados: até 1 ano; veículos para locadoras: até 3 meses; reforma/"
+        "reparação de embarcação: até 2 anos; embarcações de transporte turístico: até 5 anos; hotéis e "
+        "meios de hospedagem: até 5 anos; arenas multiuso: até 5 anos; demais investimentos fixos e "
+        "mistos: até 5 anos; +1 a 2 anos adicionais para empresas controladas por mulheres com "
+        "participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-proatur",
+        "\"Integrar e fortalecer a cadeia produtiva do turismo, contribuindo para a geração de emprego e "
+        "para o desenvolvimento das potencialidades turísticas da região... Fonte de Recursos: Fundo "
+        "Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em "
+        "2026-09-04)",
+        setor_padronizado="COMERCIO/SERVICOS", subsetor_padronizado="TURISMO",
+        sinonimos_termos="turismo hospedagem hoteis proatur cadeia produtiva turistica",
+    ),
+    _linha_fne(
+        "FNE Proinfra",
+        "Programa de Financiamento à Infraestrutura Complementar da Região Nordeste, com recursos do "
+        "FNE.",
+        "Ampliar serviços de infraestrutura econômica, dando sustentação às atividades produtivas da "
+        "região.",
+        "Infraestrutura", "Microempresa, Pequena Empresa, Pequena-média Empresa, Média Empresa, Grande "
+        "Empresa, Consórcios de Empresas, Empresas Públicas",
+        "Ampliação de serviços de infraestrutura econômica",
+        "Implantação, ampliação, modernização e reforma de empreendimentos; construção/reforma/ampliação "
+        "de benfeitorias e instalações (exceto moradias); veículos utilitários; máquinas e equipamentos; "
+        "frete e montagem; estudos ambientais; prêmios de seguro de bens em garantia; conectividade "
+        "(fibra óptica, banda larga, telefonia móvel, backbone); consultorias de acompanhamento de "
+        "impactos sociais e ambientais; capital de giro associado ao investimento",
+        "Micro (receita até R$360mil): 100%; Pequeno (até R$4,8mi): 100%; Pequeno-Médio: 90 a 100% "
+        "(mínimo até 10%); Médio I: 80 a 95% (mínimo 5 a 20%); Médio II: 70 a 85% (mínimo 15 a 30%); "
+        "Grande PRDNE: 70 a 80% (mínimo 20 a 30%); Grande: 50% (mínimo 50%); projetos PTE: até 100%. "
+        "Capital de giro associado limitado a 1/3 do total financiado (40% para empresas controladas "
+        "por mulheres >40%).",
+        "Investimentos Fixos e Mistos: até 12 anos; projetos de alta relevância/semiárido/PRDNE: até 15 "
+        "anos; casos excepcionais justificados: até 20 anos; geração/transmissão de energia, portos e "
+        "aeroportos: até 24 anos; distribuição de energia: até 20 anos; saneamento, mobilidade urbana, "
+        "rodovias, ferrovias e hidrovias: até 34 anos",
+        "Investimentos Fixos e Mistos: até 4 anos; alta relevância: até 5 anos; casos excepcionais: até "
+        "4 anos; geração/transmissão de energia, portos e aeroportos: até 8 anos; distribuição de "
+        "energia: até 8 anos; saneamento/mobilidade urbana/rodovias/ferrovias/hidrovias: até 8 anos; +1 "
+        "a 2 anos adicionais para empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-proinfra",
+        "\"Ampliar serviços de infraestrutura econômica, dando sustentação às atividades produtivas da "
+        "região... Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste (FNE)\" "
+        "(capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="INFRAESTRUTURA",
+        sinonimos_termos="infraestrutura energia saneamento portos aeroportos rodovias conectividade",
+    ),
+    _linha_fne(
+        "FNE Rural",
+        "Programa de Apoio ao Desenvolvimento Rural do Nordeste, com recursos do FNE.",
+        "Desenvolver a agropecuária e o setor florestal quando houver supressão de mata nativa, com a "
+        "observância da legislação ambiental, exceto os que envolvam irrigação e drenagem.",
+        "Agronegócio", "Produtores Rurais (todos os portes), Produtores de Sementes e Mudas, "
+        "Associações Rurais, Cooperativas Rurais",
+        "Agropecuária e setor florestal",
+        "Investimentos Fixos: construção/reforma/ampliação de benfeitorias e instalações permanentes, "
+        "destocamento, correção do solo (calagem e adubação intensiva); Investimentos Semifixos: "
+        "instalações, máquinas, implementos, equipamentos (inclusive beneficiamento/industrialização da "
+        "própria produção), tratores, colheitadeiras, veículos, embarcações, acessórios/peças de "
+        "reposição, aquisição de reprodutores e matrizes de bovinos/bubalinos/caprinos/ovinos/suínos",
+        "Miniprodutor (receita até R$360mil): 100%; Pequeno produtor (até R$4,8mi): 100%; Pequeno-médio: "
+        "90 a 100% (mínimo até 10%); Médio I: 80 a 95% (mínimo 5 a 20%); Médio II: 70 a 85% (mínimo 15 a "
+        "30%); Grande PRDNE: 70 a 80% (mínimo 20 a 30%); Grande: 50% (mínimo 50%)",
+        "Investimento Fixo: até 12 anos; Investimento Semifixo: até 8 anos; Investimento em Armazenagem: "
+        "até 15 anos; acessórios/peças de reposição/manutenção: até 2 anos; florestamento e "
+        "reflorestamento: até 16 anos; utensílios agrícolas isolados: até 6 anos; projetos de alta "
+        "relevância/PRDNE: até 15 anos; aeronave para pulverização agrícola: até 20 anos",
+        "Investimento Fixo: até 4 anos; Investimento Semifixo: até 3 anos; Armazenagem: até 5 anos; "
+        "acessórios/manutenção: até 1 ano; florestamento: até 7 anos; utensílios agrícolas: até 1 ano; "
+        "alta relevância: até 5 anos; aeronave de pulverização: até 4 anos; +1 a 2 anos adicionais para "
+        "produtoras rurais/empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.329/2026.",
+        "https://www.bnb.gov.br/fne-rural",
+        "\"Desenvolver a agropecuária e o setor florestal quando houver supressão de mata nativa, com a "
+        "observância da legislação ambiental, exceto os que envolvam irrigação e drenagem... Fonte de "
+        "Recursos: Fundo Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo da "
+        "página oficial em 2026-09-04)",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="agropecuaria pecuaria lavoura florestamento reflorestamento fne rural",
+    ),
+    _linha_fne(
+        "FNE Saúde Nordeste",
+        "Programa de Apoio ao Setor de Saúde do Nordeste, com recursos do FNE.",
+        "Fomentar o desenvolvimento do complexo econômico industrial da saúde, promovendo a "
+        "modernização, o aumento da competitividade, a ampliação da capacidade produtiva e da "
+        "capacidade de atendimento da cadeia produtiva do setor.",
+        "Saúde", "Microempresa, Pequena Empresa, Microempreendedor Individual, Pequena-média Empresa, "
+        "Média Empresa, Grande Empresa (setor de saúde)",
+        "Modernização e ampliação da capacidade produtiva e de atendimento do setor de saúde",
+        "Investimentos, inclusive aquisição de empreendimentos industriais/hospitalares já construídos "
+        "ou em construção; capital de giro associado ao investimento; construção/reforma/ampliação de "
+        "benfeitorias (vedada reforma de moradia); veículos utilitários; helicópteros e aviões para "
+        "transporte de passageiros enfermos; materiais/insumos/peças/componentes críticos ao setor; "
+        "investimentos em TIC (salas cirúrgicas inteligentes, controle remoto de pacientes, "
+        "telemedicina); desenvolvimento e produção de equipamentos e dispositivos médicos; modernização "
+        "(retrofitagem) de máquinas e equipamentos; móveis e utensílios isolados; consultorias de "
+        "acompanhamento de impactos sociais e ambientais",
+        "Micro e Pequena empresa: 100% (fora do Semiárido/RIDEs/PRDNE, qualquer tipologia); Pequena-"
+        "média: 90-100%; Média I: 80-95%; Média II: 70-85%; Grande considerada prioritária: 70-80% "
+        "(percentuais sobem para localização no Semiárido/RIDEs/PRDNE e tipologia de baixa/média renda, "
+        "chegando a 100% para micro/pequena). Capital de giro associado limitado a 1/3 do total "
+        "financiado (40% para empresas controladas por mulheres >40%).",
+        "Investimentos fixos e mistos: até 20 anos",
+        "Investimentos fixos e mistos: até 5 anos; +1 a 2 anos adicionais para empresas controladas por "
+        "mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor, Recebíveis",
+        "Conforme Resolução do Conselho Monetário Nacional (CMN) nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-saude-nordeste",
+        "\"Fomentar o desenvolvimento do complexo econômico industrial da saúde, promovendo a "
+        "modernização, o aumento da competitividade, a ampliação da capacidade produtiva e da capacidade "
+        "de atendimento da cadeia produtiva do setor... Fonte de Recursos: Fundo Constitucional de "
+        "Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado="COMERCIO/SERVICOS", subsetor_padronizado="SAÚDE",
+        sinonimos_termos="saude hospitalar complexo economico industrial da saude telemedicina",
+    ),
+    _linha_fne(
+        "FNE Sol",
+        "Programa de Financiamento à Micro e Minigeração Distribuída de Energia Elétrica e Sistemas "
+        "Off-grid, com recursos do FNE.",
+        "Financiar projetos de micro e minigeração distribuída de energia por fontes renováveis, "
+        "inclusive de forma isolada, para consumo próprio ou destinados à locação, reduzindo os custos "
+        "com energia elétrica de forma sustentável.",
+        NAO_INFORMADO, "Empresas, Produtores Rurais, Pessoa Física",
+        "Micro e minigeração distribuída de energia renovável",
+        "Todos os componentes dos sistemas de micro e minigeração de energia elétrica fotovoltaica, "
+        "eólica, de biomassa ou pequenas centrais hidroelétricas (PCH), bem como sua instalação",
+        "Até 100% do investimento, dependendo do porte, localização e garantias, com limite máximo de "
+        "R$ 100.000,00 para micro e minigeradores pessoa física",
+        "Empresas e Produtores Rurais: até 12 anos; Pessoa Física: até 8 anos; projetos de locação de "
+        "sistemas de micro e minigeração: até 24 anos",
+        "Empresas e Produtores Rurais: até 36 meses; Pessoa Física: até 6 meses; projetos de locação: "
+        "até 12 meses; +1 a 2 anos adicionais para empresas controladas por mulheres com participação "
+        "acionária superior a 40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca",
+        "Setor rural: conforme Resolução CMN nº 5.235/2025; demais setores: conforme Resolução CMN nº "
+        "5.013/2022.",
+        "https://www.bnb.gov.br/fne-sol",
+        "\"Financiar projetos de micro e minigeração distribuída de energia por fontes renováveis... "
+        "Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo "
+        "da página oficial em 2026-09-04)",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (empresas/produtores rurais/pessoa fisica), tema e energia, nao setor
+        temas_sustentabilidade="Energia solar, eólica, biomassa e PCH -- micro e minigeração distribuída",
+        sinonimos_termos="energia solar fotovoltaica eolica geracao distribuida fne sol",
+    ),
+    _linha_fne(
+        "FNE Startup",
+        "Programa de apoio a Startups, com recursos do FNE.",
+        "Fomentar o empreendedorismo, atraindo e mantendo na região capital humano e modelos de "
+        "negócios com alto potencial de crescimento, por meio de apoio a startups de base tecnológica.",
+        NAO_INFORMADO, "Microempresa, Pequena-média Empresa, Microempreendedor Individual (MEI)",
+        "Apoio a startups de base tecnológica",
+        "Despesas de remuneração de estagiários e colaboradores não vinculados à folha formal; pró-"
+        "labore de sócio(s) com dedicação exclusiva; treinamento e capacitação; coworking; aluguel de "
+        "equipamentos; contabilidade/advocacia/recrutamento/comissão de vendas; viagens e diárias; "
+        "propaganda, publicidade e paid ads; ferramentas de cadência de e-mails; armazenamento de dados "
+        "(cloud infrastructure) e TIC; capital de giro associado ao investimento",
+        "MEI: até R$ 60 mil; demais empresas: consultar agência mais próxima. Capital de giro associado "
+        "limitado a 1/3 do total financiado.",
+        "Até 8 anos",
+        "Até 2 anos",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Conforme Lei Federal nº 10.177, de 12/01/2001, e Resolução CMN nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-startup",
+        "\"Fomentar o empreendedorismo, atraindo e mantendo na região capital humano e modelos de "
+        "negócios com alto potencial de crescimento, por meio de apoio a startups de base tecnológica... "
+        "Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste (FNE)\" (capturado ao vivo "
+        "da página oficial em 2026-09-04)",
+        canal_contratacao="Questionário FNE Startup + agência do Banco do Nordeste",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (qualquer startup de base tecnologica), sem 1 setor honesto
+        temas_inovacao="Startups de base tecnológica, modelos de negócio de alto potencial de crescimento",
+        sinonimos_termos="startup base tecnologica empreendedorismo inovacao fne startup",
+    ),
+    _linha_fne(
+        "FNE Verde",
+        "Programa de Financiamento à Sustentabilidade Ambiental, com recursos do FNE.",
+        "Desenvolver empreendimentos e atividades econômicas que propiciam a preservação, a "
+        "conservação, o controle e a recuperação do meio ambiente, com foco na sustentabilidade e na "
+        "competitividade das empresas e cadeias produtivas.",
+        NAO_INFORMADO, "Produtores Rurais, Empresas, Cooperativas Rurais, Associações Rurais",
+        "Sustentabilidade ambiental",
+        "Uso sustentável de recursos florestais sem supressão de mata nativa; recuperação ambiental e "
+        "convivência com o semiárido; produção de base agroecológica/orgânica e transição agroecológica; "
+        "controle e prevenção da poluição e redução de emissão de gases do efeito estufa; energias "
+        "renováveis e eficiência energética (inclusive locação/arrendamento de geração centralizada); "
+        "eficiência no uso de materiais e obras civis sustentáveis; sistemas de armazenamento de "
+        "energia; planejamento e gestão ambiental; adequação a exigências legais/licenças ambientais; "
+        "capital de giro associado ao investimento (exceto setor rural); consultorias de acompanhamento "
+        "de impactos sociais e ambientais",
+        "Miniprodutor/MEI/microempresa: 100%; Pequeno produtor/pequena empresa: 100%; Pequeno-médio: 90 "
+        "a 100%; Médio I: 80 a 95%; Médio II: 70 a 85%; Grande PRDNE: 70 a 80%; Grande: 50%; projetos de "
+        "geração de energia renovável ou saneamento: até 100%, independente do porte e localização",
+        "Investimentos Fixos (Rural): até 12 anos; Investimentos Semifixos (Rural): até 8 anos; "
+        "Investimentos Fixos e Mistos (Não-rural): até 12 anos; regularização/recuperação de reserva "
+        "legal: até 20 anos; florestamento e reflorestamento: até 16 anos; saneamento básico "
+        "(infraestrutura): até 34 anos; geração de energia renovável: até 24 anos",
+        "Investimentos Fixos (Rural): até 4 anos; Investimentos Semifixos (Rural): até 3 anos; "
+        "Investimentos Fixos e Mistos (Não-rural): até 4 anos; regularização de reserva legal: até 12 "
+        "anos; florestamento: até 7 anos; saneamento: até 8 anos; geração de energia: até 8 anos; +1 a 2 "
+        "anos adicionais para produtoras rurais/empresas controladas por mulheres com participação >40%",
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "Setor rural: conforme Resolução CMN nº 5.329, de 14/07/2026; demais setores: conforme "
+        "Resolução CMN nº 5.013, de 28/04/2022.",
+        "https://www.bnb.gov.br/fne-verde",
+        "\"Desenvolver empreendimentos e atividades econômicas que propiciam a preservação, a "
+        "conservação, o controle e a recuperação do meio ambiente, com foco na sustentabilidade e na "
+        "competitividade das empresas e cadeias produtivas... Fonte de Recursos: Fundo Constitucional de "
+        "Financiamento do Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (rural e nao-rural, qualquer cadeia produtiva), tema e sustentabilidade
+        temas_sustentabilidade="Preservação/recuperação ambiental, agroecologia, energias renováveis, "
+        "eficiência energética, gestão ambiental",
+        sinonimos_termos="sustentabilidade ambiental meio ambiente agroecologia energia renovavel fne verde",
+    ),
+    _linha_fne(
+        "Custeio Agrícola e Pecuário - FNE",
+        "Recursos financeiros destinados ao custeio agrícola e pecuário, com recursos do FNE.",
+        "Suprimento de recursos financeiros destinados ao custeio, isolado e vinculado, das atividades "
+        "agrícolas e pecuárias, independentemente da existência de termo de parceria, convênio ou "
+        "protocolo entre o Banco e outras entidades.",
+        "Agronegócio", "Produtores Rurais, Cooperativas Rurais, Produtores de Sementes e Mudas",
+        "Custeio agrícola e pecuário",
+        "Gastos do ciclo produtivo de lavouras periódicas, entressafra e colheitas de lavouras "
+        "permanentes ou extração de produtos vegetais espontâneos/cultivados; soca e ressoca de cana-de-"
+        "açúcar; aquisição de silos (bags), limitada a 5% do valor do custeio; insumos para restauração "
+        "de reserva legal e áreas de preservação permanente; assessoria empresarial e técnica; aquisição "
+        "de insumos em qualquer época do ano (inclusive transporte e frete); bioinsumos do Programa "
+        "Nacional de Bioinsumos; manutenção de infraestrutura de rede/plataformas digitais; ciclo "
+        "produtivo de exploração pecuária (apicultura, avicultura, piscicultura, sericicultura, "
+        "aquicultura, pesca comercial, exceto bovinocultura); ciclo produtivo da bovinocultura (retenção "
+        "de crias, engorda em confinamento, recria e engorda a pasto)",
+        NAO_INFORMADO,
+        "Custeio agrícola para algodão colorido (BRS 200) na Paraíba: até 12 meses; extração de pó de "
+        "carnaúba: até 8 meses; demais custeios agrícolas: até 24 meses; retenção de crias bovinas: até "
+        "24 meses; aquisição de bovinos/bubalinos para engorda em confinamento: até 6 meses; recria e "
+        "engorda em regime extensivo: até 30 meses; engorda em regime extensivo: até 18 meses; "
+        "aquicultura: até 24 meses; pesca: até 18 meses; demais custeios pecuários: até 12 meses",
+        NAO_INFORMADO,
+        "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor, Seguro Rural",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/custeio-agricola-e-pecuario-fne",
+        "\"Suprimento de recursos financeiros destinados ao custeio, isolado e vinculado, das atividades "
+        "relacionadas nos subitens a seguir... Fonte de Recursos: Fundo Constitucional de Financiamento "
+        "do Nordeste (FNE)\" (capturado ao vivo da página oficial em 2026-09-04)",
+        canal_contratacao="Agências do Banco do Nordeste",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="custeio agricola pecuario safra lavoura bovinocultura",
+    ),
+    _linha_fne(
+        "Cartão BNB Agro",
+        "Crédito rotativo pré-aprovado com recursos do FNE para produtores rurais.",
+        "Facilitar a aquisição de colheitadeiras, tratores e microtratores, veículos, máquinas e "
+        "equipamentos para mecanização da produção rural.",
+        "Agronegócio", "Produtores Rurais, Produtores de Sementes e Mudas",
+        "Mecanização da produção rural via crédito rotativo em cartão",
+        "Colheitadeiras; tratores e microtratores; máquinas e equipamentos para mecanização; veículos; "
+        "peças de reposição para colheitadeira/trator/microtrator/máquinas/equipamentos/veículos; "
+        "serviço de manutenção associado à aquisição de peças; aeronaves para pulverização agrícola; "
+        "drones; equipamentos e itens de irrigação para reposição em sistemas existentes",
+        "Até 100% do valor dos bens a serem adquiridos; a depender do porte, o limite de crédito pode "
+        "ser de até R$ 30 milhões",
+        "Aeronave de Pulverização Agrícola: até 20 anos; Demais Itens Financiáveis: até 8 anos; "
+        "Utensílios Agrícolas: até 6 anos; Peças de Reposição e Manutenção: até 2 anos",
+        "Peças de Reposição e Manutenção/Utensílios Agrícolas/Aeronave/Demais Itens: até 1 ano",
+        "Alienação Fiduciária, Aval, Fundo de Liquidez, Limite de Crédito Garantido por Alienação "
+        "Fiduciária de Bem Imóvel, Limite de Crédito Garantido por Hipoteca",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/cartao-bnb-agro",
+        "\"Crédito rotativo pré-aprovado com recursos do FNE para produtores rurais... Até 100% do valor "
+        "dos bens a serem adquiridos. A depender do porte, o limite de crédito pode ser de até R$ 30 "
+        "milhões.\" (capturado ao vivo da página oficial em 2026-09-04)",
+        valor_maximo=30_000_000,
+        criterios_elegibilidade=NAO_INFORMADO,
+        documentos_necessarios=NAO_INFORMADO,
+        canal_contratacao="Agências do Banco do Nordeste",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="cartao bnb agro credito rotativo mecanizacao rural",
+    ),
+    _linha_fne(
+        "Cartão BNB Agro Custeio Pecuário",
+        "Crédito rotativo com recursos do FNE para custeio do setor pecuário, com agilidade e "
+        "comodidade.",
+        "Facilitar o crédito para aquisição de insumos do setor pecuário, proporcionando agilidade, "
+        "desburocratização, comodidade e eficiência.",
+        "Agronegócio (pecuária)", "Produtores Rurais",
+        "Custeio pecuário via crédito rotativo em cartão",
+        "Insumos veterinários (vacinas, medicamentos, sais minerais); rações formuladas, tortas, "
+        "farelos, raiz de mandioca, melaço, bagaço de cana, ureia, sulfato de amônia; insumos (ureia, "
+        "melaço e aditivos)",
+        "Até 100% do valor dos bens a serem adquiridos; a depender do porte, o limite de crédito pode "
+        "ser de até R$ 10 milhões",
+        "Até 24 meses",
+        "Sem carência",
+        "Aval, Hipoteca, Penhor, Limite de Crédito Garantido por Alienação Fiduciária de Bem Imóvel, "
+        "Limite de Crédito Garantido por Hipoteca",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/cartao-bnb-agro-custeio-pecuario",
+        "\"Facilitar o crédito para aquisição de insumos do setor pecuário, proporcionando agilidade, "
+        "desburocratização, comodidade e eficiência... A depender do porte, o limite de crédito pode ser "
+        "de até R$ 10 milhões.\" (capturado ao vivo da página oficial em 2026-09-04)",
+        valor_maximo=10_000_000,
+        criterios_elegibilidade=NAO_INFORMADO,
+        documentos_necessarios=NAO_INFORMADO,
+        canal_contratacao="Agências do Banco do Nordeste",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        sinonimos_termos="cartao bnb agro custeio pecuario insumos veterinarios",
+    ),
+    _linha_fne(
+        "Cartão BNB para Micro e Pequenas Empresas e Microempreendedores Individuais",
+        "Crédito rotativo pré-aprovado para aquisição de bens e capital de giro de micro e pequenas "
+        "empresas e MEIs.",
+        "Facilitar a aquisição de bens e insumos financiados junto a fornecedores cadastrados, levando "
+        "mais agilidade e benefícios à micro e pequena empresa e aos microempreendedores individuais.",
+        NAO_INFORMADO, "Microempresa, Pequena Empresa, Microempreendedor Individual (MEI)",
+        "Aquisição de bens/insumos e capital de giro via crédito rotativo em cartão",
+        "Bens novos (máquinas, equipamentos, veículos, motocicletas, móveis e utensílios); matérias-"
+        "primas; insumos; mercadorias; software nacional ou importado; gastos gerais de funcionamento "
+        "do empreendimento",
+        "Até 100% do valor dos bens a serem adquiridos; a depender do porte, o limite de crédito pode "
+        "ser de até R$ 10 milhões",
+        "Investimento: até 120 meses; Capital de Giro: até 36 meses",
+        "Investimento: até 12 meses; Capital de Giro: até 6 meses",
+        "Alienação Fiduciária, Aval, Limite de Crédito Garantido por Hipoteca, Limite de Crédito "
+        "Garantido por Alienação Fiduciária de Bem Imóvel",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/cartao-bnb-mpe",
+        "\"Facilitar a aquisição de bens e insumos financiados... Fonte de Recursos: Fundo Constitucional "
+        "de Financiamento do Nordeste (FNE) / Recursos Internos... A depender do porte, o limite de "
+        "crédito pode ser de até R$ 10 milhões.\" (capturado ao vivo da página oficial em 2026-09-04)",
+        sigla=NAO_INFORMADO,  # fonte mista: FNE + Recursos Internos, sem sigla unica honesta
+        agente_financeiro="Banco do Nordeste (Fundo Constitucional de Financiamento do Nordeste - FNE, "
+        "e Recursos Internos)",
+        valor_maximo=10_000_000,
+        criterios_elegibilidade=NAO_INFORMADO,
+        documentos_necessarios=NAO_INFORMADO,
+        canal_contratacao="Agências do Banco do Nordeste",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (qualquer setor de negocio de MPE/MEI)
+        sinonimos_termos="cartao bnb mpe mei credito rotativo cartao empresarial",
+    ),
+    _linha_fne(
+        "Cartão BNB para Empresarial e Corporate",
+        "Crédito rotativo pré-aprovado para aquisição de bens, insumos e capital de giro de empresas "
+        "Empresarial e Corporate.",
+        "Facilitar a aquisição de bens e insumos financiados junto a fornecedores cadastrados, levando "
+        "mais agilidade e benefícios para empresas do setor industrial, de turismo, de comércio, de "
+        "prestação de serviços, de agroindústrias e de infraestrutura.",
+        "Industrial, Turismo, Comércio, Prestação de Serviços, Agroindústria, Infraestrutura",
+        "Pequena-média Empresa, Média Empresa, Grande Empresa",
+        "Aquisição de bens/insumos e capital de giro via crédito rotativo em cartão",
+        "Bens novos (máquinas, equipamentos, veículos, motocicletas, móveis e utensílios); matérias-"
+        "primas; insumos; mercadorias; software nacional ou importado; gastos gerais de funcionamento "
+        "do empreendimento",
+        "Até 100% do valor dos bens a serem adquiridos; a depender do porte, o limite de crédito pode "
+        "ser de até R$ 10 milhões",
+        "Investimento: até 120 meses; Capital de Giro: até 36 meses",
+        "Investimento: até 12 meses; Capital de Giro: até 6 meses",
+        "Alienação Fiduciária, Aval, Limite de Crédito Garantido por Hipoteca, Limite de Crédito "
+        "Garantido por Alienação Fiduciária de Bem Imóvel",
+        NAO_INFORMADO,
+        "https://www.bnb.gov.br/cartao-bnb-empresarial-e-corporate",
+        "\"Facilitar a aquisição de bens e insumos financiados junto a fornecedores cadastrados... para "
+        "empresas do setor industrial, de turismo, de comércio, de prestação de serviços, de "
+        "agroindústrias e de infraestrutura... A depender do porte, o limite de crédito pode ser de até "
+        "R$ 10 milhões.\" (capturado ao vivo da página oficial em 2026-09-04)",
+        sigla=NAO_INFORMADO,  # fonte mista: FNE + Recursos Internos, sem sigla unica honesta
+        agente_financeiro="Banco do Nordeste (Fundo Constitucional de Financiamento do Nordeste - FNE, "
+        "e Recursos Internos)",
+        valor_maximo=10_000_000,
+        criterios_elegibilidade=NAO_INFORMADO,
+        documentos_necessarios=NAO_INFORMADO,
+        canal_contratacao="Agências do Banco do Nordeste",
+        setor_padronizado=NAO_INFORMADO,  # produto transversal (varios setores empresariais/corporate)
+        sinonimos_termos="cartao bnb empresarial corporate credito rotativo grandes empresas",
+    ),
+    {
+        # FDNE nao e FNE -- fundo distinto (Medida Provisoria 2.156-5/2001, Decreto
+        # 7.838/2012), gerido pela SUDENE, com o BNB atuando como Agente Operador.
+        # Incluido porque e um programa de credito real, publicamente documentado
+        # em bnb.gov.br, administrado pelo Banco do Nordeste (pedido explicito do
+        # item 6 -- "programas proprios do BNB fora do FNE").
+        "instituicao": "BNB",
+        "nome_oficial": "FDNE - Fundo de Desenvolvimento do Nordeste",
+        "nome_simplificado": "FDNE",
+        "sigla": "FDNE",
+        "status": "aberta",
+        "descricao_resumida": "Fundo (gerido pela Sudene, BNB como agente operador) para financiar "
+        "grandes investimentos em infraestrutura e serviços públicos e empreendimentos produtivos de "
+        "grande capacidade germinativa de novos negócios na área de atuação da Sudene.",
+        "descricao_completa": (
+            "Assegurar recursos para a implantação, ampliação, modernização e diversificação de "
+            "investimentos em infraestrutura e serviços públicos e em empreendimentos produtivos de "
+            "grande capacidade germinativa de novos negócios e de novas atividades produtivas através "
+            "do financiamento de investimentos em capital fixo na área de atuação da Sudene, conforme "
+            "diretrizes e prioridades anuais do Conselho Deliberativo da Sudene."
+        ),
+        "modalidade": "Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": NAO_INFORMADO,  # cross-setorial: infraestrutura/servico publico E "outros setores" produtivos
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Pessoas jurídicas de direito privado com projetos de grande porte (valores "
+        "mínimos de investimento entre R$ 5 milhões e R$ 30 milhões, conforme localização e tipo de "
+        "projeto)",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Área de atuação da Sudene (Nordeste, Norte de Minas Gerais e Espírito Santo)",
+        "destinacao": "Implantação, ampliação, modernização e diversificação de investimentos em "
+        "infraestrutura, serviços públicos e empreendimentos produtivos estruturantes",
+        "itens_financiaveis": "Obras preliminares e complementares; obras civis; formação de reserva "
+        "hídrica e obras de drenagem em projeto integrado de irrigação; infraestrutura; máquinas, "
+        "instalações, equipamentos e aparelhos (inclusive montagem e treinamento); veículos utilitários "
+        "e embarcações; móveis e utensílios; preparo de área e solo para plantio; sementes e mudas; "
+        "viveiros e jardins clonais; plantio; instalações agrícolas e pecuárias; aquisição de animais, "
+        "inclusive sêmen; despesas eventuais não previstas (até 3% das inversões fixas)",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": (
+            "Até 80% do investimento total, limitado a 90% do investimento fixo, variando por "
+            "localização e setor: Áreas Prioritárias -- Saneamento/Abastecimento de Água: 80%; "
+            "Infraestrutura: 60%; Serviço Público: 60%; Estruturador: 55%; Outros Setores: 50%. Demais "
+            "Áreas -- Saneamento/Abastecimento de Água: 70%; Infraestrutura: 50%; Serviço Público: 50%; "
+            "Estruturador: 45%; Outros Setores: 40%. Recursos próprios mínimos: 20% do investimento "
+            "total."
+        ),
+        "contrapartida": "No mínimo 20% dos investimentos totais previstos para o projeto",
+        "taxa_completa": "Taxa Efetiva de Juros dos Fundos de Desenvolvimento (TFD), conforme Resolução "
+        "CMN nº 4.960, de 21/10/2021, com fator de programa (0,65 a 1,45) variável conforme prioridade "
+        "setorial/espacial e tipo de projeto (infraestrutura ou não)",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 20 anos para projetos de infraestrutura; até 12 anos para os demais "
+        "empreendimentos (já incluída a carência)",
+        "carencia": "Até 1 ano após a data prevista no projeto para entrada em operação do "
+        "empreendimento, conforme estudo da capacidade de pagamento do mutuário",
+        "amortizacao": NAO_INFORMADO,
+        "restricoes": "Investimentos mínimos: Semiárido/RIDEs -- implantação a partir de R$ 20 milhões, "
+        "modernização/ampliação/diversificação a partir de R$ 15 milhões; demais áreas -- implantação a "
+        "partir de R$ 30 milhões, modernização/ampliação/diversificação a partir de R$ 25 milhões "
+        "(podendo ser reduzidos a até R$ 5 milhões a critério da Diretoria Colegiada da Sudene). Taxa de "
+        "análise de projeto de até 0,2% do valor da operação, limitada a R$ 500.000,00, cobrada pelo "
+        "agente operador.",
+        "criterios_elegibilidade": "Consulta Prévia enquadrada pela Sudene (prazo de análise: até 30 "
+        "dias); projeto definitivo submetido ao Agente Operador (BNB) e aprovado tecnicamente (até 90 "
+        "dias, prorrogável por 30) e pela Diretoria Colegiada da Sudene (até 30 dias)",
+        "agente_financeiro": "Banco do Nordeste (Agente Operador do FDNE, fundo gerido pela "
+        "Superintendência do Desenvolvimento do Nordeste - Sudene)",
+        "canal_contratacao": "Consulta Prévia junto à Sudene, seguida de projeto definitivo apresentado "
+        "ao Banco do Nordeste como Agente Operador",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": "Consulta Prévia (modelo definido pela Sudene) e Projeto Definitivo "
+        "técnico-econômico-financeiro",
+        "url_oficial": "https://www.bnb.gov.br/fdne",
+        "data_vigencia": "Medida Provisória nº 2.156-5/2001; Decreto nº 7.838/2012 (e Decreto nº "
+        "6.952/2009 para operações contratadas até 03/04/2012); Resolução CMN nº 4.960/2021",
+        "trecho_fonte": (
+            "\"Por meio do FDNE o Banco do Nordeste financia investimentos em infraestrutura e serviços "
+            "públicos, em empreendimentos produtivos de grande capacidade germinativa de novos negócios "
+            "e de novas atividades produtivas na área de atuação da Sudene... Até 20 anos para os "
+            "projetos de infraestrutura e até 12 anos para os demais empreendimentos\" (capturado ao "
+            "vivo da página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # cobre infraestrutura E outros setores produtivos, sem 1 categoria honesta
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Grande (projetos de investimento mínimo entre R$ 5 milhões e R$ 30 "
+        "milhões)",
+        "destinacao_padronizada": "Infraestrutura e grandes projetos produtivos estruturantes",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "fdne fundo de desenvolvimento do nordeste sudene grandes projetos",
+    },
+]
+
+
 def seed_bnb_manual(conn) -> int:
-    return _upsert_many(conn, [dict(linha) for linha in _BNB_MANUAL])
+    return _upsert_many(
+        conn, [dict(linha) for linha in _BNB_MANUAL] + [dict(linha) for linha in _BNB_MANUAL_EXPANSAO]
+    )
 
 
 def build_linhas_incentivadas():
