@@ -951,246 +951,122 @@ def edital_detalhe(edital_id: int):
         conn.close()
 
 
-# ============ Elegibilidade ("Minha Empresa"): o visitante digita o CNPJ da PROPRIA
-# empresa e o sistema resolve setor/porte (BrasilAPI, consulta ao vivo -- ver
-# elegibilidade.py) para cruzar com editais abertos e o historico de operacoes por
-# setor. GET principal e so SQL + 1 chamada HTTP externa; o ranking por IA dos
-# editais (POST /api/elegibilidade/editais_ranqueados) e uma 2a chamada separada,
-# com o embedding calculado no navegador -- mesmo padrao do resto do app hospedado.
-# ============
+# ============ Linhas Incentivadas: catalogo de linhas/programas de credito do BNDES,
+# FINEP, Desenvolve SP e BNB (ver src/linhas_incentivadas.py) -- substitui a antiga aba
+# "Minha Empresa"/elegibilidade (removida: cruzava CNPJ com editais via BrasilAPI ao
+# vivo, escopo diferente do pedido agora). So le a tabela ja enriquecida localmente,
+# nunca acessa os sites das instituicoes em tempo real. ============
 
-def _editais_elegiveis_para_setor(conn, limit: int = 20) -> dict:
-    """Mesmo filtro/ordenacao de '/api/editais?situacao=aberta&aplicavel_empresa=1'
-    (ver _editais_where acima): aberto de verdade (respeita prazo vencido mesmo que a
-    FINEP ainda marque como 'aberta') e com publico-alvo que inclui empresas. NAO
-    filtra por regiao: na base atual, 100% dos editais abertos aplicaveis a empresas
-    tem regiao='Todo Brasil' (conferido em produção), entao um filtro estrito so
-    esconderia oportunidades sem ganho nenhum -- fica so como possível refinamento
-    futuro se a FINEP passar a publicar editais regionais de novo.
+LINHAS_COLS_LISTA = [
+    "id", "instituicao", "nome_oficial", "nome_simplificado", "sigla", "status",
+    "descricao_resumida", "setor_padronizado", "porte_padronizado", "regiao_elegivel",
+    "fluxo", "modalidade", "valor_minimo", "valor_maximo", "taxa_completa", "indexador",
+    "url_oficial", "data_atualizacao",
+]
 
-    So o filtro BRUTO (aberto + aplicavel a empresa), sem nenhuma nocao de o quanto
-    cada edital realmente tem a ver com o que a empresa faz -- usado como resultado
-    imediato (a 1a coisa que aparece na tela) e como fallback se o ranking por IA
-    falhar. A versao rigorosa (ranqueada por similaridade semantica) chega depois,
-    numa 2a chamada do frontend -- ver POST /api/elegibilidade/editais_ranqueados
-    abaixo, que recebe o vetor ja calculado no navegador (embeddings-client.js)."""
-    where, params = _editais_where(situacao="aberta", aplicavel_empresa=1)
-    cur = conn.cursor()
-    total = cur.execute(f"SELECT COUNT(*) FROM editais_raw {where}", params).fetchone()[0]
-    rows = cur.execute(
-        f"SELECT {', '.join(EDITAIS_COLS)} FROM editais_raw {where} "
-        f"ORDER BY prazo_proposto ASC NULLS LAST LIMIT ?",
-        params + [limit],
-    ).fetchall()
-    return {"total": total, "resultados": [_edital_row_to_dict(r) for r in rows], "ranqueado_por_ia": False}
+LINHAS_COLS_DETALHE = LINHAS_COLS_LISTA + [
+    "descricao_completa", "tipo_apoio", "setores_elegiveis", "setores_nao_elegiveis",
+    "faixa_receita", "destinacao", "itens_financiaveis", "itens_nao_financiaveis",
+    "percentual_financiavel", "contrapartida", "spread", "prazo_total", "carencia",
+    "amortizacao", "garantias", "restricoes", "criterios_elegibilidade",
+    "agente_financeiro", "canal_contratacao", "prazo_inscricao", "documentos_necessarios",
+    "data_vigencia", "data_captura", "trecho_fonte", "origem_dado",
+    "subsetor_padronizado", "cnaes_relacionados", "tecnologias_relacionadas",
+    "temas_inovacao", "temas_sustentabilidade",
+]
 
 
-def _operacoes_parecidas(conn, setor_bndes: str, porte_bndes: str = None, n_exemplos: int = 5) -> dict:
-    """Agregados de operations por setor (e por porte, quando resolvivel -- ver
-    porte_bndes_equivalente em elegibilidade.py) para responder 'empresas parecidas
-    com a minha ja pegaram credito?'. Se filtrar por porte nao achar nada, refaz so por
-    setor -- silenciosamente cai pro filtro mais largo em vez de devolver zero
-    resultados por causa de um porte que a Receita informou de um jeito que o BNDES
-    classifica diferente."""
-    cur = conn.cursor()
-
-    def _consulta(incluir_porte: bool):
-        where = "WHERE setor_bndes = ?"
-        params = [setor_bndes]
-        if incluir_porte and porte_bndes:
-            where += " AND porte_cliente = ?"
-            params.append(porte_bndes)
-        total_row = cur.execute(
-            f"SELECT COUNT(*), SUM(valor_contratado), AVG(valor_contratado) FROM operations {where}", params
-        ).fetchone()
-        por_agencia = cur.execute(
-            f"SELECT agencia, COUNT(*), SUM(valor_contratado), AVG(valor_contratado) FROM operations {where} GROUP BY agencia",
-            params,
-        ).fetchall()
-        exemplos = cur.execute(
-            f"SELECT id, cliente, agencia, uf, valor_contratado, data_contratacao FROM operations {where} "
-            f"ORDER BY valor_contratado DESC LIMIT ?",
-            params + [n_exemplos],
-        ).fetchall()
-        # "Linhas enquadraveis": diferente dos editais (chamada publica, com prazo),
-        # produto e a LINHA DE CREDITO PERMANENTE do BNDES/FINEP (ex: "BNDES FINEM",
-        # "BNDES FINAME", "Credito Direto (FINEP)") -- sem data de validade, sempre
-        # aberta pra quem se enquadrar. Rankeada por frequencia de uso por empresas do
-        # MESMO setor/porte: e a resposta pra "alem do que ja foi financiado, que linha
-        # eu poderia tentar mesmo sem um edital ativo agora?". prazo/taxa/indexador so
-        # existem pra produtos BNDES (ver comentario em db.py) -- ficam NULL/None para
-        # produtos FINEP (Credito Direto/Descentralizado), o frontend trata isso como
-        # "condicoes nao disponiveis" em vez de mostrar um zero enganoso.
-        linhas = cur.execute(
-            f"SELECT produto, COUNT(*), AVG(valor_contratado), "
-            f"AVG(prazo_carencia_meses), AVG(prazo_amortizacao_meses), AVG(taxa_juros) "
-            f"FROM operations {where} "
-            f"AND produto IS NOT NULL AND produto != '' GROUP BY produto ORDER BY COUNT(*) DESC LIMIT 10",
-            params,
-        ).fetchall()
-        # Indexador nao tem "media" (e categorico: TLP, SELIC, etc.) -- pega o mais
-        # frequente por produto separadamente, so pros produtos que sobreviveram ao
-        # LIMIT 10 acima (evita rodar essa subconsulta pra produtos que nem vao aparecer).
-        indexador_por_produto = {}
-        for produto, *_ in linhas:
-            r = cur.execute(
-                f"SELECT indexador, COUNT(*) c FROM operations {where} "
-                f"AND produto = ? AND indexador IS NOT NULL AND indexador != '' "
-                f"GROUP BY indexador ORDER BY c DESC LIMIT 1",
-                params + [produto],
-            ).fetchone()
-            indexador_por_produto[produto] = r[0] if r else None
-
-        # "Qual FINEM (por exemplo)": produto sozinho ("BNDES FINEM") e um balaio --
-        # instrumento_financeiro e a SUB-LINHA real (ex: "PSI - Inovacao", "CAPACIDADE
-        # PRODUTIVA - Industria de Bens de Capital") que da o "motivo" concreto de ser
-        # enquadravel: em vez de so alegar aderencia por estar no mesmo setor, mostra a
-        # sub-linha mais usada por empresas do MESMO setor/porte + um projeto real
-        # (descricao_projeto, dado publico do proprio BNDES) financiado por ela -- e a
-        # evidencia de que a linha realmente se aplica a este tipo de empresa, nao so
-        # uma alegacao. So existe pra BNDES (FINEP nao tem essa granularidade na
-        # planilha de origem, ver comentario em db.py).
-        sublinhas_por_produto = {}
-        for produto, *_ in linhas:
-            subs = cur.execute(
-                f"SELECT instrumento_financeiro, COUNT(*) c, AVG(valor_contratado) FROM operations {where} "
-                f"AND produto = ? AND instrumento_financeiro IS NOT NULL AND instrumento_financeiro != '' "
-                f"GROUP BY instrumento_financeiro ORDER BY c DESC LIMIT 3",
-                params + [produto],
-            ).fetchall()
-            sublinhas = []
-            for nome, n_op, valor_medio_sub in subs:
-                exemplo = cur.execute(
-                    f"SELECT descricao_projeto FROM operations {where} "
-                    f"AND produto = ? AND instrumento_financeiro = ? "
-                    f"AND descricao_projeto IS NOT NULL AND length(trim(descricao_projeto)) > 15 "
-                    f"ORDER BY length(descricao_projeto) DESC LIMIT 1",
-                    params + [produto, nome],
-                ).fetchone()
-                sublinhas.append({
-                    "nome": nome,
-                    "n_operacoes": n_op,
-                    "valor_medio": valor_medio_sub or 0,
-                    "exemplo_projeto": exemplo[0].strip() if exemplo else None,
-                })
-            sublinhas_por_produto[produto] = sublinhas
-
-        return total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto
-
-    porte_considerado = bool(porte_bndes)
-    total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto = _consulta(incluir_porte=True)
-    if porte_considerado and (total_row[0] or 0) == 0:
-        porte_considerado = False
-        total_row, por_agencia, exemplos, linhas, indexador_por_produto, sublinhas_por_produto = _consulta(incluir_porte=False)
-
-    return {
-        "total": total_row[0] or 0,
-        "valor_total": total_row[1] or 0,
-        "valor_medio": total_row[2] or 0,
-        "porte_considerado_no_filtro": porte_considerado,
-        "por_agencia": [
-            {"agencia": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "valor_medio": r[3] or 0}
-            for r in por_agencia
-        ],
-        "exemplos": [
-            {"id": r[0], "cliente": r[1], "agencia": r[2], "uf": r[3], "valor_contratado": r[4], "data_contratacao": r[5]}
-            for r in exemplos
-        ],
-        "linhas_enquadraveis": [
-            {
-                "produto": r[0],
-                "n_operacoes": r[1],
-                "valor_medio": r[2] or 0,
-                "prazo_carencia_meses": r[3],
-                "prazo_amortizacao_meses": r[4],
-                "taxa_juros": r[5],
-                "indexador": indexador_por_produto.get(r[0]),
-                "sublinhas": sublinhas_por_produto.get(r[0], []),
-            }
-            for r in linhas
-        ],
-    }
+def _linhas_where(instituicao=None, setor=None, porte=None, regiao=None, status=None, fluxo=None, q=None):
+    clauses, params = [], []
+    if instituicao and instituicao != "Todas":
+        clauses.append("instituicao = ?")
+        params.append(instituicao)
+    if setor and setor != "Todos":
+        clauses.append("setor_padronizado = ?")
+        params.append(setor)
+    if porte and porte != "Todos":
+        clauses.append("porte_padronizado = ?")
+        params.append(porte)
+    if regiao and regiao != "Todas":
+        clauses.append("regiao_elegivel = ?")
+        params.append(regiao)
+    if status and status != "Todos":
+        clauses.append("status = ?")
+        params.append(status)
+    if fluxo and fluxo != "Todos":
+        clauses.append("fluxo = ?")
+        params.append(fluxo)
+    if q:
+        clauses.append("search_vector @@ websearch_to_tsquery('portuguese', unaccent(?))")
+        params.append(q)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
 
 
-@app.get("/api/elegibilidade")
-def elegibilidade(cnpj: str = Query(...)):
-    # Sem min_length aqui de proposito: um CNPJ mal formatado deve virar a mensagem
-    # amigavel de resolver_empresa() (erro esperado, texto em portugues claro), nao o
-    # 422 padrao do FastAPI (JSON tecnico em ingles que a pagina nao trata e o dono da
-    # empresa nao entenderia).
-    from elegibilidade import mapear_setor, porte_bndes_equivalente, resolver_empresa
-
-    empresa = resolver_empresa(cnpj)
-    if empresa.get("erro"):
-        # CNPJ invalido / nao encontrado / API externa fora do ar sao desfechos
-        # esperados desta consulta, nao bugs -- nao logar como excecao (ver
-        # comentario no topo do arquivo sobre logger.exception).
-        return {"erro": empresa["erro"]}
-
+@app.get("/api/linhas/filtros")
+def linhas_filtros():
+    """Opcoes de filtro geradas a partir dos dados existentes -- nunca exibe opcao
+    vazia (ver item 7 do pedido: "Não exibir opções vazias")."""
     conn = get_connection()
     try:
-        setor_mapeado = mapear_setor(conn, empresa.get("cnae_codigo"))
-        porte_bndes = porte_bndes_equivalente(empresa.get("porte_receita"))
-        setor_mapeado["porte_bndes_equivalente"] = porte_bndes
+        cur = conn.cursor()
 
-        operacoes_parecidas = {
-            "total": 0, "valor_total": 0, "valor_medio": 0,
-            "porte_considerado_no_filtro": False, "por_agencia": [], "exemplos": [],
-            "linhas_enquadraveis": [],
-        }
-        # Filtro estrutural (aberto + aplicavel a empresa) -- mostrado de imediato.
-        # O frontend faz uma 2a chamada (POST /api/elegibilidade/editais_ranqueados,
-        # com o embedding calculado no proprio navegador via embeddings-client.js,
-        # mesmo padrao ja usado em /api/editais/buscar) pra substituir esta lista pela
-        # versao rankeada por similaridade semantica real -- ver descricao_para_busca
-        # abaixo, que e o texto que o navegador deve embutir.
-        editais = _editais_elegiveis_para_setor(conn)
-        descricao_para_busca = " - ".join(filter(None, [
-            empresa.get("razao_social"),
-            empresa.get("cnae_descricao"),
-            setor_mapeado.get("setor_bndes"),
-            setor_mapeado.get("subsetor_bndes"),
-        ]))
-
-        if setor_mapeado["mapeado"]:
-            operacoes_parecidas = _operacoes_parecidas(conn, setor_mapeado["setor_bndes"], porte_bndes)
+        def valores(col):
+            return [r[0] for r in cur.execute(
+                f"SELECT DISTINCT {col} FROM linhas_incentivadas WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col}"
+            ).fetchall()]
 
         return {
-            "empresa": empresa,
-            "setor_mapeado": setor_mapeado,
-            "editais": editais,
-            "descricao_para_busca": descricao_para_busca or None,
-            "operacoes_parecidas": operacoes_parecidas,
+            "instituicoes": valores("instituicao"),
+            "setores": valores("setor_padronizado"),
+            "portes": valores("porte_padronizado"),
+            "regioes": valores("regiao_elegivel"),
+            "status": valores("status"),
+            "fluxos": valores("fluxo"),
         }
-    except Exception as e:
-        logger.exception("elegibilidade indisponivel")
-        return {"erro": f"Não foi possível concluir a análise agora ({e}). Tente novamente em instantes."}
     finally:
         conn.close()
 
 
-@app.post("/api/elegibilidade/editais_ranqueados")
-def elegibilidade_editais_ranqueados(body: dict):
-    """2a etapa da elegibilidade: recebe {descricao, vetor} com o vetor ja calculado
-    no navegador (embeddings-client.js, mesmo modelo/pooling usado em
-    /api/editais/buscar) e rankeia os editais ABERTOS por similaridade semantica real
-    com o que a empresa faz -- em vez do filtro estrutural bruto (que devolve
-    praticamente todo edital aberto aplicavel a empresas, sem nocao de aderencia).
-    So faz a matematica (numpy) contra os vetores precalculados, nunca chama
-    get_model() no servidor."""
-    descricao = (body or {}).get("descricao", "")
-    vetor = (body or {}).get("vetor")
-    if not descricao or not vetor:
-        return {"erro": "parametros 'descricao' e 'vetor' sao obrigatorios"}
+@app.get("/api/linhas")
+def linhas(
+    instituicao: str = None, setor: str = None, porte: str = None, regiao: str = None,
+    status: str = None, fluxo: str = None, q: str = None,
+    order_by: str = "data_atualizacao", order_dir: str = "desc",
+    limit: int = 20, offset: int = 0,
+):
+    where, params = _linhas_where(instituicao, setor, porte, regiao, status, fluxo, q)
+    col_ordenacao = order_by if order_by in LINHAS_COLS_LISTA else "data_atualizacao"
+    direcao = "ASC" if order_dir == "asc" else "DESC"
+    conn = get_connection()
     try:
-        from editais_search import buscar_editais_por_projeto_com_vetor
+        cur = conn.cursor()
+        total = cur.execute(f"SELECT COUNT(*) FROM linhas_incentivadas {where}", params).fetchone()[0]
+        rows = cur.execute(
+            f"SELECT {', '.join(LINHAS_COLS_LISTA)} FROM linhas_incentivadas {where} "
+            f"ORDER BY {col_ordenacao} {direcao} NULLS LAST LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return {
+            "total": total,
+            "resultados": [dict(zip(LINHAS_COLS_LISTA, r)) for r in rows],
+        }
+    finally:
+        conn.close()
 
-        resultado = buscar_editais_por_projeto_com_vetor(descricao, vetor, max_resultados=40)
-        resultados = [r for r in (resultado.get("resultados") or []) if r.get("aplicavel_empresa")][:20]
-        return {"total": len(resultados), "resultados": resultados, "ranqueado_por_ia": True}
-    except Exception as e:
-        logger.exception("ranking de editais por IA indisponivel")
-        return {"erro": f"nao foi possivel ranquear os editais agora ({e})"}
+
+@app.get("/api/linhas/{linha_id}")
+def linha_detalhe(linha_id: int):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            f"SELECT {', '.join(LINHAS_COLS_DETALHE)} FROM linhas_incentivadas WHERE id = ?", (linha_id,)
+        ).fetchone()
+        if not row:
+            return {"erro": "linha nao encontrada"}
+        return dict(zip(LINHAS_COLS_DETALHE, row))
+    finally:
+        conn.close()
 
 
 # So monta o servico de arquivos estaticos quando NAO estamos rodando como funcao

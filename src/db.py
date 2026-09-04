@@ -365,6 +365,77 @@ CREATE TABLE IF NOT EXISTS refresh_editais_log (
     status TEXT,
     detalhe TEXT
 );
+
+-- ============ Linhas Incentivadas (BNDES, FINEP, Desenvolve SP, BNB) ============
+-- Catalogo de LINHAS/PROGRAMAS DE CREDITO (diferente de editais_raw, que sao
+-- CHAMADAS PUBLICAS com prazo -- uma linha e uma condicao de credito permanente,
+-- oferecida em fluxo continuo). Atualizado por processo LOCAL (ver
+-- src/linhas_incentivadas.py) a partir de fontes oficiais -- o site hospedado so
+-- consulta esta tabela, nunca acessa os sites das instituicoes em tempo real.
+-- Campo nao informado pela fonte oficial fica como 'Nao informado pela fonte',
+-- nunca inferido/inventado (ver origem_dado).
+CREATE TABLE IF NOT EXISTS linhas_incentivadas (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    instituicao TEXT NOT NULL,             -- 'BNDES' | 'FINEP' | 'Desenvolve SP' | 'BNB'
+    nome_oficial TEXT NOT NULL,
+    nome_simplificado TEXT,
+    sigla TEXT,
+    status TEXT,                           -- 'aberta' | 'encerrada' | 'Nao informado pela fonte'
+    descricao_resumida TEXT,
+    descricao_completa TEXT,
+    modalidade TEXT,                       -- 'Direta' | 'Indireta' | 'Nao informado pela fonte'
+    tipo_apoio TEXT,
+    setores_elegiveis TEXT,
+    setores_nao_elegiveis TEXT,
+    porte_elegivel TEXT,
+    faixa_receita TEXT,
+    regiao_elegivel TEXT,
+    destinacao TEXT,
+    itens_financiaveis TEXT,
+    itens_nao_financiaveis TEXT,
+    valor_minimo REAL,
+    valor_maximo REAL,
+    percentual_financiavel TEXT,
+    contrapartida TEXT,
+    taxa_completa TEXT,
+    indexador TEXT,
+    spread TEXT,
+    prazo_total TEXT,
+    carencia TEXT,
+    amortizacao TEXT,
+    garantias TEXT,
+    restricoes TEXT,
+    criterios_elegibilidade TEXT,
+    agente_financeiro TEXT,
+    canal_contratacao TEXT,
+    prazo_inscricao TEXT,
+    fluxo TEXT,                            -- 'continuo' | 'edital'
+    documentos_necessarios TEXT,
+    url_oficial TEXT NOT NULL,
+    data_vigencia TEXT,
+    data_captura TEXT NOT NULL,
+    data_atualizacao TEXT,
+    trecho_fonte TEXT,                     -- trecho/referencia da pagina oficial que sustenta os dados capturados
+    origem_dado TEXT NOT NULL,             -- 'raspagem_automatica' | 'curadoria_manual_verificada' -- nunca 'estimado'/'inventado'
+    origem_raw_id INTEGER,                 -- se derivada de editais_raw (FINEP), o id original la
+    -- Enriquecimento (taxonomia/sinonimos, ver src/linhas_incentivadas.py)
+    setor_padronizado TEXT,
+    subsetor_padronizado TEXT,
+    cnaes_relacionados TEXT,
+    porte_padronizado TEXT,
+    destinacao_padronizada TEXT,
+    tecnologias_relacionadas TEXT,
+    temas_inovacao TEXT,
+    temas_sustentabilidade TEXT,
+    sinonimos_termos TEXT,
+    search_document TEXT,
+    search_vector TSVECTOR
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_linhas_natural_key ON linhas_incentivadas(instituicao, nome_oficial, url_oficial);
+CREATE INDEX IF NOT EXISTS idx_linhas_instituicao ON linhas_incentivadas(instituicao);
+CREATE INDEX IF NOT EXISTS idx_linhas_status ON linhas_incentivadas(status);
+CREATE INDEX IF NOT EXISTS idx_linhas_setor ON linhas_incentivadas(setor_padronizado);
+CREATE INDEX IF NOT EXISTS idx_linhas_search_vector ON linhas_incentivadas USING GIN(search_vector);
 """
 
 

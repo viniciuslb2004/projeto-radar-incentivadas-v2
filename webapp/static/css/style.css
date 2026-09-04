@@ -235,6 +235,7 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
 }
 .badge.up { background: #E4F3E4; color: var(--positive); }
 .badge.down { background: #FBE6E6; color: var(--negative); }
+.badge.neutro { background: var(--blue-lightest); color: var(--navy); }
 
 /* ============ Modal (drill-down) ============ */
 .modal-overlay {

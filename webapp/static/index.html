@@ -18,7 +18,7 @@
     <button class="tab-btn" data-view="tendencias">Tendências &amp; Insights</button>
     <button class="tab-btn" data-view="busca">Busca</button>
     <button class="tab-btn" data-view="editais">Editais</button>
-    <button class="tab-btn" data-view="elegibilidade">Minha Empresa</button>
+    <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
   </div>
   <div class="status-pill" id="status-pill">carregando...</div>
 </div>
@@ -253,18 +253,51 @@
     </div>
   </section>
 
-  <!-- ===================== ELEGIBILIDADE (Minha Empresa) ===================== -->
-  <section id="view-elegibilidade" class="view">
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-header">Consulte a sua empresa <span class="hint">digite o CNPJ, sem precisar saber os termos do BNDES/FINEP</span></div>
-      <div class="card-body">
-        <div class="search-box">
-          <input type="text" id="eleg-cnpj-input" placeholder="Ex: 12.345.678/0001-90" inputmode="numeric">
-          <button id="eleg-consultar-btn">Consultar</button>
-        </div>
-        <div id="eleg-resultado"></div>
+  <!-- ===================== LINHAS INCENTIVADAS ===================== -->
+  <section id="view-linhas" class="view">
+    <div class="filterbar" id="linhas-filterbar" style="margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius);">
+      <div>
+        <label>Instituição</label>
+        <select id="ln-f-instituicao"><option value="Todas">Todas</option></select>
+      </div>
+      <div>
+        <label>Setor</label>
+        <select id="ln-f-setor"><option value="Todos">Todos</option></select>
+      </div>
+      <div>
+        <label>Porte</label>
+        <select id="ln-f-porte"><option value="Todos">Todos</option></select>
+      </div>
+      <div>
+        <label>Região</label>
+        <select id="ln-f-regiao"><option value="Todas">Todas</option></select>
+      </div>
+      <div>
+        <label>Status</label>
+        <select id="ln-f-status"><option value="Todos">Todos</option></select>
+      </div>
+      <div>
+        <label>Fluxo</label>
+        <select id="ln-f-fluxo"><option value="Todos">Todos</option></select>
       </div>
     </div>
+
+    <div class="search-box">
+      <input type="text" id="linhas-busca-input" placeholder="Busque por nome, setor, destinação... Ex: energia solar, inovação, microcrédito">
+      <button id="linhas-busca-btn">Buscar</button>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin:14px 0 10px;">
+      <span class="progress-label" id="linhas-contagem"></span>
+      <select id="linhas-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+        <option value="data_atualizacao-desc">Atualizado recentemente</option>
+        <option value="nome_oficial-asc">Nome (A-Z)</option>
+        <option value="valor_maximo-desc">Maior valor máximo</option>
+      </select>
+    </div>
+
+    <div id="linhas-lista"></div>
+    <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
   </section>
 
 </main>
@@ -299,6 +332,6 @@
 <script src="/js/tendencias.js"></script>
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
-<script src="/js/elegibilidade.js"></script>
+<script src="/js/linhas.js"></script>
 </body>
 </html>
