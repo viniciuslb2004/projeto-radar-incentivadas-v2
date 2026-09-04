@@ -77,6 +77,16 @@ def _warmup_busca():
 
 
 def _filters_clause(agencia=None, setor=None, uf=None, data_inicio=None, data_fim=None, instrumento=None, subsetor=None, segmento=None):
+    # Defesa contra intervalo invertido (data_inicio > data_fim): o frontend ja impede
+    # o usuario de chegar nesse estado (ver validarIntervaloDatas em common.js), mas
+    # uma chamada direta a API, um link salvo antigo, ou o botao "voltar" do navegador
+    # ainda poderiam mandar os dois trocados -- em vez de devolver silenciosamente uma
+    # lista vazia (comparacao textual data_contratacao >= inicio AND < fim nunca bate
+    # se inicio > fim), so troca os dois, aplicando a mesma correcao em TODAS as ~12
+    # rotas que usam este filtro de uma vez so.
+    if data_inicio and data_fim and data_inicio > data_fim:
+        data_inicio, data_fim = data_fim, data_inicio
+
     clauses = []
     params = []
     if agencia and agencia != "Todas":
@@ -222,24 +232,43 @@ def kpis(agencia: str = None, setor: str = None, uf: str = None, data_inicio: st
         conn.close()
 
 
+GRANULARIDADES_SERIE = {
+    # "periodo" e um numero por ano que identifica o recorte (trimestre 1-4,
+    # semestre 1-2, sempre 1 para anual) -- trimestral usa a coluna `trimestre` ja
+    # persistida (identico ao comportamento de sempre); mensal precisa extrair o mes
+    # de `data_contratacao` (TEXT ISO "AAAA-MM-DD") porque a tabela nao guarda mes
+    # separado, so ano/trimestre (ver src/unify.py::_add_periodo).
+    "mensal": "CAST(SUBSTRING(data_contratacao FROM 6 FOR 2) AS INTEGER)",
+    "trimestral": "trimestre",
+    "semestral": "CASE WHEN trimestre <= 2 THEN 1 ELSE 2 END",
+    "anual": "1",
+}
+
+
 @app.get("/api/serie_temporal")
-def serie_temporal(agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
+def serie_temporal(
+    agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None,
+    data_fim: str = None, instrumento: str = None, granularidade: str = "trimestral",
+):
+    if granularidade not in GRANULARIDADES_SERIE:
+        granularidade = "trimestral"
+    periodo_expr = GRANULARIDADES_SERIE[granularidade]
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
     conn = get_connection()
     try:
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT ano, trimestre, agencia, COUNT(*), SUM(valor_contratado)
+            SELECT ano, {periodo_expr} AS periodo, agencia, COUNT(*), SUM(valor_contratado)
             FROM operations {where}
             {"AND" if where else "WHERE"} ano IS NOT NULL
-            GROUP BY ano, trimestre, agencia
-            ORDER BY ano, trimestre
+            GROUP BY ano, periodo, agencia
+            ORDER BY ano, periodo
             """,
             params,
         ).fetchall()
         return [
-            {"ano": r[0], "trimestre": r[1], "agencia": r[2], "n_operacoes": r[3], "valor_total": r[4] or 0}
+            {"ano": r[0], "periodo": r[1], "agencia": r[2], "n_operacoes": r[3], "valor_total": r[4] or 0}
             for r in rows
         ]
     finally:

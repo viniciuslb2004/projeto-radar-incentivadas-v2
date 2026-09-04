@@ -138,6 +138,46 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
 
+// Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
+// selects de data muda, compara os dois pares como "ano*12+mes" (comparavel direto,
+// sem precisar montar Date) -- se o par que NAO acabou de mudar ficou invalido em
+// relacao ao que mudou, ajusta ele pra igualar o que o usuario acabou de escolher
+// (em vez de reverter a escolha do usuario ou so avisar sem corrigir). O aviso
+// inline (#filtro-data-aviso, mesmo padrao visual de .confianca-baixa-aviso usado na
+// busca) aparece por alguns segundos so quando uma correcao de verdade acontece.
+function _ordemMesAno(mes, ano) {
+  if (!mes || !ano) return null;
+  return parseInt(ano, 10) * 12 + parseInt(mes, 10);
+}
+
+function validarIntervaloDatas(campoAlterado) {
+  const mesIniEl = document.getElementById("f-mes-ini");
+  const anoIniEl = document.getElementById("f-ano-ini");
+  const mesFimEl = document.getElementById("f-mes-fim");
+  const anoFimEl = document.getElementById("f-ano-fim");
+
+  const ordemIni = _ordemMesAno(mesIniEl.value, anoIniEl.value);
+  const ordemFim = _ordemMesAno(mesFimEl.value, anoFimEl.value);
+  if (ordemIni === null || ordemFim === null || ordemIni <= ordemFim) return;
+
+  // O campo que acabou de mudar manda -- o outro lado e que se ajusta pra igualar.
+  const alterouInicio = campoAlterado === "f-mes-ini" || campoAlterado === "f-ano-ini";
+  if (alterouInicio) {
+    mesFimEl.value = mesIniEl.value;
+    anoFimEl.value = anoIniEl.value;
+  } else {
+    mesIniEl.value = mesFimEl.value;
+    anoIniEl.value = anoFimEl.value;
+  }
+
+  const aviso = document.getElementById("filtro-data-aviso");
+  if (aviso) {
+    aviso.style.display = "block";
+    clearTimeout(aviso._timeoutId);
+    aviso._timeoutId = setTimeout(() => { aviso.style.display = "none"; }, 4000);
+  }
+}
+
 function _ligarBotoesDeAba() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -222,8 +262,12 @@ async function initFiltersAndTabs() {
     anoFim.value = anos[anos.length - 1];
   }
 
-  ["f-agencia", "f-setor", "f-uf", "f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", notifyFiltersChange);
+  const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
+  ["f-agencia", "f-setor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => {
+      if (CAMPOS_DATA.includes(id)) validarIntervaloDatas(id);
+      notifyFiltersChange();
+    });
   });
 }
 

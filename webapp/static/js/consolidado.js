@@ -16,9 +16,19 @@ async function loadKPIs(filters) {
     kpiCard("Cheque médio", fmtBRL(data.cheque_medio));
 }
 
+// Rotulo do eixo X por granularidade -- sempre zero-padded pra ordenacao lexica
+// (string sort) bater com a ordenacao cronologica em todos os 4 casos.
+function _rotuloPeriodoSerie(granularidade, ano, periodo) {
+  if (granularidade === "mensal") return `${ano}-${String(periodo).padStart(2, "0")}`;
+  if (granularidade === "semestral") return `${ano}-S${periodo}`;
+  if (granularidade === "anual") return `${ano}`;
+  return `${ano}-T${periodo}`; // trimestral (padrao)
+}
+
 async function loadSerieTemporal(filters) {
-  const data = await fetchJSON("/api/serie_temporal?" + qs(filters));
-  const periodos = [...new Set(data.map((d) => `${d.ano}-T${d.trimestre}`))].sort();
+  const granularidade = document.getElementById("serie-granularidade").value;
+  const data = await fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade }));
+  const periodos = [...new Set(data.map((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo)))].sort();
   const agencias = [...new Set(data.map((d) => d.agencia))];
   const colors = { BNDES: "#223850", FINEP: "#7C93AC" };
 
@@ -26,8 +36,7 @@ async function loadSerieTemporal(filters) {
     label: ag,
     backgroundColor: colors[ag] || "#5878A0",
     data: periodos.map((p) => {
-      const [ano, tri] = p.split("-T");
-      const row = data.find((d) => String(d.ano) === ano && String(d.trimestre) === tri && d.agencia === ag);
+      const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo) === p && d.agencia === ag);
       return row ? row.valor_total : 0;
     }),
   }));
@@ -123,6 +132,7 @@ async function refreshConsolidado(filters) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  document.getElementById("serie-granularidade").addEventListener("change", () => loadSerieTemporal(currentFilters()));
   await initFiltersAndTabs();
   onFiltersChange(refreshConsolidado);
   refreshConsolidado(currentFilters());

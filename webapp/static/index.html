@@ -51,6 +51,7 @@
     </div>
   </div>
 </div>
+<div id="filtro-data-aviso" class="confianca-baixa-aviso" style="display:none; margin:0 16px 12px;">⚠ A data "De" não pode ser depois da data "Até" -- ajustamos automaticamente.</div>
 
 <main>
 
@@ -60,7 +61,15 @@
 
     <div class="grid-2">
       <div class="card">
-        <div class="card-header">Evolução temporal &mdash; BNDES x FINEP <span class="hint">R$ contratado por trimestre</span></div>
+        <div class="card-header">
+          <span>Evolução temporal &mdash; BNDES x FINEP <span class="hint">R$ contratado por período</span></span>
+          <select id="serie-granularidade" class="header-select">
+            <option value="mensal">Mensal</option>
+            <option value="trimestral" selected>Trimestral</option>
+            <option value="semestral">Semestral</option>
+            <option value="anual">Anual</option>
+          </select>
+        </div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-serie"></canvas></div></div>
       </div>
       <div class="card">
