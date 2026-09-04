@@ -136,13 +136,18 @@ JANELA_TENDENCIA_MAX_DIAS = 365
 
 def _periodo_anterior(data_inicio: str, data_fim: str, conn):
     """Dado um periodo [data_inicio, data_fim), devolve (periodo atual, periodo anterior) para
-    comparacao de tendencia. O periodo atual e o final da janela selecionada, limitado a no
-    maximo 12 meses -- assim, tanto o padrao "toda a base" (2002-hoje) quanto uma janela curta
-    escolhida pelo usuario (ex: jan/25 a jan/26) sempre comparam um recorte recente contra o
-    recorte equivalente imediatamente anterior, em vez de comparar contra decadas sem dado algum.
-    Esse teto nunca conflita com uma janela explicitamente escolhida pelo usuario (6 meses, 12
-    meses, um trimestre, um ano) -- todas sao <= 365 dias. Quando o recorte anterior calculado
-    cai INTEIRAMENTE antes do inicio historico da base (sem dado algum), quem chama
+    comparacao de tendencia. O periodo anterior e SEMPRE o intervalo imediatamente anterior, do
+    MESMO TAMANHO EXATO do periodo atual -- ex: filtro Ago/22 a Ago/24 (2 anos) compara contra
+    Ago/20 a Ago/22 (2 anos), nunca contra so os ultimos 12 meses do filtro. BUG REAL corrigido
+    aqui: uma versao anterior desta funcao limitava o periodo atual a no maximo 365 dias
+    incondicionalmente -- um filtro de 2 anos escolhido pelo usuario virava, por baixo dos
+    panos, uma comparacao dos ultimos 12 meses contra os 12 anteriores a esses, sem o
+    frontend nem o usuario saberem que o "periodo atual" exibido nao era o filtro de verdade.
+    Esse teto de JANELA_TENDENCIA_MAX_DIAS agora so vale para o caso SEM NENHUM filtro (o
+    padrao "toda a base", 2002-hoje, onde comparar o historico inteiro contra decadas sem
+    dado nenhum nao faria sentido) -- uma vez que o usuario escolhe datas explicitas, elas sao
+    respeitadas exatamente, seja qual for o tamanho. Quando o recorte anterior calculado cai
+    INTEIRAMENTE antes do inicio historico da base (sem dado algum), quem chama
     (_ranking_variacao) suprime a indicacao de alta/queda em vez de mostrar uma variacao
     fabricada contra "nada"."""
     cur = conn.cursor()
@@ -161,13 +166,13 @@ def _periodo_anterior(data_inicio: str, data_fim: str, conn):
     fim = _parse_date(data_fim)
     delta = fim - inicio_selecionado
     if delta.days <= 0:
+        # Filtro degenerado (inicio == fim) -- sem um tamanho de periodo real pra replicar
+        # pra tras, cai no mesmo padrao do caso "sem filtro".
         delta = datetime.timedelta(days=JANELA_TENDENCIA_MAX_DIAS)
-    delta = min(delta, datetime.timedelta(days=JANELA_TENDENCIA_MAX_DIAS))
 
-    inicio = fim - delta
-    anterior_fim = inicio
-    anterior_inicio = inicio - delta
-    return inicio.isoformat(), data_fim, anterior_inicio.isoformat(), anterior_fim.isoformat()
+    anterior_fim = inicio_selecionado
+    anterior_inicio = inicio_selecionado - delta
+    return data_inicio, data_fim, anterior_inicio.isoformat(), anterior_fim.isoformat()
 
 
 @app.get("/api/status")
