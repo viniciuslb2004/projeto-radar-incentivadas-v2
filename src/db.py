@@ -308,6 +308,23 @@ CREATE INDEX IF NOT EXISTS idx_operations_ano ON operations(ano);
 CREATE INDEX IF NOT EXISTS idx_operations_uf ON operations(uf);
 CREATE INDEX IF NOT EXISTS idx_operations_cnpj ON operations(cnpj);
 
+-- ============ Correcoes manuais (enriquecimento de transacoes) ============
+-- Sobrescreve, campo a campo, uma classificacao automatica de uma operacao especifica
+-- (ver item 3.3 do pedido: "Correcoes manuais aprovadas devem prevalecer sobre
+-- enriquecimentos automaticos futuros"). Nunca apaga o historico (ativa=FALSE em vez
+-- de DELETE, se uma correcao for desfeita) -- auditavel.
+CREATE TABLE IF NOT EXISTS operations_correcoes_manuais (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    operation_id INTEGER NOT NULL,
+    campo TEXT NOT NULL,              -- 'setor_bndes' | 'subsetor_bndes' | 'segmento'
+    valor_anterior TEXT,
+    valor_novo TEXT NOT NULL,
+    usuario TEXT,
+    criado_em TEXT NOT NULL,
+    ativa BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_correcoes_operation_id ON operations_correcoes_manuais(operation_id);
+
 -- ============ Refresh log / status ============
 CREATE TABLE IF NOT EXISTS refresh_log (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

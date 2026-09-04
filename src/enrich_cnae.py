@@ -52,7 +52,14 @@ def latest_month() -> str:
 
 
 def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
-    """CNPJs que aparecem nas operacoes de credito da FINEP.
+    """CNPJs que aparecem nas operacoes de credito (FINEP e BNDES).
+
+    Ate 2026-09, so buscava CNPJs da FINEP (o motor de busca por CNAE so precisava
+    deles, ja que BNDES ja vem com setor nativo da propria planilha). Passou a incluir
+    tambem bndes_raw.cnpj: mesmo o BNDES ja tendo classificacao nativa de setor, o CNAE
+    por CNPJ e um dado real e util por si so (identificacao da empresa, ver pedido de
+    enriquecimento) -- confirmado 3994 CNPJs do BNDES nunca tinham sido buscados antes
+    (0 faltando do lado FINEP, que ja estava 100% coberto).
 
     only_unresolved=True (padrao): exclui os que JA estao em cnpj_cnae -- antes disso,
     o job mensal buscava, do zero, todos os CNPJs ja vistos (inclusive os ja resolvidos
@@ -64,6 +71,8 @@ def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
         SELECT cnpj_proponente AS cnpj FROM finep_credito_direto_raw
         UNION
         SELECT cnpj_beneficiario AS cnpj FROM finep_credito_descentralizado_raw
+        UNION
+        SELECT cnpj FROM bndes_raw
         """,
         get_engine(),
     )

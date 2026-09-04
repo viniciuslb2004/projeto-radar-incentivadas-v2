@@ -19,6 +19,7 @@
     <button class="tab-btn" data-view="busca">Busca</button>
     <button class="tab-btn" data-view="editais">Editais</button>
     <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
+    <button class="tab-btn" data-view="enriquecimento">Enriquecimento</button>
   </div>
   <div class="status-pill" id="status-pill">carregando...</div>
 </div>
@@ -300,6 +301,26 @@
     <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
   </section>
 
+  <!-- ===================== ENRIQUECIMENTO ===================== -->
+  <section id="view-enriquecimento" class="view">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">Histórico de importações <span class="hint">planilhas oficiais do BNDES/FINEP, baixadas automaticamente</span></div>
+      <div class="card-body" id="enr-importacoes">Carregando...</div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">
+        <span>Registros pendentes de classificação <span class="hint">a classificação automática não conseguiu resolver o setor</span></span>
+      </div>
+      <div class="card-body" style="max-height:420px; overflow-y:auto;" id="enr-pendentes">Carregando...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Correções manuais <span class="hint">prevalecem sobre reclassificações automáticas futuras</span></div>
+      <div class="card-body" style="max-height:300px; overflow-y:auto;" id="enr-correcoes">Carregando...</div>
+    </div>
+  </section>
+
 </main>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -333,5 +354,6 @@
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
 <script src="/js/linhas.js"></script>
+<script src="/js/enriquecimento.js"></script>
 </body>
 </html>

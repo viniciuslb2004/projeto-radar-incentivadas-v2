@@ -1069,6 +1069,105 @@ def linha_detalhe(linha_id: int):
         conn.close()
 
 
+# ============ Enriquecimento (item 3 do pedido de melhorias) ============
+# So cobre as transacoes ja importadas (bndes_raw/finep_*_raw -> operations, ver
+# unify.py) -- NAO tem upload de planilha nesta versao: os dados vem sempre de
+# download automatico das planilhas oficiais do BNDES/FINEP (ver refresh.py), nunca
+# de arquivo enviado por um usuario, entao nao ha um fluxo de "importar arquivo" pra
+# expor aqui. O que existe: historico de importacoes (refresh_log/refresh_editais_log,
+# ja gravados por refresh.py/refresh_editais.py), fila de registros pendentes (setor
+# nao resolvido pela classificacao automatica) e correcao manual, que passa a
+# prevalecer sobre reclassificacoes automaticas futuras (ver unify.py).
+
+@app.get("/api/enriquecimento/importacoes")
+def enriquecimento_importacoes(limit: int = 20):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        transacoes = cur.execute(
+            "SELECT started_at, finished_at, bndes_rows, finep_credito_direto_rows, "
+            "finep_credito_descentralizado_rows, operations_rows, setores_pendentes, status, detalhe "
+            "FROM refresh_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        editais = cur.execute(
+            "SELECT started_at, finished_at, total_editais, abertos, status, detalhe "
+            "FROM refresh_editais_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        cols_transacoes = ["started_at", "finished_at", "bndes_rows", "finep_credito_direto_rows",
+                           "finep_credito_descentralizado_rows", "operations_rows", "setores_pendentes",
+                           "status", "detalhe"]
+        cols_editais = ["started_at", "finished_at", "total_editais", "abertos", "status", "detalhe"]
+        return {
+            "transacoes": [dict(zip(cols_transacoes, r)) for r in transacoes],
+            "editais": [dict(zip(cols_editais, r)) for r in editais],
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/enriquecimento/pendentes")
+def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
+    """Fila de revisao manual: operacoes que a classificacao automatica NAO conseguiu
+    resolver (ver setor_origem='pendente' em unify.py) -- tipicamente FINEP sem CNPJ
+    informado na planilha de origem, caso em que nenhum enriquecimento automatico
+    (CNPJ->CNAE) tem como resolver; so uma correcao manual (quem conhece a operacao)
+    pode."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        total = cur.execute("SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'").fetchone()[0]
+        rows = cur.execute(
+            "SELECT id, agencia, instrumento, cliente, cnpj, uf, data_contratacao, valor_contratado, "
+            "descricao_projeto FROM operations WHERE setor_origem = 'pendente' "
+            "ORDER BY valor_contratado DESC NULLS LAST LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        cols = ["id", "agencia", "instrumento", "cliente", "cnpj", "uf", "data_contratacao",
+                "valor_contratado", "descricao_projeto"]
+        return {"total": total, "resultados": [dict(zip(cols, r)) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/enriquecimento/correcoes")
+def enriquecimento_correcoes(limit: int = 50):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT c.id, c.operation_id, o.cliente, c.campo, c.valor_anterior, c.valor_novo, "
+            "c.usuario, c.criado_em, c.ativa FROM operations_correcoes_manuais c "
+            "LEFT JOIN operations o ON o.id = c.operation_id "
+            "ORDER BY c.id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        cols = ["id", "operation_id", "cliente", "campo", "valor_anterior", "valor_novo", "usuario", "criado_em", "ativa"]
+        return {"resultados": [dict(zip(cols, r)) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/enriquecimento/corrigir")
+def enriquecimento_corrigir(body: dict):
+    operation_id = (body or {}).get("operation_id")
+    campo = (body or {}).get("campo")
+    valor_novo = (body or {}).get("valor_novo")
+    usuario = (body or {}).get("usuario") or (SITE_USER if SITE_PASSWORD else None)
+    if not operation_id or not campo or not valor_novo:
+        return {"erro": "parametros 'operation_id', 'campo' e 'valor_novo' sao obrigatorios"}
+    from unify import registrar_correcao_manual
+
+    conn = get_connection()
+    try:
+        registrar_correcao_manual(conn, int(operation_id), campo, valor_novo, usuario)
+        return {"ok": True}
+    except ValueError as e:
+        return {"erro": str(e)}
+    except Exception as e:
+        logger.exception("correcao manual falhou")
+        return {"erro": f"nao foi possivel salvar a correcao agora ({e})"}
+    finally:
+        conn.close()
+
+
 # So monta o servico de arquivos estaticos quando NAO estamos rodando como funcao
 # serverless da Vercel -- e o que faz `uvicorn webapp.main:app` local (dev no PC,
 # app desktop) continuar servindo front+back no mesmo processo, de um jeito

@@ -15,12 +15,99 @@ existente (nunca duplicadas) sempre que resolvem. Sem isso, uma vez que `operati
 deixa de ser reconstruida do zero toda semana, uma pendencia resolvida no enriquecimento
 mensal nunca mais seria refletida.
 """
+import datetime
+
 import pandas as pd
 
 import search_taxonomy
 from db import get_connection, get_engine
 from geo import regiao_de
 from incremental import insert_new_rows
+
+CAMPOS_CORRIGIVEIS = {"setor_bndes", "subsetor_bndes", "segmento"}
+
+
+def registrar_correcao_manual(conn, operation_id: int, campo: str, valor_novo: str, usuario: str = None) -> None:
+    """Grava uma correcao manual (ver item 3.3 do pedido: "Correcoes manuais aprovadas
+    devem prevalecer sobre enriquecimentos automaticos futuros") e aplica na hora --
+    o proximo refresh automatico NAO vai sobrescrever, ver _reaplicar_correcoes_manuais,
+    chamada ao final de build_operations()."""
+    if campo not in CAMPOS_CORRIGIVEIS:
+        raise ValueError(f"campo nao corrigivel: {campo} (permitidos: {sorted(CAMPOS_CORRIGIVEIS)})")
+    row = conn.execute(f"SELECT {campo} FROM operations WHERE id = ?", (operation_id,)).fetchone()
+    if not row:
+        raise ValueError(f"operacao {operation_id} nao encontrada")
+    valor_anterior = row[0]
+    agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # desativa qualquer correcao anterior do MESMO campo nesta operacao (mantem no
+    # historico, so marca ativa=FALSE) antes de registrar a nova -- nunca deixa duas
+    # correcoes ativas competindo pelo mesmo campo.
+    conn.execute(
+        "UPDATE operations_correcoes_manuais SET ativa = FALSE WHERE operation_id = ? AND campo = ? AND ativa = TRUE",
+        (operation_id, campo),
+    )
+    conn.execute(
+        "INSERT INTO operations_correcoes_manuais (operation_id, campo, valor_anterior, valor_novo, usuario, criado_em, ativa) "
+        "VALUES (?, ?, ?, ?, ?, ?, TRUE)",
+        (operation_id, campo, valor_anterior, valor_novo, usuario, agora),
+    )
+    conn.execute(f"UPDATE operations SET {campo} = ? WHERE id = ?", (valor_novo, operation_id))
+    # Uma vez corrigida a mao, a operacao sai da fila de "pendente" -- senao continuaria
+    # aparecendo pra sempre em /api/enriquecimento/pendentes mesmo ja resolvida por
+    # um humano. Nao mexe em operacoes que ja estavam 'nativo'/'enriquecido'.
+    conn.execute(
+        "UPDATE operations SET setor_origem = 'corrigido_manual' WHERE id = ? AND setor_origem = 'pendente'",
+        (operation_id,),
+    )
+    conn.commit()
+    _atualizar_textos_apos_correcao(conn, operation_id)
+
+
+def _atualizar_textos_apos_correcao(conn, operation_id: int) -> None:
+    """Recalcula embedding_text/search_document/search_vector de UMA operacao depois
+    de uma correcao manual -- sem isso, a busca continuaria usando o texto classificado
+    ANTES da correcao (o motivo real de corrigir e melhorar a busca, nao so o rotulo
+    exibido no dashboard)."""
+    row = conn.execute(
+        "SELECT agencia, cliente, cnpj, setor_bndes, subsetor_bndes, segmento, produto, "
+        "instrumento_financeiro, modalidade_apoio, indexador, valor_contratado, "
+        "prazo_amortizacao_meses, descricao_projeto, municipio, uf FROM operations WHERE id = ?",
+        (operation_id,),
+    ).fetchone()
+    if not row:
+        return
+    campos = dict(zip(
+        ["agencia", "cliente", "cnpj", "setor_bndes", "subsetor_bndes", "segmento", "produto",
+         "instrumento_financeiro", "modalidade_apoio", "indexador", "valor_contratado",
+         "prazo_amortizacao_meses", "descricao_projeto", "municipio", "uf"],
+        row,
+    ))
+    boilerplate = _descricoes_boilerplate(conn)
+    texto_embedding = _embedding_text(campos, boilerplate)
+    texto_busca = _search_document(campos, boilerplate)
+    texto_taxonomia = _search_taxonomia_termos(campos)
+    conn.execute(
+        "UPDATE operations SET embedding_text = ?, search_document = ?, search_taxonomia_termos = ? WHERE id = ?",
+        (texto_embedding, texto_busca, texto_taxonomia, operation_id),
+    )
+    conn.commit()
+    _atualizar_search_vector(conn, [operation_id])
+
+
+def _reaplicar_correcoes_manuais(conn) -> int:
+    """Reaplica todas as correcoes ATIVAS em cima de `operations` -- chamado ao final
+    de build_operations(), depois de qualquer reclassificacao automatica, pra garantir
+    que uma correcao manual aprovada nunca seja silenciosamente sobrescrita por um
+    enriquecimento automatico futuro."""
+    rows = conn.execute(
+        "SELECT operation_id, campo, valor_novo FROM operations_correcoes_manuais WHERE ativa = TRUE"
+    ).fetchall()
+    for operation_id, campo, valor_novo in rows:
+        if campo in CAMPOS_CORRIGIVEIS:
+            conn.execute(f"UPDATE operations SET {campo} = ? WHERE id = ?", (valor_novo, operation_id))
+    conn.commit()
+    return len(rows)
 
 OPERATIONS_COLS = [
     "agencia", "instrumento", "fonte_id", "cliente", "cnpj", "uf", "municipio",
@@ -457,6 +544,8 @@ def build_operations():
         reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
         conn.commit()
 
+        n_correcoes = _reaplicar_correcoes_manuais(conn)
+
         total_ops = conn.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
         n_pendente = conn.execute("SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'").fetchone()[0]
     finally:
@@ -465,7 +554,8 @@ def build_operations():
     n_novas = len(novas) if not novas.empty else 0
     print(
         f"operations: {n_novas} linhas novas, {len(reclassificados_ids)} reclassificadas de "
-        f"pendente -> enriquecido, {total_ops} no total ({n_pendente} ainda pendentes de enriquecimento)."
+        f"pendente -> enriquecido, {n_correcoes} correcoes manuais reaplicadas, {total_ops} no "
+        f"total ({n_pendente} ainda pendentes de enriquecimento)."
     )
     return {
         "novas": n_novas,
@@ -473,6 +563,7 @@ def build_operations():
         "pendentes": n_pendente,
         "novos_ids": novos_ids,
         "reclassificados_ids": reclassificados_ids,
+        "correcoes_reaplicadas": n_correcoes,
     }
 
 
