@@ -3,18 +3,27 @@ diferente de `editais_raw`, que sao CHAMADAS PUBLICAS com prazo) a partir de fon
 LOCAIS/OFICIAIS -- o site hospedado so consulta esta tabela, nunca acessa os sites das
 instituicoes em tempo real (ver item 6 do pedido de melhorias).
 
-Duas fontes hoje:
+Quatro fontes hoje:
 1. FINEP: reaproveita `editais_raw` (ja coletado de https://www.finep.gov.br/oportunidades
    via API oficial, ver finep_editais.py) -- uma chamada publica tambem e uma forma de
    linha incentivada (fluxo='edital', por oposicao a fluxo continuo).
-2. BNDES: curadoria manual VERIFICADA (fonte_tipo='curadoria_manual_verificada') -- cada
-   linha abaixo foi capturada navegando na pagina oficial real, nao inferida. Cobertura
-   inicial pequena e deliberada (nao um catalogo completo do BNDES).
+2. BNDES: curadoria manual verificada (origem_dado='curadoria_manual_verificada') --
+   1 linha (BNDES Mais Inovação), capturada navegando na pagina oficial real. O site
+   do BNDES e um portal WCM pesado em JS sem catalogo estavel navegavel por URL --
+   cobertura pequena e deliberada, nao um catalogo completo.
+3. Desenvolve SP: curadoria manual verificada -- 17 linhas reais, capturadas
+   navegando as 7 paginas de categoria (https://www.desenvolvesp.com.br/empresas/
+   opcoes-de-credito/<categoria>), cada uma com prazo/carencia/taxa/elegibilidade
+   estruturados na propria pagina publica.
+4. BNB (Banco do Nordeste): curadoria manual verificada -- 1 linha (FNE Inovação),
+   capturada da pagina oficial (estrutura rica: objetivo/publico/prazo por
+   finalidade/garantias/limites por porte). O FNE tem dezenas de linhas por
+   segmento/publico (rural, MPE, corporate, etc.) -- cobertura pequena e deliberada.
 
-Desenvolve SP e BNB: SEM integracao ainda (nenhuma linha real coletada) -- nao ha
-scraper para essas 2 instituicoes nesta versao. Ver relatorio da sessao para o porque
-(sites nao mapeados/verificados) -- propositalmente NAO populado com dado nenhum em vez
-de inventar conteudo so para "completar" as 4 instituicoes pedidas.
+Nenhuma das 4 fontes usa scraping automatizado continuo (so a FINEP tem uma API
+oficial estruturada ja consumida por outro modulo) -- BNDES/Desenvolve SP/BNB sao
+atualizados manualmente, sob demanda, ate que scrapers dedicados sejam construidos
+e verificados against a estrutura real (e razoavelmente estavel) de cada site.
 """
 import datetime
 import json
@@ -256,18 +265,220 @@ def seed_bndes_manual(conn) -> int:
     return _upsert_many(conn, [dict(linha) for linha in _BNDES_MANUAL])
 
 
+def _linha_desenvolve_sp(nome, categoria_nome, categoria_url, valor_max, prazo, carencia, taxa, elegiveis, trecho):
+    """Helper pra reduzir repeticao -- cada linha de credito da Desenvolve SP e
+    exibida dentro de uma pagina de CATEGORIA (ex: "Projetos de Investimento"), com
+    cards padronizados (valor/prazo/carencia/taxa/elegibilidade), sem descricao longa,
+    garantias ou contrapartida detalhadas na propria pagina publica -- por isso os
+    campos NAO capturados ficam como NAO_INFORMADO em vez de inventados. A MESMA linha
+    pode aparecer em mais de uma categoria com termos DIFERENTES (confirmado: ex.
+    "Financiamento ao Investimento Paulista" tem prazo/carencia diferentes em
+    "Projetos de Investimento" vs "Máquinas e Equipamentos Isolados") -- cada
+    combinacao (linha, categoria) e uma linha_incentivada distinta (url_oficial
+    diferente por categoria), refletindo o termo real daquele contexto."""
+    return {
+        "instituicao": "Desenvolve SP",
+        "nome_oficial": nome,
+        "nome_simplificado": nome,
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": f"Linha de crédito da categoria \"{categoria_nome}\" da Desenvolve SP.",
+        "descricao_completa": NAO_INFORMADO,
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": categoria_nome,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": ", ".join(elegiveis),
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Estado de São Paulo",
+        "destinacao": categoria_nome,
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": valor_max,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": taxa,
+        "indexador": "IPCA" if "IPCA" in taxa else ("TR" if "TR" in taxa else NAO_INFORMADO),
+        "spread": NAO_INFORMADO,
+        "prazo_total": prazo,
+        "carencia": carencia or NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": ", ".join(elegiveis),
+        "agente_financeiro": "Desenvolve SP",
+        "canal_contratacao": "Simulação de crédito no site oficial",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": categoria_url,
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": trecho,
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # taxonomia da Desenvolve SP nao usa as 4 categorias BNDES -- ver item 8
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": ", ".join(elegiveis),
+        "destinacao_padronizada": categoria_nome,
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": categoria_nome if "Inova" in categoria_nome else None,
+        "temas_sustentabilidade": categoria_nome if "Sustent" in categoria_nome else None,
+        "sinonimos_termos": None,
+    }
+
+
+_DESENVOLVE_SP_MANUAL = [
+    _linha_desenvolve_sp("Agro Máquinas", "Desenvolve Agro", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/desenvolve-agro",
+                         5_000_000, "60 meses", None, "1.06 % a.m.", ["Pequeno Produtor rural", "Médio-Grande Produtor Rural"],
+                         "Crédito de até R$ 5 milhões / Linha Agro Máquinas / Prazo 60 meses / Taxa de juros 1.06% a.m. (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Irriga + SP", "Desenvolve Agro", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/desenvolve-agro",
+                         5_000_000, "60 meses", "18 meses", "0.39 % a.m.", ["Pequeno Produtor rural", "Médio-Grande Produtor Rural"],
+                         "Crédito de até R$ 5 milhões / Linha Irriga + SP / Prazo 60 meses / Carência 18 meses / Taxa 0.39% a.m. (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Crédito simplificado Giro", "Capital de giro", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/capital-de-giro",
+                         300_000, "36 meses", "1 mês", "1.67 % a.m.", ["Micro", "Pequena"],
+                         "Crédito de até R$ 300 mil / Linha Crédito simplificado Giro / Prazo 36 meses / Carência 1 mês / Taxa 1.67% a.m. (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Giro Desenvolve", "Capital de giro", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/capital-de-giro",
+                         10_000_000, "60 meses", "12 meses", "1.4 % a.m. + IPCA", ["Médias", "Média-Grande", "Grande"],
+                         "Crédito de até R$ 10 milhões / Linha Giro Desenvolve / Prazo 60 meses / Carência 12 meses / Taxa 1.4% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Financiamento ao Investimento Paulista", "Projetos de Investimento", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-investimento",
+                         30_000_000, "120 meses", "36 meses", "0.8 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande", "Pré-operacional"],
+                         "Crédito de até R$ 30 milhões / Financiamento ao Investimento Paulista / Prazo 120 meses / Carência 36 meses / Taxa 0.8% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Desenvolve Mais Inclusão", "Projetos de Investimento", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-investimento",
+                         10_000_000, "120 meses", "36 meses", "0.64 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Pré-operacional"],
+                         "Crédito de até R$ 10 milhões / Desenvolve Mais Inclusão / Prazo 120 meses / Carência 36 meses / Taxa 0.64% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Força Empreendedora", "Projetos de Investimento", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-investimento",
+                         700_000, "60 meses", "12 meses", "0.8 % a.m. + IPCA", ["Micro", "Pequena"],
+                         "Crédito de até R$ 700 mil / Linha Força Empreendedora / Prazo 60 meses / Carência 12 meses / Taxa 0.8% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Desenvolve Centro", "Projetos de Investimento", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-investimento",
+                         5_000_000, "120 meses", "36 meses", "0.63 % a.m. + IPCA", ["Micro", "Pequena", "Médias"],
+                         "Crédito de até R$ 5 milhões / Linha Desenvolve Centro / Prazo 120 meses / Carência 36 meses / Taxa 0.63% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Rádio Difusão", "Projetos de Investimento", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-investimento",
+                         30_000_000, "120 meses", "36 meses", "0.58 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande"],
+                         "Crédito de até R$ 30 milhões / Linha Rádio Difusão / Prazo 120 meses / Carência 36 meses / Taxa 0.58% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Economia Verde", "Projetos Sustentáveis", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-sustentaveis",
+                         30_000_000, "120 meses", "36 meses", "0.64 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande", "Pré-operacional"],
+                         "Crédito de até R$ 30 milhões / Linha Economia Verde / Prazo 120 meses / Carência 36 meses / Taxa 0.64% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("FINEP Inovacred", "Projetos de Inovação", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-inovacao",
+                         30_000_000, "96 meses", "24 meses", "0.49 % a.m. + TR", ["Micro", "Pequena", "Médias", "Média-Grande"],
+                         "Crédito de até R$ 30 milhões / FINEP Inovacred / Prazo 96 meses / Carência 24 meses / Taxa 0.49% a.m. + TR (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Linha Incentivo à Tecnologia", "Projetos de Inovação", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/projetos-de-inovacao",
+                         30_000_000, "120 meses", "36 meses", "0.63 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande", "Pré-operacional"],
+                         "Crédito de até R$ 30 milhões / Linha Incentivo à Tecnologia / Prazo 120 meses / Carência 36 meses / Taxa 0.63% a.m. + IPCA (capturado ao vivo em 2026-09-04)"),
+    _linha_desenvolve_sp("Financiamento ao Investimento Paulista", "Máquinas e Equipamentos Isolados", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/maquinas-e-equipamentos-isolados",
+                         30_000_000, "60 meses", "12 meses", "0.8 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande", "Pré-operacional"],
+                         "Crédito de até R$ 30 milhões / Financiamento ao Investimento Paulista / Prazo 60 meses / Carência 12 meses / Taxa 0.8% a.m. + IPCA (capturado ao vivo em 2026-09-04, categoria Máquinas e Equipamentos Isolados)"),
+    _linha_desenvolve_sp("Linha Desenvolve Mulher", "Máquinas e Equipamentos Isolados", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/maquinas-e-equipamentos-isolados",
+                         10_000_000, "60 meses", "12 meses", "0.64 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Pré-operacional"],
+                         "Crédito de até R$ 10 milhões / Linha Desenvolve Mulher / Prazo 60 meses / Carência 12 meses / Taxa 0.64% a.m. + IPCA (capturado ao vivo em 2026-09-04, categoria Máquinas e Equipamentos Isolados)"),
+    _linha_desenvolve_sp("Linha Economia Verde", "Máquinas e Equipamentos Isolados", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/maquinas-e-equipamentos-isolados",
+                         30_000_000, "60 meses", "12 meses", "0.64 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande", "Pré-operacional"],
+                         "Crédito de até R$ 30 milhões / Linha Economia Verde / Prazo 60 meses / Carência 12 meses / Taxa 0.64% a.m. + IPCA (capturado ao vivo em 2026-09-04, categoria Máquinas e Equipamentos Isolados)"),
+    _linha_desenvolve_sp("Linha Rádio Difusão", "Máquinas e Equipamentos Isolados", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/maquinas-e-equipamentos-isolados",
+                         30_000_000, "60 meses", "12 meses", "0.58 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Média-Grande"],
+                         "Crédito de até R$ 30 milhões / Linha Rádio Difusão / Prazo 60 meses / Carência 12 meses / Taxa 0.58% a.m. + IPCA (capturado ao vivo em 2026-09-04, categoria Máquinas e Equipamentos Isolados)"),
+    _linha_desenvolve_sp("Linha Desenvolve Mulher", "Desenvolve Mulher", "https://www.desenvolvesp.com.br/empresas/opcoes-de-credito/desenvolve-mulher",
+                         10_000_000, "120 meses", "36 meses", "0.64 % a.m. + IPCA", ["Micro", "Pequena", "Médias", "Pré-operacional"],
+                         "Crédito de até R$ 10 milhões / Linha Desenvolve Mulher / Prazo 120 meses / Carência 36 meses / Taxa 0.64% a.m. + IPCA (capturado ao vivo em 2026-09-04, categoria Desenvolve Mulher)"),
+]
+
+
+def seed_desenvolve_sp_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _DESENVOLVE_SP_MANUAL])
+
+
+# BNB (Banco do Nordeste): curadoria manual VERIFICADA -- FNE Inovacao capturado ao
+# vivo da pagina oficial (estrutura rica: objetivo/publico/prazo por finalidade/
+# garantias/limites de financiamento por porte). Cobertura pequena e deliberada
+# (o catalogo completo do FNE tem dezenas de linhas por segmento/publico -- ver
+# docstring do modulo).
+_BNB_MANUAL = [
+    {
+        "instituicao": "BNB",
+        "nome_oficial": "FNE Inovação",
+        "nome_simplificado": "FNE Inovação",
+        "sigla": "FNE",
+        "status": "aberta",
+        "descricao_resumida": "Programa de Financiamento à Inovação para empresas e empreendimentos rurais, com recursos do FNE.",
+        "descricao_completa": (
+            "Promove a inovação em produtos, serviços, processos e métodos organizacionais nos "
+            "empreendimentos. Nos setores não rurais: implementação de produto/serviço/processo novo "
+            "ou significativamente melhorado, incluindo obras, bens de capital e capital de giro "
+            "associado ao investimento. No setor rural: projetos de inovação tecnológica em "
+            "empreendimentos agropecuários, incluindo investimento rural e custeio associado."
+        ),
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Todos os setores (rural e não rural)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Microempreendedor Individual (MEI), empresas de todos os portes, produtores/cooperativas/associações rurais",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Nordeste e Norte de Minas Gerais e Espírito Santo (área de atuação do FNE)",
+        "destinacao": "Inovação em produtos, serviços, processos e métodos organizacionais",
+        "itens_financiaveis": "Obras e aquisição de bens de capital; capital de giro associado ao investimento; consultorias de acompanhamento/monitoramento de impactos sociais e ambientais",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": (
+            "Miniprodutor/microempresa: 100%; Pequeno produtor/pequena empresa: 100%; "
+            "Pequeno-médio: 100%; Médio I: 95%; Médio II: 85%; Grande (PRDNE): 80%; Grande (geral): 50%"
+        ),
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Setor Rural: Resolução CMN nº 5.329/2026; Demais setores: Lei nº 10.177/2001 e Resolução CMN nº 5.013/2022",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Investimento Fixo (Rural e Não Rural): até 15 anos; Investimento Semifixo (Rural): até 8 anos",
+        "carencia": "Investimento Fixo: até 5 anos; Investimento Semifixo (Rural): até 3 anos; +1 ano adicional para produtoras/empresas com controle/participação feminina >40%",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Alienação Fiduciária, Aval, Fiança, Hipoteca, Penhor",
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Cadastro e limite de crédito aprovados no Banco do Nordeste",
+        "agente_financeiro": "Banco do Nordeste (Fundo Constitucional de Financiamento do Nordeste - FNE)",
+        "canal_contratacao": "Gerente de relacionamento / agências do Banco do Nordeste",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": "Projeto de Financiamento ou Proposta de Crédito",
+        "url_oficial": "https://www.bnb.gov.br/fne-inovacao",
+        "data_vigencia": "Resolução CMN nº 5.329/2026 (rural) e nº 5.013/2022 (demais setores)",
+        "trecho_fonte": (
+            "\"Promover a inovação em produtos, serviços, processos e métodos organizacionais nos "
+            "empreendimentos... Fonte de Recursos: Fundo Constitucional de Financiamento do Nordeste "
+            "(FNE)\" (capturado ao vivo da página oficial em 2026-09-04)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,  # taxonomia propria do FNE (rural/nao-rural), sem de-para com as 4 categorias BNDES ainda
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes",
+        "destinacao_padronizada": "Inovação",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": "Inovação em produtos, processos e métodos organizacionais",
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "inovacao tecnologia P&D&I pesquisa e desenvolvimento nordeste",
+    },
+]
+
+
+def seed_bnb_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _BNB_MANUAL])
+
+
 def build_linhas_incentivadas():
     conn = get_connection()
     try:
         n_finep = importar_finep_editais(conn)
         n_bndes = seed_bndes_manual(conn)
+        n_desenvolve_sp = seed_desenvolve_sp_manual(conn)
+        n_bnb = seed_bnb_manual(conn)
         total = conn.execute("SELECT COUNT(*) FROM linhas_incentivadas").fetchone()[0]
     finally:
         conn.close()
     print(
-        f"linhas_incentivadas: {n_finep} da FINEP (editais_raw) + {n_bndes} do BNDES "
-        f"(curadoria manual verificada) processadas -- {total} linhas no total. "
-        f"Desenvolve SP e BNB: sem integracao ainda (ver docstring do modulo)."
+        f"linhas_incentivadas: {n_finep} da FINEP (editais_raw) + {n_bndes} do BNDES + "
+        f"{n_desenvolve_sp} da Desenvolve SP + {n_bnb} do BNB (curadoria manual verificada) "
+        f"processadas -- {total} linhas no total."
     )
 
 
