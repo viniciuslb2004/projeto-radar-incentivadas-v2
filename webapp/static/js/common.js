@@ -199,7 +199,7 @@ function _ligarBotoesDeAba() {
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
       document.getElementById("view-" + btn.dataset.view).classList.add("active");
-      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais" || btn.dataset.view === "linhas" || btn.dataset.view === "enriquecimento") ? "none" : "flex";
+      document.getElementById("filterbar").style.display = (btn.dataset.view === "busca" || btn.dataset.view === "editais" || btn.dataset.view === "linhas") ? "none" : "flex";
     });
   });
 }
