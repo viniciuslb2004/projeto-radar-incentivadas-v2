@@ -128,6 +128,11 @@ body {
   background: #fff;
   color: var(--text-main);
   min-width: 130px;
+  /* Alguns selects (ex.: Porte/Regiao em Linhas Incentivadas) tem opcoes com texto
+     bem longo -- sem max-width, o <select> nativo se dimensiona pelo conteudo da
+     opcao mais larga e estoura o container em telas estreitas (mobile). */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* ============ Layout ============ */
