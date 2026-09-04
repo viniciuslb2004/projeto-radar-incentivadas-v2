@@ -138,6 +138,20 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
 
+// Persiste um valor (ex: granularidade do grafico) na URL via query string, sem
+// recarregar a pagina -- permite compartilhar um link que abre a mesma visao. Le o
+// valor inicial de volta com getURLParam(); troca so acontece por replaceState (nao
+// empilha entradas no historico do navegador a cada mudanca de select).
+function getURLParam(nome, padrao) {
+  return new URLSearchParams(window.location.search).get(nome) || padrao;
+}
+
+function setURLParam(nome, valor) {
+  const url = new URL(window.location);
+  url.searchParams.set(nome, valor);
+  window.history.replaceState({}, "", url);
+}
+
 // Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
 // selects de data muda, compara os dois pares como "ano*12+mes" (comparavel direto,
 // sem precisar montar Date) -- se o par que NAO acabou de mudar ficou invalido em

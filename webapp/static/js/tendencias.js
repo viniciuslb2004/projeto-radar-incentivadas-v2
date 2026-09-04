@@ -27,7 +27,9 @@ function trendListItem(row, sinal, dataAttr) {
 
 async function loadTendenciasSetores(filters) {
   const data = await fetchJSON("/api/tendencias/setores?" + qs(filters));
-  const periodoTxt = `${fmtPeriodo(data.periodo_atual)} vs. ${fmtPeriodo(data.periodo_anterior)}`;
+  const periodoTxt = data.comparavel
+    ? `${fmtPeriodo(data.periodo_atual)} vs. ${fmtPeriodo(data.periodo_anterior)}`
+    : `${fmtPeriodo(data.periodo_atual)} · sem dados no período anterior para comparar`;
   document.getElementById("tend-header-alta").firstChild.textContent = `Setores em alta `;
   document.getElementById("tend-header-queda").firstChild.textContent = `Setores em queda `;
   document.querySelectorAll("#tend-header-alta .hint, #tend-header-queda .hint").forEach((el) => el.remove());

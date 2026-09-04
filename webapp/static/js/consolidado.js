@@ -25,10 +25,33 @@ function _rotuloPeriodoSerie(granularidade, ano, periodo) {
   return `${ano}-T${periodo}`; // trimestral (padrao)
 }
 
+const _PASSOS_POR_ANO = { mensal: 12, trimestral: 4, semestral: 2, anual: 1 };
+
+// Preenche periodos SEM nenhuma operacao (nem BNDES nem FINEP) como zero, em vez de
+// simplesmente omitir esse ponto do eixo X -- so faz sentido pra metricas aditivas
+// (valor_total, n_operacoes: "zero operacoes" e um fato real, nao um dado inventado),
+// e so preenche o MEIO do intervalo observado (do primeiro ao ultimo periodo com
+// algum dado), nunca estende pra alem do que a base realmente cobre.
+function _sequenciaCompletaPeriodos(granularidade, pares) {
+  if (!pares.length) return [];
+  const passos = _PASSOS_POR_ANO[granularidade] || 4;
+  const indice = ({ ano, periodo }) => ano * passos + (periodo - 1);
+  const min = Math.min(...pares.map(indice));
+  const max = Math.max(...pares.map(indice));
+  const seq = [];
+  for (let i = min; i <= max; i++) {
+    const ano = Math.floor(i / passos);
+    const periodo = (i % passos) + 1;
+    seq.push({ ano, periodo, label: _rotuloPeriodoSerie(granularidade, ano, periodo) });
+  }
+  return seq;
+}
+
 async function loadSerieTemporal(filters) {
   const granularidade = document.getElementById("serie-granularidade").value;
   const data = await fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade }));
-  const periodos = [...new Set(data.map((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo)))].sort();
+  const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
+  const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos).map((s) => s.label);
   const agencias = [...new Set(data.map((d) => d.agencia))];
   const colors = { BNDES: "#223850", FINEP: "#7C93AC" };
 
@@ -132,7 +155,15 @@ async function refreshConsolidado(filters) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  document.getElementById("serie-granularidade").addEventListener("change", () => loadSerieTemporal(currentFilters()));
+  const granularidadeSelect = document.getElementById("serie-granularidade");
+  const granularidadeInicial = getURLParam("granularidade", null);
+  if (granularidadeInicial && [...granularidadeSelect.options].some((o) => o.value === granularidadeInicial)) {
+    granularidadeSelect.value = granularidadeInicial;
+  }
+  granularidadeSelect.addEventListener("change", () => {
+    setURLParam("granularidade", granularidadeSelect.value);
+    loadSerieTemporal(currentFilters());
+  });
   await initFiltersAndTabs();
   onFiltersChange(refreshConsolidado);
   refreshConsolidado(currentFilters());

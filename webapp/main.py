@@ -129,8 +129,15 @@ def _periodo_anterior(data_inicio: str, data_fim: str, conn):
     comparacao de tendencia. O periodo atual e o final da janela selecionada, limitado a no
     maximo 12 meses -- assim, tanto o padrao "toda a base" (2002-hoje) quanto uma janela curta
     escolhida pelo usuario (ex: jan/25 a jan/26) sempre comparam um recorte recente contra o
-    recorte equivalente imediatamente anterior, em vez de comparar contra decadas sem dado algum."""
+    recorte equivalente imediatamente anterior, em vez de comparar contra decadas sem dado algum.
+    Esse teto nunca conflita com uma janela explicitamente escolhida pelo usuario (6 meses, 12
+    meses, um trimestre, um ano) -- todas sao <= 365 dias. Quando o recorte anterior calculado
+    cai INTEIRAMENTE antes do inicio historico da base (sem dado algum), quem chama
+    (_ranking_variacao) suprime a indicacao de alta/queda em vez de mostrar uma variacao
+    fabricada contra "nada"."""
     cur = conn.cursor()
+    if data_inicio and data_fim and data_inicio > data_fim:
+        data_inicio, data_fim = data_fim, data_inicio
     if not data_inicio or not data_fim:
         max_data = cur.execute("SELECT MAX(data_contratacao) FROM operations").fetchone()[0]
         if not max_data:
@@ -398,30 +405,38 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
             f"FROM operations {where} GROUP BY {group_col}",
             params_base + [d_ini, d_fim],
         ).fetchall()
-        total = sum(r[1] or 0 for r in rows) or 1
-        return {r[0]: {"valor": r[1] or 0, "n": r[2], "part": (r[1] or 0) / total} for r in rows}, total
+        total = sum(r[1] or 0 for r in rows)
+        return {r[0]: {"valor": r[1] or 0, "n": r[2], "part": (r[1] or 0) / total if total else 0} for r in rows}, total
 
     atual, total_atual = valor_por_grupo(data_inicio, data_fim)
     anterior, total_anterior = valor_por_grupo(ant_inicio, ant_fim)
+
+    # Sem NENHUM dado no periodo anterior inteiro (ex: a janela cai antes do inicio
+    # historico da base) -- nao ha nada de verdade para comparar. Devolver
+    # variacao_pp=0 pareceria "sem mudanca" e devolver a participacao_atual crua
+    # pareceria uma alta fabricada de 100pp; nenhum dos dois e uma comparacao real,
+    # entao a variacao fica None e quem consome (frontend) remove a indicacao de
+    # alta/queda por completo, em vez de mostrar uma variacao enganosa.
+    comparavel = total_anterior > 0
 
     grupos = set(atual) | set(anterior)
     out = []
     for g in grupos:
         a = atual.get(g, {"valor": 0, "n": 0, "part": 0})
         p = anterior.get(g, {"valor": 0, "n": 0, "part": 0})
-        variacao_pp = (a["part"] - p["part"]) * 100
         out.append({
             "grupo": g,
             "participacao_atual_pct": a["part"] * 100,
-            "participacao_anterior_pct": p["part"] * 100,
-            "variacao_pp": variacao_pp,
+            "participacao_anterior_pct": (p["part"] * 100) if comparavel else None,
+            "variacao_pp": ((a["part"] - p["part"]) * 100) if comparavel else None,
             "valor_atual": a["valor"],
             "n_operacoes_atual": a["n"],
         })
-    out.sort(key=lambda r: r["variacao_pp"], reverse=True)
+    out.sort(key=lambda r: (r["variacao_pp"] if comparavel else r["valor_atual"]), reverse=True)
     return {
         "data_inicio": data_inicio, "data_fim": data_fim,
         "data_inicio_anterior": ant_inicio, "data_fim_anterior": ant_fim,
+        "comparavel": comparavel,
         "grupos": out,
     }
 
@@ -435,6 +450,7 @@ def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = N
         return {
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
             "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
             "setores": [{**g, "setor": g["grupo"]} for g in r["grupos"]],
         }
     finally:
@@ -451,6 +467,7 @@ def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str 
             "setor": setor,
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
             "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
             "subsetores": [{**g, "subsetor": g["grupo"]} for g in r["grupos"]],
         }
     finally:
@@ -468,6 +485,7 @@ def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia:
             "subsetor": subsetor,
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
             "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
             "segmentos": [{**g, "segmento": g["grupo"]} for g in r["grupos"]],
         }
     finally:
