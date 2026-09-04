@@ -592,18 +592,18 @@ def operacao_detalhe(op_id: int):
     try:
         cur = conn.cursor()
         row = cur.execute(
-            "SELECT raw_table, raw_id, agencia, instrumento FROM operations WHERE id = ?", (op_id,)
+            "SELECT raw_table, raw_id, agencia, instrumento, setor_bndes FROM operations WHERE id = ?", (op_id,)
         ).fetchone()
         if not row:
             return {"erro": "operacao nao encontrada"}
-        raw_table, raw_id, agencia, instrumento = row
+        raw_table, raw_id, agencia, instrumento, setor_bndes = row
         raw_row = cur.execute(f"SELECT * FROM {raw_table} WHERE id = ?", (raw_id,)).fetchone()
         if not raw_row:
             return {"raw_table": raw_table, "secoes": []}
         col_names = [d[0] for d in cur.description]
         raw = dict(zip(col_names, raw_row))
         secoes = montar_detalhe_amigavel(raw_table, raw)
-        return {"raw_table": raw_table, "agencia": agencia, "instrumento": instrumento, "secoes": secoes}
+        return {"raw_table": raw_table, "agencia": agencia, "instrumento": instrumento, "setor_bndes": setor_bndes, "secoes": secoes}
     finally:
         conn.close()
 

@@ -403,4 +403,29 @@ async function openOperacaoDetalhe(id) {
   });
   html += "</div>";
   body.innerHTML = html;
+
+  // Integracao transacoes <-> linhas incentivadas (item 8): mesma logica do lado
+  // inverso em linhas.js -- so setor_bndes (taxonomia nativa das 4 categorias),
+  // rotulado "potencialmente compativel", nunca misturado com o detalhe da operacao.
+  if (data.setor_bndes && typeof fetchJSON === "function") {
+    try {
+      const linhas = await fetchJSON("/api/linhas?" + qs({ setor: data.setor_bndes, limit: 3 }));
+      if (linhas.resultados && linhas.resultados.length) {
+        const div = document.createElement("div");
+        div.className = "detalhe-secao";
+        div.innerHTML = `<div class="detalhe-secao-titulo">Linhas incentivadas potencialmente compatíveis <span class="hint">mesmo setor -- não é confirmação de elegibilidade</span></div>` +
+          '<ul class="clickable-list">' +
+          linhas.resultados.map((l) => `<li data-linha-id="${l.id}"><span>${l.nome_simplificado || l.nome_oficial}</span><span class="badge neutro">${l.instituicao}</span></li>`).join("") +
+          "</ul>";
+        body.appendChild(div);
+        div.querySelectorAll("li[data-linha-id]").forEach((li) => {
+          li.addEventListener("click", () => {
+            if (typeof openLinhaDetalhe === "function") openLinhaDetalhe(li.dataset.linhaId);
+          });
+        });
+      }
+    } catch (e) {
+      // integracao e um extra -- se falhar, so nao mostra a secao.
+    }
+  }
 }

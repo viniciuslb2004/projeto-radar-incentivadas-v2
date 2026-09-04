@@ -164,6 +164,37 @@ async function openLinhaDetalhe(id) {
     ${_campoDetalhe("Trecho da fonte", l.trecho_fonte)}
     <div class="meta" style="margin-top:10px;"><a href="${l.url_oficial}" target="_blank" rel="noopener">Ver na fonte oficial ↗</a></div>
   `;
+
+  // Integracao transacoes <-> linhas incentivadas (item 8): so mostra quando o setor
+  // desta linha usa a MESMA taxonomia de `operations.setor_bndes` (as 4 categorias
+  // nativas do BNDES) -- setor_padronizado de linhas vindas de editais da FINEP usa
+  // o tema_principal da FINEP (outra taxonomia, incompativel), e cruzar as duas sem
+  // um de-para real produziria "0 encontrado" enganoso em vez de simplesmente nao
+  // mostrar a secao. Nunca confunde os dois tipos de resultado -- e so uma contagem
+  // + link pro modal generico de operacoes, rotulado como "potencialmente compativel"
+  // (nao elegibilidade confirmada -- ver item 8 do pedido).
+  const SETORES_TAXONOMIA_BNDES = ["AGROPECUÁRIA", "COMERCIO/SERVICOS", "INDUSTRIA", "INFRAESTRUTURA"];
+  if (l.setor_padronizado && SETORES_TAXONOMIA_BNDES.includes(l.setor_padronizado)) {
+    try {
+      const relacionadas = await fetchJSON("/api/operacoes?" + qs({ setor: l.setor_padronizado, limit: 1 }) + "&offset=0");
+      const contagemDiv = document.createElement("div");
+      contagemDiv.className = "card";
+      contagemDiv.style.marginTop = "14px";
+      contagemDiv.innerHTML = `
+        <div class="card-header">Transações potencialmente relacionadas <span class="hint">mesmo setor -- não é confirmação de elegibilidade</span></div>
+        <div class="card-body">
+          <p class="meta">Já existem operações de crédito classificadas no setor <strong>${l.setor_padronizado}</strong> na base deste app.</p>
+          <button class="acao-btn" id="ln-ver-operacoes-relacionadas">Ver operações deste setor</button>
+        </div>
+      `;
+      body.appendChild(contagemDiv);
+      document.getElementById("ln-ver-operacoes-relacionadas").addEventListener("click", () => {
+        openOperacoesModal(`Setor: ${l.setor_padronizado} (potencialmente compatível com "${l.nome_simplificado || l.nome_oficial}")`, { setor: l.setor_padronizado });
+      });
+    } catch (e) {
+      // integracao e um extra -- se a chamada falhar, so nao mostra a secao, sem quebrar o resto do detalhe.
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
