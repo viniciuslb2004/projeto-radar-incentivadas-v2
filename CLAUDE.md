@@ -247,16 +247,28 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   — nunca escreva `%s` direto nas queries deste projeto, sempre `?`. Isso também significa que
   um `%` literal dentro de uma string SQL (ex: `LIKE '%%texto%%'`) precisa ser escapado como
   `%%`, senão quebra o parser de placeholder do psycopg.
-- **Conexões ao Postgres não são pooled no código** — cada chamada de rota abre uma
-  `psycopg.connect()` nova e fecha no fim (`get_connection()`/`conn.close()`, sem pool real).
-  Sob carga concorrente normal (uma única página faz ~15-20 requests `/api/*` em paralelo), isso
-  já foi observado esgotando o limite de conexões do pooler em modo *session* da Supabase
-  (`psycopg.OperationalError: max clients reached in session mode - pool_size: 15`),
-  causando erros 500 intermitentes reais em produção (não só em teste de estresse sintético).
-  Fix recomendado, ainda NÃO aplicado (decisão de infraestrutura, requer trocar a porta da
-  connection string pra 6543 e/ou implementar pool de conexão de verdade no código —
-  avaliar antes de mudar, portas diferentes da Supabase têm trade-offs diferentes com prepared
-  statements do psycopg3): ver `src/db.py::get_connection()`.
+- **Conexões ao Postgres não são pooled no código** (cada chamada de rota abre uma
+  `psycopg.connect()` nova e fecha no fim) — isso já foi observado esgotando o limite de 15
+  conexões do pooler em modo *session* da Supabase (`max clients reached in session mode`),
+  causando 500 intermitentes reais em produção. **Corrigido em 2026-09-04**: a webapp agora usa
+  `get_connection(pooled=True)` (`webapp/main.py`, todos os ~26 call sites), que aponta pro
+  pooler da Supabase em modo **TRANSACTION** (porta 6543, variável `DATABASE_URL_POOLER`) em vez
+  de modo session (porta 5432, `DATABASE_URL`) — com `prepare_threshold=None` (obrigatório sob
+  modo transaction, senão dá erro intermitente de "prepared statement does not exist", já que
+  cada transação pode cair numa conexão física diferente por trás do pooler). Os scripts de
+  pipeline (`refresh.py`, `enrich_cnae.py` etc., chamados só via GitHub Actions) continuam
+  chamando `get_connection()` sem argumento (`DATABASE_URL`, modo session/direto) — sessões
+  longas com poucas conexões são o caso de uso OPOSTO ao que o modo transaction resolve.
+  Testado (script isolado + burst HTTP real): 18 conexões simultâneas (nível real de uma única
+  carga de página) OK em várias rodadas repetidas, o que já quebrava no modo session. Uma rajada
+  sintética muito mais extrema (30 simultâneas) ainda pode ocasionalmente dar
+  `ECHECKOUTRETRIES` — melhora substancial, não elimina 100% um pico extremo.
+  **Pendência que precisa de ação humana** (fora do alcance de qualquer IA sem acesso ao
+  dashboard): confirmar que a variável de ambiente `DATABASE_URL_POOLER` está configurada no
+  projeto da Vercel (Settings → Environment Variables) — mesmo valor de `DATABASE_URL` só
+  trocando a porta 5432→6543 (mesmo host/usuário/senha). Sem ela lá, `get_connection(pooled=True)`
+  cai de volta em `DATABASE_URL` automaticamente (nunca quebra por faltar, só deixa de
+  aproveitar a melhoria) — ver `src/db.py::get_connection()`.
 - **Sessões/agentes de IA concorrentes podem compartilhar este mesmo working directory** (já
   aconteceu nesta sessão) — antes de `git add <arquivo> && git commit`, prefira conferir
   `git diff <arquivo>` primeiro se houver qualquer suspeita de edição concorrente, pra não
