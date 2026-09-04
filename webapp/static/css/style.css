@@ -61,7 +61,21 @@ body {
 .tabs {
   display: flex;
   gap: 4px;
+  /* Com 7 abas, nao cabe em telas estreitas (celular) -- em vez de deixar as ultimas
+     abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola horizontalmente.
+     Padrao comum de navegacao por abas em mobile, sem precisar de um menu hamburguer.
+     max-width+min-width:0 sao necessarios pro flex item realmente respeitar o
+     overflow em vez de so crescer alem do container (gotcha classico de flexbox --
+     confirmado ao testar: sem isso, scrollWidth ficava igual a clientWidth mesmo com
+     as abas visualmente cortadas). */
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
+.tab-btn { flex-shrink: 0; }
 
 .tab-btn {
   background: transparent;
