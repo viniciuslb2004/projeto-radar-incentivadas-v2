@@ -200,11 +200,58 @@ def _faixa_prazo(meses) -> str:
     return "prazo longo"
 
 
-def _embedding_text(row) -> str:
+def _prefixo_descricao(texto: str, n_palavras: int = 8) -> str:
+    if not texto:
+        return ""
+    return " ".join(str(texto).strip().split()[:n_palavras])
+
+
+def _descricoes_boilerplate(conn, limiar_clientes: int = 5, limiar_setores: int = 2) -> set:
+    """Descricoes de projeto que comecam com o MESMO PREFIXO (8 primeiras palavras) e
+    esse prefixo aparece em muitos CLIENTES DIFERENTES *e* em mais de um SETOR BNDES sao
+    texto generico de linha/produto de credito (ex: "CONTRATACAO DE LIMITE DE CREDITO
+    PARA FINANCIAMENTO A..."), nao uma descricao real do projeto de uma empresa
+    especifica -- BNDES reusa a mesma frase-padrao (com pequenas variacoes no final,
+    por isso o agrupamento e por PREFIXO, nao pela string inteira) para QUALQUER
+    empresa que contrata aquele tipo de produto, independente do setor dela.
+
+    Exige tambem >1 setor (nao so muitos clientes) para nao suprimir descricoes de
+    projetos legitimos e especificos que sao compartilhados entre varias entidades do
+    MESMO projeto (ex: "IMPLANTACAO DO COMPLEXO EOLICO X" repetido por 18 SPVs
+    diferentes do mesmo parque eolico -- todas no setor de infraestrutura, informacao
+    real e especifica, nao deve ser suprimida so por ter muitos "clientes").
+
+    Confirmado empiricamente (root cause real de busca imprecisa, nao a base de CNPJ):
+    esse texto generico aparece em milhares de operacoes de 4 setores diferentes
+    (industria, comercio, agropecuaria, infraestrutura) e, por conter literalmente as
+    palavras "credito"/"financiamento", fazia buscas com esses termos (ex: "fintech de
+    credito para pequenas empresas") ranquear provedores de internet/telecom (que por
+    acaso tomaram esse credito generico) MUITO acima de cooperativas de credito e
+    instituicoes financeiras de verdade (cujo unico sinal real e o setor/segmento
+    CNAE, um texto bem mais curto que fica diluido no meio do boilerplate)."""
+    df = pd.read_sql(
+        "SELECT descricao_projeto, cliente, setor_bndes FROM operations "
+        "WHERE descricao_projeto IS NOT NULL AND descricao_projeto <> ''",
+        get_engine(),
+    )
+    df["prefixo"] = df["descricao_projeto"].map(_prefixo_descricao)
+    agg = df.groupby("prefixo").agg(clientes=("cliente", "nunique"), setores=("setor_bndes", "nunique"))
+    return set(agg[(agg["clientes"] >= limiar_clientes) & (agg["setores"] >= limiar_setores)].index) - {""}
+
+
+def _embedding_text(row, boilerplate: set = frozenset()) -> str:
     """Foco em CARACTERISTICAS DA LINHA DE CREDITO (setor, produto, modalidade, taxa, prazo,
     tamanho do cheque), NAO no nome da empresa -- a busca deve achar operacoes parecidas em
-    natureza, nao so empresas com nome parecido. O nome do cliente fica de fora de proposito."""
+    natureza, nao so empresas com nome parecido. O nome do cliente fica de fora de proposito.
+
+    `boilerplate` (ver _descricoes_boilerplate): prefixos de descricao de projeto
+    genericos de produto/linha de credito, suprimidos do texto embutido (o dado
+    continua intacto na coluna descricao_projeto, exibido normalmente -- so nao entra
+    na busca semantica, onde ela mais atrapalha do que ajuda)."""
     uf = row.get("uf")
+    descricao = row.get("descricao_projeto")
+    if _prefixo_descricao(descricao) in boilerplate:
+        descricao = None
     parts = [
         row.get("setor_bndes"),
         row.get("subsetor_bndes"),
@@ -214,7 +261,7 @@ def _embedding_text(row) -> str:
         f"indexador {row.get('indexador')}" if row.get("indexador") else None,
         _faixa_valor(row.get("valor_contratado")),
         _faixa_prazo(row.get("prazo_amortizacao_meses")),
-        row.get("descricao_projeto"),
+        descricao,
         row.get("municipio"),
         uf,
         regiao_de(uf),
@@ -222,7 +269,7 @@ def _embedding_text(row) -> str:
     return " | ".join(str(p) for p in parts if p not in (None, "", "nan"))
 
 
-def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame) -> list:
+def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) -> list:
     """Re-checa as operacoes 'pendente' (FINEP cujo CNPJ nao estava no cache cnpj_cnae
     na hora em que a linha foi unificada) contra o cache ATUAL, e atualiza em cima da
     linha ja existente as que agora resolvem -- nunca insere linha nova aqui. Devolve
@@ -258,7 +305,7 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame) -> list:
             "descricao_projeto": row["descricao_projeto"],
             "municipio": row["municipio"],
             "uf": row["uf"],
-        })
+        }, boilerplate)
         updates.append((
             row["setor_bndes_mapeado"], row["subsetor_bndes_mapeado"], row["cnae_descricao"], texto, int(row["id"]),
         ))
@@ -289,9 +336,11 @@ def build_operations():
         parts = [p for p in parts if p is not None and not p.empty]
         novas = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
+        boilerplate = _descricoes_boilerplate(conn)
+
         novos_ids = []
         if not novas.empty:
-            novas["embedding_text"] = novas.apply(_embedding_text, axis=1)
+            novas["embedding_text"] = novas.apply(lambda r: _embedding_text(r, boilerplate), axis=1)
             insert_new_rows(conn, "operations", novas, OPERATIONS_COLS)
             conn.commit()
             # recupera os ids autoincrement recem-atribuidos, por (raw_table, raw_id)
@@ -304,7 +353,7 @@ def build_operations():
                 ).fetchall()
                 novos_ids.extend(r[0] for r in rows)
 
-        reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup)
+        reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
         conn.commit()
 
         total_ops = conn.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
