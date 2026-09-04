@@ -1,0 +1,286 @@
+# Radar de Crédito Incentivado — contexto para IAs futuras
+
+Este arquivo existe para que qualquer assistente de IA (Claude ou outro) que abra este
+repositório entenda rapidamente o que a plataforma faz, como está estruturada, e as decisões
+não-óbvias que já foram tomadas — sem precisar reconstruir esse contexto do zero lendo commit
+por commit. `README.md`/`DEPLOY.md`/`RESUME.md` também existem mas ficam desatualizados rápido
+(são notas point-in-time); este arquivo é o que deve ser mantido mais preciso e atual.
+
+**Data da última revisão a fundo deste arquivo: 2026-09-04.**
+
+## O que é a plataforma
+
+Site que acompanha operações de **crédito incentivado** contratadas por empresas brasileiras
+junto a instituições de fomento — hoje BNDES e FINEP têm dados reais de transações (~58 mil
+operações desde 2002); há também um catálogo separado de **linhas de crédito permanentes**
+(produtos, não transações) do BNDES, FINEP, Desenvolve SP e BNB. Público-alvo: alguém
+analisando o mercado de crédito incentivado brasileiro (ex: para prospecção, benchmarking,
+inteligência de mercado) — não é uma ferramenta de originação/contratação de crédito.
+
+100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Supabase)
+hospedados juntos na Vercel. Não existe mais "modo local" com banco separado (SQLite) — tanto
+rodando localmente (`uvicorn`, para desenvolvimento) quanto em produção, o app fala com o MESMO
+Postgres via `DATABASE_URL`.
+
+## Stack e topologia de deploy
+
+- **Backend**: FastAPI (`webapp/main.py`), rotas `/api/*`.
+- **Frontend**: SPA vanilla JS sem framework/bundler, um único `webapp/static/index.html` com
+  5 `<section class="view">` (uma por aba), troca de aba 100% client-side.
+- **Banco**: Postgres via Supabase, acessado com `psycopg` (v3). Uma única variável de ambiente
+  `DATABASE_URL` (pooler da Supabase) é usada tanto pelo backend quanto pelos scripts de
+  pipeline (GitHub Actions).
+- **Deploy**: Vercel. `vercel.json` define `outputDirectory: webapp/static` (front servido
+  direto pela CDN) + rewrite de `/api/*` para `api/index.py` (function serverless Python que só
+  faz `from webapp.main import app`). Ver `DEPLOY.md` para o passo a passo já feito.
+- **Automação**: GitHub Actions (`.github/workflows/*.yml`), 3 workflows agendados (ver seção
+  própria abaixo), todos usando o secret `DATABASE_URL`.
+- **Local dev**: `uvicorn webapp.main:app` a partir da raiz do repo; `.env` na raiz fornece
+  `DATABASE_URL` (via `python-dotenv`, carregado em `src/db.py`). Sem `SITE_PASSWORD` no `.env`
+  local, o servidor local roda sem exigir login (login só é forçado quando `SITE_PASSWORD` está
+  configurada, tipicamente só em produção).
+
+## Modelo de dados (tabelas principais, ver schema completo em `src/db.py`)
+
+- **`bndes_raw`**, **`finep_credito_direto_raw`**, **`finep_credito_descentralizado_raw`**:
+  staging tables, uma linha por operação, quase cru da planilha/fonte oficial.
+- **`operations`**: tabela UNIFICADA (schema comum BNDES+FINEP) que todo o dashboard/busca
+  consulta. Campos-chave: `agencia` (BNDES/FINEP), `cliente`, `cnpj`, `setor_bndes`/
+  `subsetor_bndes`/`segmento` (taxonomia de 3 níveis — ver seção "Setor/Subsetor/Segmento"
+  abaixo), `valor_contratado`, `data_contratacao`, `uf`, `municipio`, `setor_origem` (`nativo` =
+  BNDES, já vem com setor da própria planilha; `enriquecido` = FINEP, setor resolvido via
+  CNPJ→CNAE; `pendente` = FINEP cujo CNPJ ainda não foi resolvido; `corrigido_manual` = sofreu
+  correção manual, prevalece sobre reenriquecimento), `search_document`/`search_taxonomia_termos`/
+  `search_vector` (motor de busca sem IA, ver seção própria).
+- **`cnpj_cnae`**: cache CNPJ → CNAE/razão social/natureza jurídica/porte/capital social,
+  alimentado por `src/enrich_cnae.py` a partir dos Dados Abertos de CNPJ da Receita Federal.
+  `setor_bndes_mapeado`/`subsetor_bndes_mapeado` vêm de `cnae_divisao` + `build_divisao_map()`
+  (ver `src/sector_taxonomy.py`) — **CUIDADO**: um bug real já existiu aqui (ver "Bugs
+  reais já corrigidos" abaixo), sempre desconfiar se uma categoria parecer super-representada.
+- **`de_para_cnae`**: crosswalk oficial BNDES (divisão CNAE → Setor/Subsetor BNDES). Tem uma
+  ambiguidade REAL e intencional: a mesma divisão CNAE pode aparecer tanto em uma faixa
+  "Comércio e Serviços" quanto em uma faixa mais específica (Indústria/Infraestrutura/
+  Agropecuária) — não é erro de digitação, é assim que a metodologia do BNDES realmente
+  funciona (depende de mais contexto que só CNAE). `build_divisao_map()` resolve por
+  "última linha da tabela vence" — se um dia isso incomodar, é uma decisão de produto a tomar,
+  não um bug a caçar às cegas.
+- **`editais_raw`**: chamadas públicas (editais) abertas da FINEP — dado próprio, upsert
+  (preserva id da própria FINEP), NÃO faz parte do rebuild de `operations`.
+- **`linhas_incentivadas`**: catálogo de PRODUTOS de crédito permanentes (não transações) —
+  ver seção própria abaixo.
+- **`operations_correcoes_manuais`**: correções manuais pontuais em campos de `operations`,
+  reaplicadas automaticamente a cada refresh (ver `unify.py::_reaplicar_correcoes_manuais`).
+- **`refresh_log`**: histórico de cada rodada do pipeline semanal (`src/refresh.py`).
+
+## Pipeline de dados (operações BNDES/FINEP)
+
+`src/refresh.py` orquestra tudo, chamado semanalmente pelo GitHub Actions
+(`.github/workflows/refresh-operacoes.yml`, segunda-feira 06:00 UTC, timeout 180min):
+
+1. `src/download.py` — baixa as planilhas oficiais mais recentes (BNDES + FINEP).
+2. `src/parse_bndes.py`/`src/parse_finep.py` — normalizam pras staging tables (`*_raw`).
+3. `src/unify.py::build_operations()` — reconstrói `operations`: junta BNDES (setor nativo) +
+   FINEP (setor via `cnpj_cnae`, se já resolvido, senão `setor_origem='pendente'`); recalcula
+   `search_document`/`search_taxonomia_termos`/`search_vector` (busca) e `embedding_text`
+   (embeddings, só usado se o motor de IA opcional for religado); reaplica correções manuais
+   (`operations_correcoes_manuais`); tenta reclassificar pendentes cujo CNPJ tenha sido
+   resolvido desde o último refresh (`_reclassificar_pendentes`).
+4. Sempre recalcula embeddings (`data/embeddings.npz`) mesmo com o motor de busca por IA
+   desligado — mantém o artefato consistente com o banco caso alguém religue `MOTOR_BUSCA_IA`.
+
+`src/enrich_cnae.py` é um job PESADO e SEPARADO (não roda dentro do `refresh.py` semanal) —
+mensal (`.github/workflows/enrich-cnae.yml`), baixa ~5-6GB da Receita Federal (Dados Abertos de
+CNPJ via WebDAV), resolve CNAE/razão social/porte/capital social só dos CNPJs que aparecem em
+`bndes_raw`/`finep_*_raw` (nunca a base nacional inteira). Rode manualmente com
+`python src/enrich_cnae.py` se precisar fechar um gap de CNPJs não resolvidos fora do calendário
+mensal (idempotente, só processa quem ainda não está em `cnpj_cnae`).
+
+`src/refresh_editais.py` (diário, `refresh-editais.yml` 08:00 UTC) orquestra
+`finep_editais.py` (upsert de `editais_raw`) + `editais_documentos.py` + `editais_embeddings.py`.
+
+## Motor de busca (aba "Busca")
+
+**Por padrão, 100% sem IA/sem chamada a modelo nenhum** — full-text search do Postgres
+(`tsvector`/`unaccent`/`pg_trgm`), ver `src/search_fts.py`. Toda a "inteligência" (sinônimos,
+taxonomia, supressão de boilerplate) é PRÉ-CALCULADA no momento do enriquecimento (ver
+`unify.py::_search_document`/`_search_taxonomia_termos`, `src/search_taxonomy.py`) e gravada em
+`operations.search_document`/`search_taxonomia_termos`/`search_vector` — a busca em si só
+consulta o que já está pronto.
+
+Ranking em 6 tiers (do mais forte pro mais fraco, ver `PRIORIDADE_MOTIVO` em `search_fts.py`):
+1. CNPJ ou prefixo do nome do cliente (só considera fragmento numérico como CNPJ se tiver
+   ≥8 dígitos — sem essa guarda, uma query como "xyzabc123nada" batia como "match exato" de
+   qualquer CNPJ que começasse com "123", bug real já corrigido).
+2. Setor/subsetor/segmento (CNAE).
+3. Produto/instrumento/indexador.
+4. Correspondência de FRASE (`phraseto_tsquery`, preserva ordem/adjacência das palavras) —
+   evita que "parque de diversao" traga "parque eolico" no topo só por repetir a palavra
+   "parque" solta.
+5. Correspondência por QUALQUER palavra (OR, `websearch_to_tsquery`) — inclui os sinônimos
+   pré-calculados.
+6. Trigrama (`pg_trgm`/`similarity()`) — só roda se as tiers 1-5 (indexadas) voltarem com
+   poucos resultados (`MINIMO_ANTES_DE_TRIGRAMA`), já que trigrama varre a tabela inteira.
+
+UF (sigla de 2 letras) é tratada como FILTRO estruturado (`AND uf = ?`), não como termo de
+busca — senão o volume de operações de qualquer UF grande dominava o ranking por cima de um
+termo raro e específico. Um pequeno conjunto de palavras genéricas do domínio
+(`PALAVRAS_GENERICAS_QUERY`, ex: "empresa") é excluído do OR de texto livre pelo mesmo motivo.
+
+`src/search_taxonomy.py` guarda os sinônimos: exaustivo para Setor (4) e Subsetor (19),
+CURADO (não exaustivo) para Segmento (~1291 valores distintos de CNAE — cobertura vem
+crescendo conforme o uso real mostra lacunas, ver `scripts/backfill_search_taxonomia.py` para
+como reaplicar em massa depois de expandir o dicionário). Lembrete de stemming: o dicionário
+`portuguese` do Postgres NÃO unifica de forma confiável singular/plural em palavras terminadas
+em `-al` (ex: "hospital"/"hospitalar" viram o mesmo radical, mas "hospitais" vira outro) — por
+isso os sinônimos incluem singular E plural quando relevante.
+
+**Motor por IA (embeddings) continua existindo, só desligado por padrão** — flag
+`MOTOR_BUSCA_IA` (env var, `webapp/main.py`). Se `MOTOR_BUSCA_IA=1`: religa as rotas
+`/api/busca/preparar*` (cálculo de vetor no NAVEGADOR via transformers.js,
+`embeddings-client.js`) e o fluxo antigo em `src/search.py`/`src/embeddings.py`. Decisão de
+produto explícita do usuário: manter essa estrutura "guardada e flexível" pra religar no
+futuro, não removida. Se for reativar de verdade um dia, reconferir se `data/embeddings.npz`
+está atualizado (ver pipeline acima).
+
+## "Linhas Incentivadas" (catálogo de produtos, não transações)
+
+Página própria (`webapp/static/js/linhas.js`, rotas `/api/linhas*`), substituiu uma antiga
+página "Minha Empresa". Curadoria MANUAL VERIFICADA (nunca raspagem automática ao vivo do site
+oficial — os dados são capturados uma vez, com URL fonte + trecho citado, e ficam gravados) —
+ver `src/linhas_incentivadas.py`. Cada instituição tem sua própria lista `_XXX_MANUAL` +
+`seed_xxx_manual(conn)`, todas chamadas em `build_linhas_incentivadas()`:
+
+- **BNDES** (46 linhas): descoberto via a API de busca interna do próprio site
+  (`bndes.gov.br/WCMUtil/api/busca/?search=<termo>&type=all&...`, filtrando URLs
+  `/financiamento/produto/`) — o conteúdo real de cada produto fica dentro de acordeões
+  fechados por padrão no DOM (`.collapsible-header`/`.collapsible-body`), só acessível via JS,
+  NUNCA aparece em `get_page_text` simples.
+- **BNB** (23 linhas): a maioria são produtos do FNE (Fundo Constitucional de Financiamento do
+  Nordeste). Site do BNB é mais simples/navegável que o do BNDES (páginas estáticas normais).
+- **Desenvolve SP** (17 linhas): cada linha pertence a uma CATEGORIA (página), e a MESMA linha
+  pode aparecer em categorias diferentes com termos DIFERENTES (prazo/carência mudam por
+  contexto) — cada combinação (linha, categoria) é uma entrada distinta de propósito.
+- **FINEP** (2 linhas, "Apoio Direto à Inovação" e "Apoio Direto a Pré-Investimento"):
+  **NÃO confundir com editais** — a FINEP tem MUITO mais chamadas públicas (editais, com
+  prazo) do que produtos de crédito permanentes. Uma versão antiga desta função
+  (`importar_finep_editais`, ainda definida no arquivo mas **não mais chamada**) importava CADA
+  EDITAL de `editais_raw` como se fosse uma "linha incentivada" — isso duplicava a aba
+  "Editais" (já dedicada a isso) dentro deste catálogo, que deveria mostrar só produtos
+  permanentes. Se um dia parecer que "FINEP tem poucas linhas", a resposta correta é curar mais
+  produtos permanentes reais (raro — a FINEP tem poucos), não voltar a importar editais aqui.
+
+Regra de ouro em toda a curadoria: **nunca inventar** valor/taxa/prazo — campo não documentado
+na fonte oficial usa o sentinela `NAO_INFORMADO`, nunca um valor inferido/estimado. Cada linha
+tem `origem_dado` (`curadoria_manual_verificada` ou `raspagem_automatica`) e `trecho_fonte`
+(citação real da página) para auditoria.
+
+Cross-linking: no detalhe de uma OPERAÇÃO real, aparece uma seção mostrando linhas
+incentivadas "potencialmente compatíveis" (nunca "elegível", a menos que confirmado) — ver
+`webapp/main.py::operacao_detalhe()` e a seção correspondente em `common.js`.
+
+**Este catálogo NÃO é reconstruído pelo refresh semanal** (`build_linhas_incentivadas()` não é
+chamado por `refresh.py`) — é essencialmente estático, atualizado manualmente quando alguém
+cura mais linhas. Rode `python src/linhas_incentivadas.py` pra reaplicar depois de editar as
+listas `_XXX_MANUAL`.
+
+## Frontend: roteamento e abas
+
+5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
+(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
+`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
+`_viewInicialDaURL`) — nunca query string para estado de UI (ex: a granularidade do gráfico de
+Tendências fica só na página, não na URL; pedido explícito do usuário pra manter a barra de
+endereço limpa). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar) funciona
+via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`) + rewrites
+equivalentes em `vercel.json` (serve pro deploy hospedado).
+
+Filtros de data (mês/ano início e fim, em várias abas) bloqueiam automaticamente um intervalo
+invertido (início > fim) — ver `validarIntervaloDatas()` em `common.js`, ajusta o lado que não
+acabou de mudar pra igualar o que o usuário escolheu, com um aviso visual breve.
+
+Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador (nunca vai pro
+servidor, "temporário" por design) — substituiu 3 chips de exemplo fixos que existiam antes
+(`busca.js`, `registrarHistoricoBusca`/`renderHistoricoBusca`).
+
+## Automação (GitHub Actions)
+
+Todos em `.github/workflows/`, usando o secret `DATABASE_URL`:
+- `refresh-operacoes.yml` — semanal, segunda 06:00 UTC, timeout 180min, roda `src/refresh.py`.
+- `refresh-editais.yml` — diário, 08:00 UTC, timeout 15min, roda `src/refresh_editais.py`.
+- `enrich-cnae.yml` — mensal, roda `src/enrich_cnae.py`.
+
+Se o "refresh automático parece não estar funcionando", antes de caçar bug: confira 1) se
+`DATABASE_URL` está configurada há tempo suficiente pro cron já ter tido uma janela real pra
+disparar (ex: cron só-segunda + secret configurado numa sexta = zero execuções até a próxima
+segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver o histórico real.
+
+## Bugs reais já corrigidos nesta base (armadilhas a não repetir)
+
+- **`_extrair_divisoes` (`src/sector_taxonomy.py`)**: fatiava código de CNAE de forma errada
+  para faixas com subclasse longa (ex: "H4911, H4912401 e H4912402"), produzindo um intervalo
+  de divisões espúrio e corrompendo o mapeamento setor/subsetor de várias divisões no meio (ex:
+  divisão 26 virava "Transporte Ferroviário" em vez de "Indústria"). O CÓDIGO já foi corrigido
+  há tempo, mas os DADOS já gravados em `cnpj_cnae`/`operations` continuaram errados até
+  2026-09-04 (5.644 operações da FINEP mal-classificadas) — corrigido com um backfill direto
+  (recalcular `setor_bndes_mapeado`/`subsetor_bndes_mapeado` a partir do `cnae_divisao` já
+  armazenado, sem precisar rebaixar nada da Receita Federal). **Lição**: corrigir um bug de
+  cálculo no código NÃO corrige dados já gravados — sempre considerar se um backfill é
+  necessário, e desconfiar de qualquer categoria/setor que pareça anormalmente
+  super-representada nos dados (sinal de um bug de classificação, não de realidade).
+- **Falso-positivo de CNPJ na busca** (`src/search_fts.py`): fragmento numérico de qualquer
+  tamanho disparava o tier de "correspondência exata" de CNPJ — corrigido exigindo ≥8 dígitos.
+- **`websearch_to_tsquery` combina palavras com AND por padrão** — ruim para busca livre em
+  linguagem natural (query de 5-6 palavras nunca bateria por completo em documento nenhum);
+  junta as palavras com `" or "` manualmente antes de passar pro Postgres.
+- **`_periodo_anterior` (`webapp/main.py`)**: limitava incondicionalmente o período "atual" a
+  no máximo 365 dias antes de calcular o período de comparação — um filtro de 2 anos escolhido
+  pelo usuário virava, por baixo dos panos, uma comparação só dos últimos 12 meses, sem
+  indicação nenhuma na UI de que o período exibido não era o filtro de verdade. Corrigido: o
+  teto de 365 dias só vale quando NENHUM filtro é passado (padrão "toda a base"); com filtro
+  explícito, o período anterior tem sempre o MESMO TAMANHO EXATO do selecionado.
+
+## Coisas a saber antes de mexer
+
+- **`db_compat.py`** faz um monkeypatch global: todo `?` em queries SQL (estilo sqlite,
+  convenção usada em 100% do código deste projeto) vira `%s` (estilo psycopg) transparentemente
+  — nunca escreva `%s` direto nas queries deste projeto, sempre `?`. Isso também significa que
+  um `%` literal dentro de uma string SQL (ex: `LIKE '%%texto%%'`) precisa ser escapado como
+  `%%`, senão quebra o parser de placeholder do psycopg.
+- **Conexões ao Postgres não são pooled no código** — cada chamada de rota abre uma
+  `psycopg.connect()` nova e fecha no fim (`get_connection()`/`conn.close()`, sem pool real).
+  Sob carga concorrente normal (uma única página faz ~15-20 requests `/api/*` em paralelo), isso
+  já foi observado esgotando o limite de conexões do pooler em modo *session* da Supabase
+  (`psycopg.OperationalError: max clients reached in session mode - pool_size: 15`),
+  causando erros 500 intermitentes reais em produção (não só em teste de estresse sintético).
+  Fix recomendado, ainda NÃO aplicado (decisão de infraestrutura, requer trocar a porta da
+  connection string pra 6543 e/ou implementar pool de conexão de verdade no código —
+  avaliar antes de mudar, portas diferentes da Supabase têm trade-offs diferentes com prepared
+  statements do psycopg3): ver `src/db.py::get_connection()`.
+- **Sessões/agentes de IA concorrentes podem compartilhar este mesmo working directory** (já
+  aconteceu nesta sessão) — antes de `git add <arquivo> && git commit`, prefira conferir
+  `git diff <arquivo>` primeiro se houver qualquer suspeita de edição concorrente, pra não
+  commitar sem querer uma mudança de outro processo junto com a sua.
+- **Cache de JS/CSS no navegador in-app (Claude Code Browser pane)** pode servir uma versão
+  antiga de um arquivo estático mesmo depois de editado no disco — se um teste não refletir uma
+  mudança recente, tente `fetch(url, {cache:'reload'})` ou um cache-bust
+  (`?bust=<timestamp>`) antes de suspeitar de bug real.
+- **`webapp/static/index.html`/`common.js`/`main.py` são arquivos grandes** — ao editar, prefira
+  `Grep`/`Read` com offset pontual em vez de carregar o arquivo inteiro de uma vez.
+
+## Onde procurar o quê (mapa rápido)
+
+| Preciso mexer em... | Arquivo |
+|---|---|
+| Schema do banco | `src/db.py` |
+| Pipeline semanal (operações) | `src/refresh.py`, `src/unify.py` |
+| Enriquecimento CNPJ→CNAE | `src/enrich_cnae.py`, `src/sector_taxonomy.py` |
+| Motor de busca (sem IA) | `src/search_fts.py`, `src/search_taxonomy.py` |
+| Motor de busca (IA, opcional) | `src/search.py`, `src/embeddings.py` |
+| Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` |
+| Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
+| API/rotas | `webapp/main.py` |
+| Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
+| Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |
+| Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` |
+| Automação | `.github/workflows/*.yml` |
