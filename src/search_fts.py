@@ -60,6 +60,34 @@ _UFS_VALIDAS = {
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 }
 
+# Regiao -> UFs (para o filtro estruturado de regiao, ver buscar_texto()). Mesma
+# fonte de verdade que src/geo.py (UF->regiao), so invertida -- nao importa geo.py
+# direto aqui pra nao criar dependencia cruzada webapp<->pipeline por causa de um
+# dict pequeno; mantenha as duas listas em sincronia se uma UF mudar de regiao
+# (nunca muda na pratica, e so a divisao oficial do IBGE).
+_UFS_POR_REGIAO = {
+    "Norte": ["AC", "AP", "AM", "PA", "RO", "RR", "TO"],
+    "Nordeste": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
+    "Centro-Oeste": ["DF", "GO", "MT", "MS"],
+    "Sudeste": ["ES", "MG", "RJ", "SP"],
+    "Sul": ["PR", "RS", "SC"],
+}
+
+
+def _normaliza_ortografia_sql(expr: str) -> str:
+    """Unifica variantes ortograficas REAIS que o stemmer 'portuguese' do Postgres
+    trata como palavras diferentes, causando busca imprecisa -- caso confirmado:
+    'fibra OTICA' (grafia atual, sem o 'p' mudo) e 'fibra OPTICA' (grafia antiga,
+    ainda de uso comum em telecom/tecnologia) sao o MESMO conceito pra quem
+    pesquisa, mas nenhuma busca por uma achava documentos com a outra -- um match
+    incidental de 'otica' (oculista) no NOME de uma empresa chegou a rankear acima
+    de uma empresa real de fibra optica por causa disso. So faz sentido chamar
+    DEPOIS de unaccent() (que ja tira o acento de 'ó'/'ô' etc, deixando so a
+    diferenca real: a presenca ou nao do 'p'). Aplicado nos DOIS lados -- aqui (na
+    query) e em unify.py::_atualizar_search_vector() (na indexacao) -- pra
+    garantir que os dois batam nao importa qual grafia foi usada em cada um."""
+    return f"regexp_replace({expr}, '\\moptic', 'otic', 'gi')"
+
 
 def _so_digitos(s: str) -> str:
     return re.sub(r"\D", "", s or "")
@@ -89,14 +117,22 @@ def _rows_para_resultados(rows) -> list:
     return resultados
 
 
-def buscar_texto(query: str, limite: int = 200) -> dict:
+def buscar_texto(
+    query: str, limite: int = 200, agencia: str = None, valor_minimo: float = None,
+    regiao: str = None, produto: str = None,
+) -> dict:
     """Busca determinística: normalizacao de acento/caixa (unaccent/lower, via SQL),
     correspondencia exata/prefixo e full-text em portugues primeiro (tiers 1-4, todas
     apoiadas por indice -- rapidas mesmo em tabela grande); so paga o custo de
     similarity() por trigrama (tier 5 -- sem indice utilizavel pra essa comparacao
     especifica, varre a tabela inteira) se as tiers indexadas voltarem com poucos
     resultados. Ordenado por prioridade e depois por relevancia dentro de cada
-    prioridade."""
+    prioridade.
+
+    agencia/valor_minimo/regiao/produto sao FILTROS ESTRUTURADOS explicitos (vindos
+    de selects/input na UI, ver webapp/main.py e busca.js) -- mesmo padrao ja usado
+    pra UF dentro da propria query de texto livre (AND, nunca dentro do ranking de
+    texto), so que aqui vem prontos do chamador em vez de extraidos da query."""
     query = (query or "").strip()
     if not query:
         return {"query": query, "n_resultados": 0, "resultados": []}
@@ -130,32 +166,68 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
     # as vezes rankeando ACIMA por repetir "parque" em mais campos.
     query_fts_frase = " ".join(palavras) or query
 
+    # Filtros estruturados (AND, fora do ranking de texto -- mesmo motivo do filtro
+    # de UF: um filtro estruturado nunca deve competir por relevancia, so restringe
+    # o universo de linhas candidatas antes do ranking rodar).
+    filtros_extra = []
+    params_extra_principal = []
+    params_extra_trigrama = []
+    if uf_detectada:
+        filtros_extra.append("uf = ?")
+        params_extra_principal.append(uf_detectada)
+        params_extra_trigrama.append(uf_detectada)
+    if agencia:
+        filtros_extra.append("agencia = ?")
+        params_extra_principal.append(agencia)
+        params_extra_trigrama.append(agencia)
+    if valor_minimo is not None:
+        filtros_extra.append("valor_contratado >= ?")
+        params_extra_principal.append(valor_minimo)
+        params_extra_trigrama.append(valor_minimo)
+    if regiao and regiao in _UFS_POR_REGIAO:
+        ufs_regiao = _UFS_POR_REGIAO[regiao]
+        placeholders = ", ".join(["?"] * len(ufs_regiao))
+        filtros_extra.append(f"uf IN ({placeholders})")
+        params_extra_principal.extend(ufs_regiao)
+        params_extra_trigrama.extend(ufs_regiao)
+    if produto:
+        filtros_extra.append("produto = ?")
+        params_extra_principal.append(produto)
+        params_extra_trigrama.append(produto)
+    filtro_sql = ("AND " + " AND ".join(filtros_extra)) if filtros_extra else ""
+
+    # regexp_replace(unaccent(?), ...) -- ver _normaliza_ortografia_sql(): unifica
+    # grafias como "optica"/"otica" (mesmo conceito, tratadas como palavras
+    # diferentes pelo stemmer sem isso) nos DOIS lados (query aqui, indexacao em
+    # unify.py). Aplica em toda comparacao de TEXTO LIVRE contra o campo (nao no
+    # CNPJ, que e so digito).
+    _norm = _normaliza_ortografia_sql
+
     conn = get_connection()
     try:
         cur = conn.cursor()
-        filtro_uf = "AND uf = ?" if uf_detectada else ""
 
         sql_principal = f"""
             SELECT {", ".join(_COLS_OPERACAO)}, prioridade, rank_fts FROM (
                 SELECT {", ".join(_COLS_OPERACAO)},
                     CASE
                         WHEN ? != '' AND regexp_replace(cnpj, '\\D', '', 'g') LIKE ? || '%%' THEN 1
-                        WHEN unaccent(lower(cliente)) LIKE unaccent(lower(?)) || '%%' THEN 1
-                        WHEN unaccent(lower(coalesce(setor_bndes,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
-                          OR unaccent(lower(coalesce(subsetor_bndes,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
-                          OR unaccent(lower(coalesce(segmento,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
+                        WHEN {_norm("unaccent(lower(cliente))")} LIKE {_norm("unaccent(lower(?))")} || '%%' THEN 1
+                        WHEN {_norm("unaccent(lower(coalesce(setor_bndes,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
+                          OR {_norm("unaccent(lower(coalesce(subsetor_bndes,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
+                          OR {_norm("unaccent(lower(coalesce(segmento,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
                         THEN 2
-                        WHEN unaccent(lower(coalesce(produto,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
-                          OR unaccent(lower(coalesce(instrumento_financeiro,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
-                          OR unaccent(lower(coalesce(indexador,''))) LIKE '%%' || unaccent(lower(?)) || '%%'
+                        WHEN {_norm("unaccent(lower(coalesce(produto,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
+                          OR {_norm("unaccent(lower(coalesce(instrumento_financeiro,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
+                          OR {_norm("unaccent(lower(coalesce(indexador,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
                         THEN 3
-                        WHEN search_vector @@ phraseto_tsquery('portuguese', unaccent(?)) THEN 4
-                        WHEN search_vector @@ websearch_to_tsquery('portuguese', unaccent(?)) THEN 5
+                        WHEN search_vector @@ phraseto_tsquery('portuguese', {_norm("unaccent(?)")}) THEN 4
+                        WHEN search_vector @@ websearch_to_tsquery('portuguese', {_norm("unaccent(?)")}) THEN 5
                         ELSE NULL
                     END AS prioridade,
-                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', unaccent(?))) AS rank_fts
+                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', {_norm("unaccent(?)")})) AS rank_fts
                 FROM operations
-                WHERE 1=1 {filtro_uf}
+                WHERE 1=1 {filtro_sql}
             ) sub
             WHERE prioridade IS NOT NULL
             ORDER BY prioridade ASC, rank_fts DESC
@@ -170,8 +242,7 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
             query_fts,  # tier 5 fts OR (WHEN)
             query_fts,  # rank_fts (usa a query OR pra ordenar dentro de cada tier)
         ]
-        if uf_detectada:
-            params_principal.append(uf_detectada)
+        params_principal.extend(params_extra_principal)
         params_principal.append(limite)
         rows = cur.execute(sql_principal, params_principal).fetchall()
 
@@ -187,13 +258,12 @@ def buscar_texto(query: str, limite: int = 200) -> dict:
                     similarity(unaccent(lower(cliente)), unaccent(lower(?))) > {LIMIAR_SIMILARIDADE_TRGM}
                     OR similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?))) > {LIMIAR_SIMILARIDADE_TRGM}
                 )
-                {filtro_uf}
+                {filtro_sql}
                 ORDER BY rank_fts DESC
                 LIMIT ?
             """
             params_trigrama = [query, query, query, query]
-            if uf_detectada:
-                params_trigrama.append(uf_detectada)
+            params_trigrama.extend(params_extra_trigrama)
             params_trigrama.append(limite - len(rows))
             ja_incluidos = {r[0] for r in rows}
             rows_trigrama = cur.execute(sql_trigrama, params_trigrama).fetchall()

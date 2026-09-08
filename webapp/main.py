@@ -222,6 +222,7 @@ def filtros():
             "setores": col_values("setor_bndes"),
             "ufs": col_values("uf"),
             "instrumentos": col_values("instrumento"),
+            "produtos": col_values("produto"),
             "anos": col_values("ano"),
             "data_min": min_max[0],
             "data_max": min_max[1],
@@ -643,9 +644,15 @@ if not MOTOR_BUSCA_IA:
     from search_fts import buscar_texto
 
     @app.get("/api/busca")
-    def busca(q: str = Query(..., min_length=3)):
+    def busca(
+        q: str = Query(..., min_length=3), agencia: str = None, valor_minimo: float = None,
+        regiao: str = None, produto: str = None,
+    ):
         try:
-            return buscar_texto(q)
+            return buscar_texto(
+                q, agencia=agencia or None, valor_minimo=valor_minimo, regiao=regiao or None,
+                produto=produto or None,
+            )
         except Exception as e:
             logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}

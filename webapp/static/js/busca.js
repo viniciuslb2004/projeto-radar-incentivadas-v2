@@ -180,6 +180,30 @@ function renderResultados(data) {
   renderListaResultados();
 }
 
+function _filtrosBusca() {
+  return {
+    agencia: document.getElementById("bu-f-agencia").value,
+    valor_minimo: document.getElementById("bu-f-valor-minimo").value,
+    regiao: document.getElementById("bu-f-regiao").value,
+    produto: document.getElementById("bu-f-produto").value,
+  };
+}
+
+async function _popularFiltrosBusca() {
+  try {
+    const filtros = await fetchJSON("/api/filtros");
+    const fill = (id, values) => {
+      const sel = document.getElementById(id);
+      values.filter(Boolean).forEach((v) => sel.appendChild(new Option(v, v)));
+    };
+    fill("bu-f-agencia", filtros.agencias);
+    fill("bu-f-produto", filtros.produtos);
+  } catch (e) {
+    // filtros da busca sao um extra -- se /api/filtros falhar aqui, a busca livre
+    // (sem filtro nenhum) continua funcionando normalmente.
+  }
+}
+
 async function runBusca(q) {
   registrarHistoricoBusca(q);
   const container = document.getElementById("busca-resultado");
@@ -225,8 +249,11 @@ async function runBusca(q) {
       }
     } else {
       // Modo padrao: sem IA -- uma chamada so, full-text/trigram no servidor (ver
-      // src/search_fts.py), sem calculo de vetor em lugar nenhum.
-      data = await fetchJSON("/api/busca?" + qs({ q }));
+      // src/search_fts.py), sem calculo de vetor em lugar nenhum. Filtros
+      // estruturados (entidade/valor minimo/regiao/tipo de linha) so se aplicam
+      // aqui -- o modo por IA (embeddings) e legado/opcional, nao vale a pena
+      // estender pra um caminho que nem roda por padrao.
+      data = await fetchJSON("/api/busca?" + qs({ q, ..._filtrosBusca() }));
     }
   } catch (e) {
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
@@ -250,4 +277,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter" && input.value.trim().length >= 3) runBusca(input.value.trim());
   });
   renderHistoricoBusca();
+  _popularFiltrosBusca();
+
+  // Mudar um filtro re-roda a busca atual (se ja tiver uma) -- filtro sem busca
+  // nenhuma feita ainda nao faz nada sozinho, precisa de uma query pra filtrar.
+  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => {
+      if (input.value.trim().length >= 3) runBusca(input.value.trim());
+    });
+  });
 });
