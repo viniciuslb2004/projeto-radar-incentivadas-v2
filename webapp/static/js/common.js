@@ -223,6 +223,14 @@ function _ligarBotoesDeAba() {
   _ativarView(_viewInicialDaURL(), false);
 }
 
+// Esconde a tela de carregamento inicial -- chamada em TODO caminho de saida de
+// initFiltersAndTabs() (sucesso ou erro), pra nunca deixar o usuario preso atras
+// dela se o backend estiver fora do ar.
+function _esconderLoadingOverlay() {
+  const overlay = document.getElementById("loading-overlay");
+  if (overlay) overlay.classList.add("hidden");
+}
+
 async function initFiltersAndTabs() {
   // Troca de aba e 100% client-side (so classes CSS) -- liga ISSO primeiro e
   // incondicionalmente, antes de qualquer fetch, pra a navegacao nunca depender
@@ -235,6 +243,7 @@ async function initFiltersAndTabs() {
     status = await fetchJSON("/api/status");
   } catch (e) {
     pill.textContent = "não foi possível conectar ao servidor";
+    _esconderLoadingOverlay();
     return;
   }
   window.MODO_HOSPEDADO = !!status.hospedado;
@@ -251,6 +260,7 @@ async function initFiltersAndTabs() {
   try {
     filtros = await fetchJSON("/api/filtros");
   } catch (e) {
+    _esconderLoadingOverlay();
     return;
   }
   const fill = (id, values) => {
@@ -303,6 +313,8 @@ async function initFiltersAndTabs() {
       notifyFiltersChange();
     });
   });
+
+  _esconderLoadingOverlay();
 }
 
 // ============ Modal de drill-down ============
