@@ -28,22 +28,45 @@ COMMIT_A_CADA = 50  # grupos por commit -- transacoes mais curtas, menos exposic
 MAX_TENTATIVAS = 5
 
 
+_ERROS_TRANSITORIOS_LOCK = (psycopg.errors.DeadlockDetected, psycopg.errors.LockNotAvailable, psycopg.errors.SerializationFailure)
+# Erros de CONEXAO (nao so de lock) ja confirmados nesta sessao contra o Aiven free
+# tier: ReadOnlySqlTransaction (servico ficou read-only durante o backup inicial
+# automatico) e AdminShutdown (reinicio/manutencao automatica) -- ambos derrubam a
+# conexao/transacao inteira, entao so um ROLLBACK na mesma conexao nao resolve, e
+# preciso de uma conexao NOVA de verdade (db.get_connection()) antes de tentar de novo.
+_ERROS_CONEXAO = (psycopg.errors.ReadOnlySqlTransaction, psycopg.OperationalError)
+
+
+def _reconectar():
+    print("    (reconectando -- conexao anterior foi derrubada pelo servidor)")
+    return db.get_connection()
+
+
 def _executar_com_retry(conn, sql, params):
-    """Roda um UPDATE com retry em caso de deadlock/erro transiente de lock (ex:
-    concorrencia com outro processo escrevendo em `operations` ao mesmo tempo,
-    ja observado nesta sessao: psycopg.errors.DeadlockDetected). ROLLBACK antes de
-    cada nova tentativa -- a transacao corrente fica invalida apos um erro do Postgres."""
+    """Roda um UPDATE com retry em caso de erro transiente -- de lock (concorrencia
+    normal, ROLLBACK + retenta na MESMA conexao) ou de conexao (Aiven free tier ja
+    derrubou a conexao 2x nesta sessao: uma vez em modo read-only durante o backup
+    inicial automatico, outra por reinicio/manutencao -- nesses casos precisa de uma
+    conexao NOVA, nao so rollback). Devolve a conexao valida no final (pode ser uma
+    nova, se reconectou)."""
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         try:
             conn.execute(sql, params)
-            return
-        except (psycopg.errors.DeadlockDetected, psycopg.errors.LockNotAvailable, psycopg.errors.SerializationFailure) as e:
+            return conn
+        except _ERROS_TRANSITORIOS_LOCK as e:
             conn.rollback()
             if tentativa == MAX_TENTATIVAS:
                 raise
             espera = 0.5 * tentativa
             print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
             time.sleep(espera)
+        except _ERROS_CONEXAO as e:
+            if tentativa == MAX_TENTATIVAS:
+                raise
+            espera = 2.0 * tentativa
+            print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
+            time.sleep(espera)
+            conn = _reconectar()
 
 
 def main():
@@ -72,7 +95,7 @@ def main():
     for (setor, subsetor, segmento), ids in grupos.items():
         row = {"setor_bndes": setor, "subsetor_bndes": subsetor, "segmento": segmento}
         texto_taxonomia = _search_taxonomia_termos(row)
-        _executar_com_retry(
+        conn = _executar_com_retry(
             conn,
             """
             UPDATE operations SET search_taxonomia_termos = ?
@@ -101,13 +124,20 @@ def main():
             try:
                 _atualizar_search_vector(conn, lote)
                 break
-            except (psycopg.errors.DeadlockDetected, psycopg.errors.LockNotAvailable, psycopg.errors.SerializationFailure) as e:
+            except _ERROS_TRANSITORIOS_LOCK as e:
                 conn.rollback()
                 if tentativa == MAX_TENTATIVAS:
                     raise
                 espera = 0.5 * tentativa
                 print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
                 time.sleep(espera)
+            except _ERROS_CONEXAO as e:
+                if tentativa == MAX_TENTATIVAS:
+                    raise
+                espera = 2.0 * tentativa
+                print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
+                time.sleep(espera)
+                conn = _reconectar()
         print(f"  ... {min(i + BATCH_VECTOR, len(todos_ids))}/{len(todos_ids)} ids ({time.time() - t2:.1f}s)")
     print(f"search_vector recalculado para {len(todos_ids)} ids em {time.time() - t2:.1f}s.")
 
