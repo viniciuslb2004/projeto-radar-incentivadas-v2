@@ -10,5 +10,6 @@ sentence-transformers
 numpy
 pypdf
 psycopg[binary]
+psycopg-pool
 sqlalchemy
 python-dotenv

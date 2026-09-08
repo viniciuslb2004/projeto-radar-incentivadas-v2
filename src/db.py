@@ -35,44 +35,90 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 db_compat.patch()
 
 _ENGINE = None
+_POOL = None
+
+
+class _PooledConnection:
+    """Encaminha tudo pra conexao real de dentro do pool (`psycopg_pool.ConnectionPool`),
+    so troca o significado de `.close()`: em vez de fechar a conexao fisica de verdade,
+    devolve ela pro pool (`putconn`) pra outra requisicao reusar. Sem este wrapper, todo
+    call site existente (`conn = get_connection(...); try: ...; finally: conn.close()`,
+    ~26+ lugares so em webapp/main.py) precisaria virar `with pool.connection() as conn`
+    -- refatoracao grande e arriscada. Com o wrapper, ZERO call site muda: todo o resto
+    (`.cursor()`, `.execute()`, `.commit()`, `.rollback()`) e so __getattr__ direto na
+    conexao real por baixo."""
+
+    def __init__(self, pool, conn):
+        object.__setattr__(self, "_pool", pool)
+        object.__setattr__(self, "_conn", conn)
+
+    def close(self):
+        self._pool.putconn(self._conn)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+
+def _get_pool():
+    """Pool de conexoes de verdade para a webapp (`get_connection(pooled=True)`) --
+    resolve o problema real de "max clients"/"remaining connection slots" que ja
+    aconteceu tanto no pooler em modo session da Supabase (limite de 15) quanto no
+    limite bruto de 20 conexoes do Aiven free tier (sem pooler proprio disponivel
+    nesse plano): cada requisicao HTTP abrindo/fechando sua PROPRIA conexao fisica
+    faz uma unica carga de pagina (~15-20 chamadas /api/* em paralelo) esgotar
+    qualquer um desses limites. Um pool pequeno e fixo (max_size bem abaixo do teto
+    real do provedor) faz requisicoes concorrentes REUSAREM um numero pequeno de
+    conexoes fisicas em vez de multiplicar 1-pra-1 com o trafego.
+
+    min_size baixo (nao mantem conexoes ociosas abertas a toa) + max_size=8 (deixa
+    bastante folga sob os 20 do Aiven free tier pra scripts de pipeline/acesso manual
+    concorrente). FastAPI roda rotas sincronas (`def`, nao `async def` -- confirmado
+    neste projeto) num threadpool do Starlette, entao um pool sincrono e bloqueante
+    do psycopg_pool e exatamente o caso de uso certo (thread-safe, cada thread pega
+    sua propria conexao emprestada)."""
+    global _POOL
+    if _POOL is None:
+        from psycopg_pool import ConnectionPool
+
+        database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL nao configurada.")
+        _POOL = ConnectionPool(database_url, min_size=1, max_size=8, open=True)
+    return _POOL
 
 
 def get_connection(pooled: bool = False):
-    """Conexao psycopg (Postgres/Supabase) -- a UNICA forma de acesso ao banco neste
-    projeto. Levanta um erro claro se a variavel de ambiente relevante nao estiver
-    configurada, em vez de cair silenciosamente em qualquer outro banco/arquivo.
+    """Conexao psycopg (Postgres) -- a UNICA forma de acesso ao banco neste projeto.
+    Levanta um erro claro se a variavel de ambiente relevante nao estiver configurada,
+    em vez de cair silenciosamente em qualquer outro banco/arquivo.
 
-    pooled=True usa `DATABASE_URL_POOLER` (pooler da Supabase em modo TRANSACTION,
-    porta 6543) em vez de `DATABASE_URL` (modo SESSION/direto, porta 5432) -- so a
-    webapp (webapp/main.py) passa pooled=True, porque e o unico caller que abre
-    muitas conexoes curtas e concorrentes (uma por requisicao HTTP); os scripts de
-    pipeline (refresh.py, enrich_cnae.py etc, chamados so por GitHub Actions/execucao
-    manual) fazem sessoes longas com poucas conexoes -- o caso de uso oposto ao que o
-    modo transaction resolve -- entao continuam em DATABASE_URL sem mudar nada.
+    pooled=True usa um pool de conexoes de verdade (ver _get_pool()) -- so a webapp
+    (webapp/main.py) passa pooled=True, porque e o unico caller que abre muitas
+    conexoes curtas e concorrentes (uma por requisicao HTTP); os scripts de pipeline
+    (refresh.py, enrich_cnae.py etc, chamados so por GitHub Actions/execucao manual)
+    fazem sessoes longas com poucas conexoes -- o caso de uso oposto ao que o pool
+    resolve -- entao continuam em get_connection() simples (uma conexao direta,
+    fechada de verdade no final), sem mudar nada.
 
-    Cai em DATABASE_URL se DATABASE_URL_POOLER nao estiver definida (ambiente sem a
-    separacao configurada ainda, ex: antes de adicionar o novo secret/env var) --
-    nunca quebra por falta dela, so deixa de aproveitar o pooler em modo transaction.
-
-    prepare_threshold=None (so quando pooled=True) desliga o "server-side prepare"
-    automatico do psycopg3: sob um pooler em modo TRANSACTION, cada transacao pode
-    cair numa conexao fisica diferente por tras do PgBouncer, entao um statement
-    preparado numa transacao anterior pode nao existir mais na proxima conexao
-    fisica -- sem isso, erros intermitentes tipo "prepared statement does not
-    exist"."""
+    DATABASE_URL_POOLER (se definida) tem prioridade sobre DATABASE_URL so pro
+    caminho pooled=True -- existe pra um provedor que ofereca um endpoint de pooler
+    GERENCIADO separado (ex: Supabase em modo transaction, porta 6543); sem essa
+    variavel definida, o pool conecta na mesma DATABASE_URL de sempre (caso do Aiven
+    free tier, que nao tem endpoint de pooler proprio -- o pool acima e que faz esse
+    papel, do lado do cliente)."""
     if pooled:
-        database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
-    else:
-        database_url = os.environ.get("DATABASE_URL")
+        return _PooledConnection(_get_pool(), _get_pool().getconn())
+    database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL nao configurada. Defina essa variavel de ambiente com a "
-            "connection string do Postgres (Supabase) -- em desenvolvimento local, "
-            "via um arquivo .env na raiz do repo; em producao, como variavel de "
-            "ambiente real da plataforma de deploy."
+            "connection string do Postgres -- em desenvolvimento local, via um "
+            "arquivo .env na raiz do repo; em producao, como variavel de ambiente "
+            "real da plataforma de deploy."
         )
-    if pooled:
-        return psycopg.connect(database_url, prepare_threshold=None)
     return psycopg.connect(database_url)
 
 

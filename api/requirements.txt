@@ -12,7 +12,10 @@
 # Conferido por leitura manual do grafo de imports de nivel de modulo a partir de
 # webapp/main.py (import "de topo do arquivo", nao import lazy dentro de funcao):
 #   webapp/main.py     -> db, webapp/detalhe (sem imports proprios)
-#   src/db.py          -> os, pathlib (stdlib), dotenv, psycopg, db_compat
+#   src/db.py          -> os, pathlib (stdlib), dotenv, psycopg, db_compat,
+#                         psycopg_pool (import lazy dentro de _get_pool(), so usado
+#                         pelo caminho get_connection(pooled=True) -- e o que
+#                         webapp/main.py chama em toda rota, entao entra aqui)
 #                         (sqlalchemy so e importado dentro de get_engine(), usado
 #                         apenas pelos scripts de pipeline -- webapp/main.py nunca
 #                         chama get_engine())
@@ -34,6 +37,7 @@
 # precisa (nem deve) instalar um servidor ASGI a parte dentro da funcao.
 fastapi
 psycopg[binary]
+psycopg-pool
 requests
 numpy
 pandas
