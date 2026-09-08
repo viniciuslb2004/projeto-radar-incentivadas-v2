@@ -422,22 +422,30 @@ def _atualizar_search_vector(conn, ids: list) -> None:
     ids = [int(i) for i in dict.fromkeys(ids)]
     if not ids:
         return
+    # regexp_replace(..., 'optic', 'otic', 'gi') depois de cada unaccent(): unifica
+    # grafias como "optica"/"otica" (mesmo conceito -- "fibra optica" grafia antiga
+    # ainda comum, "fibra otica" grafia atual -- mas palavras DIFERENTES pro
+    # stemmer sem isso). Mesma normalizacao aplicada do lado da QUERY em
+    # search_fts.py::_normaliza_ortografia_sql() -- os dois lados precisam bater.
+    # Bug real corrigido por isso: buscar "cabos de fibra otica" rankeava uma otica
+    # (oculista, match incidental do nome) ACIMA de uma empresa real de fibra
+    # optica (grafia com 'p' na descricao), porque so uma delas "batia" a palavra.
     conn.execute(
         """
         UPDATE operations SET search_vector =
-            setweight(to_tsvector('portuguese', unaccent(coalesce(cliente, '') || ' ' || coalesce(cnpj, ''))), 'A') ||
-            setweight(to_tsvector('portuguese', unaccent(
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(coalesce(cliente, '') || ' ' || coalesce(cnpj, '')), '\\moptic', 'otic', 'gi')), 'A') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
                 coalesce(setor_bndes, '') || ' ' || coalesce(subsetor_bndes, '') || ' ' ||
                 coalesce(segmento, '') || ' ' || coalesce(search_taxonomia_termos, '')
-            )), 'B') ||
-            setweight(to_tsvector('portuguese', unaccent(
+            ), '\\moptic', 'otic', 'gi')), 'B') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
                 coalesce(produto, '') || ' ' || coalesce(instrumento_financeiro, '') || ' ' ||
                 coalesce(indexador, '') || ' ' || coalesce(modalidade_apoio, '')
-            )), 'C') ||
-            setweight(to_tsvector('portuguese', unaccent(
+            ), '\\moptic', 'otic', 'gi')), 'C') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
                 coalesce(descricao_projeto, '') || ' ' || coalesce(municipio, '') || ' ' ||
                 coalesce(uf, '') || ' ' || coalesce(agencia, '')
-            )), 'D')
+            ), '\\moptic', 'otic', 'gi')), 'D')
         WHERE id = ANY(?)
         """,
         [ids],
