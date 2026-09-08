@@ -59,6 +59,7 @@
 
 .loading-brand { font-weight: 700; font-size: 17px; }
 .loading-texto { font-size: 13px; color: var(--blue-lighter); }
+.loading-logo { height: 56px; width: auto; margin-bottom: 8px; }
 
 body {
   margin: 0;
@@ -80,10 +81,15 @@ body {
   gap: 10px;
 }
 
+.topbar-logo { height: 26px; width: auto; }
+
 .topbar .brand {
   font-weight: 700;
   font-size: 17px;
   letter-spacing: 0.2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .topbar .brand small {
