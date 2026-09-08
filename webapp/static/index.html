@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Radar de Crédito Incentivado</title>
+<link rel="icon" type="image/png" href="/img/favicon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="/css/style.css">
 </head>
@@ -181,7 +182,8 @@
       <input type="text" id="busca-input" placeholder="Descreva uma empresa ou setor. Ex: fintech de crédito para pequenas empresas do agro no Nordeste">
       <button id="busca-btn">Buscar</button>
     </div>
-    <div class="filterbar" id="busca-filterbar" style="margin: 10px 0 0; border: 1px solid var(--border); border-radius: var(--radius);">
+    <div class="example-chips" id="busca-historico" style="display:none;"></div>
+    <div class="filterbar" id="busca-filterbar" style="margin: 18px 0 0; border: 1px solid var(--border); border-radius: var(--radius);">
       <div>
         <label>Entidade</label>
         <select id="bu-f-agencia"><option value="">Todas</option></select>
@@ -206,7 +208,6 @@
         <select id="bu-f-produto"><option value="">Todas</option></select>
       </div>
     </div>
-    <div class="example-chips" id="busca-historico" style="display:none;"></div>
     <div id="busca-resultado"></div>
   </section>
 
