@@ -143,13 +143,45 @@ Ranking em 6 tiers (do mais forte pro mais fraco, ver `PRIORIDADE_MOTIVO` em `se
    "parque" solta.
 5. Correspondência por QUALQUER palavra (OR, `websearch_to_tsquery`) — inclui os sinônimos
    pré-calculados.
-6. Trigrama (`pg_trgm`/`similarity()`) — só roda se as tiers 1-5 (indexadas) voltarem com
-   poucos resultados (`MINIMO_ANTES_DE_TRIGRAMA`), já que trigrama varre a tabela inteira.
+6. Trigrama (`pg_trgm`/`similarity()`) — só roda se as tiers 1-5 voltarem com poucos
+   resultados (`MINIMO_ANTES_DE_TRIGRAMA`), já que trigrama (nesta forma, comparando
+   `unaccent(lower(cliente))`) também varre a tabela inteira (ver nota de performance
+   abaixo — mesma limitação de índice que as tiers 1-3).
 
 UF (sigla de 2 letras) é tratada como FILTRO estruturado (`AND uf = ?`), não como termo de
 busca — senão o volume de operações de qualquer UF grande dominava o ranking por cima de um
 termo raro e específico. Um pequeno conjunto de palavras genéricas do domínio
 (`PALAVRAS_GENERICAS_QUERY`, ex: "empresa") é excluído do OR de texto livre pelo mesmo motivo.
+
+**Performance (revisado 2026-09-09)**: `operations` tem índices reais disponíveis
+(`idx_operations_search_vector` GIN em `search_vector`, `idx_operations_cliente_trgm`/
+`idx_operations_segmento_trgm` GIN trigram, além de btree em `cnpj`/`setor_bndes`/`uf`/etc
+— ver `pg_indexes`), mas a query original de `buscar_texto()` colocava TODAS as 6 tiers
+dentro de um único `CASE` avaliado incondicionalmente sobre a tabela inteira (~58 mil
+linhas) e só filtrava (`WHERE prioridade IS NOT NULL`) depois — isso força
+`Parallel Seq Scan` mesmo com os índices certos disponíveis (confirmado com
+`EXPLAIN ANALYZE` ao vivo: toda busca, de qualquer tipo, levava ~5-17s). Corrigido
+parcialmente: as tiers 4/5 (full-text, `search_vector @@ tsquery`) viraram queries
+próprias com o `@@` direto no `WHERE` (sem CASE por cima) — isso deixa o Postgres
+escolher `Bitmap Index Scan` no GIN, medido em ~150-300ms quando essas tiers dominam
+(contra ~4-8s antes). As tiers 1-3 (prefixo de CNPJ/cliente, keyword em
+setor/subsetor/segmento/produto/instrumento/indexador via `LIKE` sobre
+`unaccent(lower(campo))`) **continuam fazendo seq scan** — não há índice funcional
+casando com essa expressão exata (os índices trigram existentes são sobre a coluna
+RAW, sem `unaccent`/`lower`), e como tiers 1-3 rodam em TODA busca (correção precisa
+ser feita antes de tiers 4/5 poderem ser avaliadas, pra nunca reclassificar uma
+operação pra uma tier mais fraca), esse seq scan (~3-4s, majoritariamente o custo dos
+9 `unaccent()`+`regexp_replace()`+`lower()` por linha, não do ranking em si — testado
+isolando `ts_rank_cd` da query, o custo não muda muito) virou o piso de latência de
+QUALQUER busca. Ganho líquido medido (`orig` vs `novo`, alternando lado a lado contra
+produção pra descontar o ruído de rede do Aiven free tier): ~35-45% mais rápido em
+média, sem nenhuma mudança de resultado/ranking (mesma bateria de queries de
+regressão validada antes e depois). **Se precisar reduzir mais**: o próximo passo
+exigiria um índice funcional novo (ex: `CREATE INDEX ... ON operations USING gin
+(unaccent(lower(cliente)) gin_trgm_ops)`, idem pra setor/subsetor/segmento/produto) —
+é uma migração de schema na Aiven de produção (mesmo banco usado por todas as sessões
+concorrentes), então não fazer sem confirmar com o usuário antes, mesmo que
+tecnicamente seguro (`CREATE INDEX CONCURRENTLY` evita lock de escrita).
 
 `src/search_taxonomy.py` guarda os sinônimos: exaustivo para Setor (4) e Subsetor (19),
 CURADO (não exaustivo) para Segmento (~1291 valores distintos de CNAE — cobertura vem
@@ -302,19 +334,40 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   indexação) depois de `unaccent()`. Backfill já rodado contra toda a base (ver
   `scripts/backfill_search_taxonomia.py`) — confirmado que "otica" e "óptica" agora
   retornam exatamente o mesmo resultado/ordem, a normalização em si funciona.
-  **PARCIALMENTE RESOLVIDO — sintoma original ainda ocorre, causa raiz é outra**:
-  buscar "cabos de fibra otica" ainda rankeia "Ótica Diniz Ltda" (loja de óculos)
-  ACIMA de uma empresa real de fibra óptica (verificado em produção em 2026-09-09).
-  Não é mais um mismatch de grafia (os dois lados já normalizam igual) — é um problema
-  de PESO ENTRE CAMPOS no mesmo tier de ranking (tier 5, `websearch_to_tsquery`/OR): a
-  loja de ótica bate só 1 das 4 palavras da query mas num campo de peso mais alto
-  (nome do cliente/segmento), enquanto a empresa de fibra óptica bate 3 das 4 palavras
-  num campo de peso mais baixo (`descricao_projeto`) — `ts_rank_cd` favorece o peso do
-  campo mais que a cobertura de palavras. Ainda não corrigido; candidatos pra próxima
-  tentativa: reduzir peso do campo cliente/segmento nesse tier especificamente, ou
-  excluir matches de palavra isolada desse jeito (similar ao que já é feito pra
-  `PALAVRAS_GENERICAS_QUERY`) quando a cobertura de palavras da query é muito menor
-  que a de outro candidato no mesmo tier.
+  **RESOLVIDO (2026-09-09)** — causa raiz era outra, não mismatch de grafia: mesmo
+  com os dois lados já normalizando igual, buscar "cabos de fibra otica" ainda
+  rankeava "Ótica Diniz Ltda" (loja de óculos) ACIMA de empresas reais de fibra
+  óptica (ex: "ETECC FIBRA ÓPTICA NETWORK LTDA"), confirmado ao vivo contra
+  produção. Causa raiz de verdade: não é peso entre campos (A/B/C/D) — é que
+  `ts_rank_cd` pesa mais o CAMPO onde bateu do que quantas palavras da query
+  realmente batem, então um match de 1 palavra num campo caro (nome/segmento)
+  supera um match de 3-4 palavras num campo mais barato (`descricao_projeto`).
+  **Histórico da correção (duas sessões em paralelo, mesmo dia)**: um primeiro
+  commit (`6c3eee7`) resolveu o ranking com uma "cobertura" (quantas palavras
+  DISTINTAS da query aparecem no documento, uma a uma) calculada como subquery
+  correlacionada (`unnest`+`@@`) **dentro do mesmo `CASE`** que decide a
+  `prioridade` — funcionalmente correto, mas esse `CASE` já tinha um problema de
+  performance PREEXISTENTE e separado (`search_vector @@ tsquery` das tiers 4/5
+  embutido no CASE nunca usava o índice GIN `idx_operations_search_vector`,
+  forçando `Parallel Seq Scan` em toda busca, ~5-8s). Como uma reestruturação
+  pra corrigir os dois problemas de uma vez já estava em andamento em paralelo,
+  esse primeiro commit foi revertido (`aacd5e1`) pra não duplicar o fix de
+  ranking em cima da estrutura antiga (o filtro `porte`, do mesmo commit
+  original, foi mantido). **Resolução final**: tiers 4/5 viraram queries
+  próprias com `search_vector @@ tsquery` direto no `WHERE` (usa o índice GIN,
+  ver "Performance" no fim da seção "Motor de busca" acima) e a cobertura passou
+  a ser calculada numa query SEPARADA, só nos poucos candidatos que a tier 5 (já
+  indexada) trouxe (`WHERE id = ANY(?)`, índice de PK) — nunca mais embutida
+  numa CASE que roda linha a linha na tabela inteira. Não mexeu nos pesos
+  `setweight()` por campo (aqueles resolveram um bug real diferente, ver entrada
+  de `_periodo_anterior`/hospital-vs-SP acima, e não deviam ser tocados de novo
+  sem motivo novo). **Lição**: qualquer critério de ranking novo neste motor de
+  busca deve ser calculado só sobre candidatos JÁ FILTRADOS por uma query
+  anterior, nunca dentro de uma CASE/subquery correlacionada que roda sobre a
+  tabela inteira — confirmado medindo: uma variante equivalente (cobertura via
+  `plainto_tsquery` por palavra, também dentro do CASE) chegou a ser testada e
+  mediu uma query de 8 palavras subindo de ~9s pra **55s** só por causa disso,
+  contra o Aiven — meça antes de assumir que "mais uma condição" é barato.
 - **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
   larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
