@@ -26,6 +26,15 @@ from unify import _search_taxonomia_termos, _atualizar_search_vector
 BATCH_VECTOR = 5000
 COMMIT_A_CADA = 50  # grupos por commit -- transacoes mais curtas, menos exposicao a deadlock/lock contention
 MAX_TENTATIVAS = 5
+# Erro de CONEXAO (ReadOnlySqlTransaction/AdminShutdown) precisa de um orcamento de
+# retry BEM maior que erro de lock: confirmado empiricamente que o Aiven free tier
+# entra em modo read-only por uma janela recorrente (bateu no MESMO ponto do
+# backfill 3 vezes seguidas, ~30-55s apos comecar o recalculo de search_vector) --
+# o orcamento antigo (5 tentativas, 2/4/6/8/10s = 30s no total) nao sobrevivia a
+# essa janela. 10 tentativas com espera fixa de 30s (5 minutos no total) da folga
+# de sobra pra qualquer manutencao/backup automatico terminar.
+MAX_TENTATIVAS_CONEXAO = 10
+ESPERA_CONEXAO_S = 30.0
 
 
 _ERROS_TRANSITORIOS_LOCK = (psycopg.errors.DeadlockDetected, psycopg.errors.LockNotAvailable, psycopg.errors.SerializationFailure)
@@ -42,41 +51,46 @@ def _reconectar():
     ja confirmado nesta sessao logo apos o servico Aiven ser criado) -- tenta
     algumas vezes com espera crescente antes de desistir de vez."""
     print("    (reconectando -- conexao anterior foi derrubada pelo servidor)")
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
+    for tentativa in range(1, MAX_TENTATIVAS_CONEXAO + 1):
         try:
             return db.get_connection()
         except psycopg.OperationalError as e:
-            if tentativa == MAX_TENTATIVAS:
+            if tentativa == MAX_TENTATIVAS_CONEXAO:
                 raise
-            espera = 3.0 * tentativa
-            print(f"    (reconexao falhou ({type(e).__name__}), tentativa {tentativa}/{MAX_TENTATIVAS}, aguardando {espera:.1f}s...)")
-            time.sleep(espera)
+            print(f"    (reconexao falhou ({type(e).__name__}), tentativa {tentativa}/{MAX_TENTATIVAS_CONEXAO}, aguardando {ESPERA_CONEXAO_S:.0f}s...)")
+            time.sleep(ESPERA_CONEXAO_S)
 
 
 def _executar_com_retry(conn, sql, params):
     """Roda um UPDATE com retry em caso de erro transiente -- de lock (concorrencia
-    normal, ROLLBACK + retenta na MESMA conexao) ou de conexao (Aiven free tier ja
-    derrubou a conexao 2x nesta sessao: uma vez em modo read-only durante o backup
-    inicial automatico, outra por reinicio/manutencao -- nesses casos precisa de uma
-    conexao NOVA, nao so rollback). Devolve a conexao valida no final (pode ser uma
-    nova, se reconectou)."""
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
+    normal, ROLLBACK + retenta na MESMA conexao, orcamento curto -- MAX_TENTATIVAS)
+    ou de conexao (Aiven free tier ja derrubou a conexao varias vezes nesta sessao,
+    sempre por uma janela recorrente de read-only/reinicio automatico que pode durar
+    dezenas de segundos -- precisa de uma conexao NOVA e de um orcamento de retry BEM
+    maior, MAX_TENTATIVAS_CONEXAO/ESPERA_CONEXAO_S, senao desiste antes da janela
+    passar). Contadores INDEPENDENTES pros dois tipos de erro -- um nao consome o
+    orcamento do outro. Devolve a conexao valida no final (pode ser uma nova, se
+    reconectou)."""
+    tentativas_lock = 0
+    tentativas_conexao = 0
+    while True:
         try:
             conn.execute(sql, params)
             return conn
         except _ERROS_TRANSITORIOS_LOCK as e:
             conn.rollback()
-            if tentativa == MAX_TENTATIVAS:
+            tentativas_lock += 1
+            if tentativas_lock >= MAX_TENTATIVAS:
                 raise
-            espera = 0.5 * tentativa
-            print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
+            espera = 0.5 * tentativas_lock
+            print(f"    (retry lock {tentativas_lock}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
             time.sleep(espera)
         except _ERROS_CONEXAO as e:
-            if tentativa == MAX_TENTATIVAS:
+            tentativas_conexao += 1
+            if tentativas_conexao >= MAX_TENTATIVAS_CONEXAO:
                 raise
-            espera = 2.0 * tentativa
-            print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
-            time.sleep(espera)
+            print(f"    (retry conexao {tentativas_conexao}/{MAX_TENTATIVAS_CONEXAO} apos {type(e).__name__}, aguardando {ESPERA_CONEXAO_S:.0f}s...)")
+            time.sleep(ESPERA_CONEXAO_S)
             conn = _reconectar()
 
 
@@ -131,23 +145,26 @@ def main():
     print(f"Recalculando search_vector (tsvector com peso por campo) em lotes de {BATCH_VECTOR}...")
     for i in range(0, len(todos_ids), BATCH_VECTOR):
         lote = todos_ids[i:i + BATCH_VECTOR]
-        for tentativa in range(1, MAX_TENTATIVAS + 1):
+        tentativas_lock = 0
+        tentativas_conexao = 0
+        while True:
             try:
                 _atualizar_search_vector(conn, lote)
                 break
             except _ERROS_TRANSITORIOS_LOCK as e:
                 conn.rollback()
-                if tentativa == MAX_TENTATIVAS:
+                tentativas_lock += 1
+                if tentativas_lock >= MAX_TENTATIVAS:
                     raise
-                espera = 0.5 * tentativa
-                print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
+                espera = 0.5 * tentativas_lock
+                print(f"    (retry lock {tentativas_lock}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
                 time.sleep(espera)
             except _ERROS_CONEXAO as e:
-                if tentativa == MAX_TENTATIVAS:
+                tentativas_conexao += 1
+                if tentativas_conexao >= MAX_TENTATIVAS_CONEXAO:
                     raise
-                espera = 2.0 * tentativa
-                print(f"    (retry {tentativa}/{MAX_TENTATIVAS} apos {type(e).__name__}, aguardando {espera:.1f}s...)")
-                time.sleep(espera)
+                print(f"    (retry conexao {tentativas_conexao}/{MAX_TENTATIVAS_CONEXAO} apos {type(e).__name__}, aguardando {ESPERA_CONEXAO_S:.0f}s...)")
+                time.sleep(ESPERA_CONEXAO_S)
                 conn = _reconectar()
         print(f"  ... {min(i + BATCH_VECTOR, len(todos_ids))}/{len(todos_ids)} ids ({time.time() - t2:.1f}s)")
     print(f"search_vector recalculado para {len(todos_ids)} ids em {time.time() - t2:.1f}s.")
