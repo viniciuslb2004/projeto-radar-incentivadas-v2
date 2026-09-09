@@ -38,8 +38,19 @@ _ERROS_CONEXAO = (psycopg.errors.ReadOnlySqlTransaction, psycopg.OperationalErro
 
 
 def _reconectar():
+    """A propria reconexao pode falhar de primeira (ex: hiccup transitorio de DNS,
+    ja confirmado nesta sessao logo apos o servico Aiven ser criado) -- tenta
+    algumas vezes com espera crescente antes de desistir de vez."""
     print("    (reconectando -- conexao anterior foi derrubada pelo servidor)")
-    return db.get_connection()
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            return db.get_connection()
+        except psycopg.OperationalError as e:
+            if tentativa == MAX_TENTATIVAS:
+                raise
+            espera = 3.0 * tentativa
+            print(f"    (reconexao falhou ({type(e).__name__}), tentativa {tentativa}/{MAX_TENTATIVAS}, aguardando {espera:.1f}s...)")
+            time.sleep(espera)
 
 
 def _executar_com_retry(conn, sql, params):
