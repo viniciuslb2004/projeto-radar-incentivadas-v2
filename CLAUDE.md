@@ -228,6 +228,35 @@ Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador (nu
 servidor, "temporário" por design) — substituiu 3 chips de exemplo fixos que existiam antes
 (`busca.js`, `registrarHistoricoBusca`/`renderHistoricoBusca`).
 
+Card "Por UF" do Consolidado (`loadUF()` em `consolidado.js`) era um bar chart Chart.js
+mostrando só o top-12 (`/api/uf` sempre devolveu as 27 UFs sem limite — o corte era só no
+frontend); virou um MAPA do Brasil (2026-09-09). Sem biblioteca de mapas nenhuma — SVG inline
+baixado 1x de "Brazil States With ID and State Name inside svg.svg" (Wikimedia Commons,
+derivado de Brazil_Blank_Map_light.svg de Felipe Menegaz/Shereth; licença da cadeia de
+derivação é CC BY-SA 2.5, mesmo o upload mais recente tendo marcado CC0 por engano), reduzido
+pra só os 27 `<path id="state-xx">` (removidos os grupos de país vizinho/região/terreno do
+arquivo original) e gravado como asset estático comum em `webapp/static/img/brasil-uf.svg`
+(servido em `/img/brasil-uf.svg`, mesmo mecanismo do logo — **de propósito não precisou tocar
+em `index.html`/`vercel.json`**: o `<canvas id="chart-uf">` original é substituído em runtime
+por JS na 1a chamada de `loadUF()`, e o SVG é buscado 1x via `fetch()` e cacheado no DOM —
+reduz risco de conflito de merge num arquivo compartilhado por outras sessões/features).
+Cor de cada estado = interpolação linear entre `--map-escala-min`/`--map-escala-max` (definidas
+em `style.css`, tons já usados no resto do projeto — não uma paleta importada tipo viridis)
+sobre `sqrt((valor-min)/(max-min))`, não a fração linear direto — o volume de crédito
+incentivado por estado é muito concentrado (SP/RJ dominam), então escala linear pura deixava
+quase todo o resto do mapa na mesma cor clara, ilegível; raiz quadrada comprime o topo e separa
+melhor os valores intermediários, mantendo a ordem e os extremos exatos. Estado sem nenhuma
+operação no filtro atual usa `--map-sem-dado` (cinza neutro, de propósito SEM tom azulado —
+senão "sem dado" ficava visualmente idêntico a "o pior valor da escala").
+**Achado real ao implementar**: `/api/uf` devolve também `IE` (operações de abrangência
+nacional/interestadual, ex: Petrobras, Banco do Brasil — não é erro, é uma categoria real da
+fonte BNDES) e `NI` (UF nula na fonte, via `COALESCE(uf, 'NI')` no próprio `webapp/main.py`) —
+nenhuma das duas é um estado de verdade, então não têm `<path>` no mapa. Ambas ficam DE FORA do
+cálculo de min/max da escala de cor (senão o valor de `IE`, que já foi maior que o de vários
+estados reais, distorceria a escala) e aparecem somadas como uma legenda textual abaixo do
+mapa — o bar chart antigo mostrava `IE`/`NI` normalmente (sem corte de top-N no backend), então
+esconder esse volume sem avisar seria perder dado real que já era visível antes.
+
 ## Automação (GitHub Actions)
 
 Todos em `.github/workflows/`, usando o secret `DATABASE_URL`:
