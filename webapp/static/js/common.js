@@ -652,4 +652,25 @@ async function openOperacaoDetalhe(id) {
       // integracao e um extra -- se falhar, so nao mostra a secao.
     }
   }
+
+  // Grupo economico (mesma raiz de CNPJ, matriz+filiais) -- mesmo padrao da secao de
+  // linhas compativeis acima: carregada a parte, so aparece se houver resultado, nunca
+  // bloqueia o resto do detalhe se falhar.
+  try {
+    const grupo = await fetchJSON(`/api/operacoes/${id}/grupo-economico`);
+    if (grupo.resultados && grupo.resultados.length) {
+      const div = document.createElement("div");
+      div.className = "detalhe-secao";
+      div.innerHTML = `<div class="detalhe-secao-titulo">Outras operações do mesmo grupo econômico (${grupo.resultados.length}) <span class="hint">mesma raiz de CNPJ</span></div>` +
+        '<ul class="clickable-list">' +
+        grupo.resultados.map((o) => `<li data-op-id="${o.id}"><span>${o.cliente}</span><span class="badge neutro">${o.agencia} · ${fmtBRL(o.valor_contratado)}</span></li>`).join("") +
+        "</ul>";
+      body.appendChild(div);
+      div.querySelectorAll("li[data-op-id]").forEach((li) => {
+        li.addEventListener("click", () => openOperacaoDetalhe(li.dataset.opId));
+      });
+    }
+  } catch (e) {
+    // integracao e um extra -- se falhar, so nao mostra a secao.
+  }
 }

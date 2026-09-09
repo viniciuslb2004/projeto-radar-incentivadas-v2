@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from db import get_connection
 from webapp.detalhe import montar_detalhe_amigavel
@@ -236,6 +236,7 @@ def filtros():
             "ufs": col_values("uf"),
             "instrumentos": col_values("instrumento"),
             "produtos": col_values("produto"),
+            "portes": col_values("porte_cliente"),
             "anos": col_values("ano"),
             "data_min": min_max[0],
             "data_max": min_max[1],
@@ -650,6 +651,51 @@ def operacao_detalhe(op_id: int):
         conn.close()
 
 
+@app.get("/api/operacoes/{op_id}/grupo-economico")
+def operacao_grupo_economico(op_id: int):
+    """Outras operacoes que compartilham a mesma RAIZ de CNPJ (8 primeiros digitos --
+    identifica a EMPRESA, matriz+filiais compartilham a raiz, so o 9o-14o digito muda
+    por estabelecimento) que a operacao op_id -- cross-link simples, sem tabela/indice
+    novo (o dado ja existe em operations.cnpj)."""
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT left(regexp_replace(cnpj, '\\D', '', 'g'), 8) FROM operations WHERE id = ?", (op_id,)
+        ).fetchone()
+        if not row or not row[0] or len(row[0]) < 8:
+            return {"resultados": []}
+        raiz = row[0]
+        rows = cur.execute(
+            "SELECT id, cliente, agencia, data_contratacao, valor_contratado FROM operations "
+            "WHERE left(regexp_replace(cnpj, '\\D', '', 'g'), 8) = ? AND id != ? ORDER BY data_contratacao DESC LIMIT 20",
+            (raiz, op_id),
+        ).fetchall()
+        cols = ["id", "cliente", "agencia", "data_contratacao", "valor_contratado"]
+        return {"resultados": [dict(zip(cols, r)) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/busca/exportar")
+def busca_exportar(body: dict):
+    """Exporta os resultados da Busca em .xlsx formatado -- recebe as linhas PRONTAS que o
+    front-end ja renderizou (ultimosResultados, ver busca.js), nunca re-roda a busca aqui.
+    Garante que o arquivo bate exatamente com o que a pessoa viu na tela, independente do
+    motor de busca (IA ligado ou nao) ter gerado esses resultados."""
+    from webapp.exportar_excel import gerar_xlsx_busca
+
+    query = (body or {}).get("query") or "resultado"
+    linhas = (body or {}).get("resultados") or []
+    conteudo = gerar_xlsx_busca(query, linhas)
+    slug = "".join(c if c.isalnum() else "-" for c in query).strip("-").lower() or "resultado"
+    return Response(
+        content=conteudo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="busca-{slug}.xlsx"'},
+    )
+
+
 if not MOTOR_BUSCA_IA:
     # ============ Motor de busca SEM IA (padrao) -- full-text/trigram Postgres, ver
     # src/search_fts.py. Uma chamada so, sem calculo de vetor em lugar nenhum
@@ -659,12 +705,12 @@ if not MOTOR_BUSCA_IA:
     @app.get("/api/busca")
     def busca(
         q: str = Query(..., min_length=3), agencia: str = None, valor_minimo: float = None,
-        regiao: str = None, produto: str = None,
+        regiao: str = None, produto: str = None, porte: str = None,
     ):
         try:
             return buscar_texto(
                 q, agencia=agencia or None, valor_minimo=valor_minimo, regiao=regiao or None,
-                produto=produto or None,
+                produto=produto or None, porte=porte or None,
             )
         except Exception as e:
             logger.exception("motor de busca indisponivel")

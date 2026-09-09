@@ -28,9 +28,13 @@
 #   src/editais_search.py -> numpy, db, editais_embeddings, embeddings
 #   src/editais_embeddings.py -> numpy, pandas, db, embeddings
 #   src/elegibilidade.py   -> requests, sector_taxonomy (sector_taxonomy so usa `re`)
-# pypdf (src/editais_documentos.py) e openpyxl (src/parse_bndes.py, src/parse_finep.py)
-# NAO entram: so sao importados por modulos do pipeline (finep_editais.py,
-# refresh_editais.py, parse_*.py), nunca alcancados a partir de webapp/main.py.
+#   webapp/exportar_excel.py -> openpyxl (import LAZY dentro de busca_exportar(), so no
+#                         momento do clique em "Exportar Excel" na Busca -- ainda assim
+#                         precisa estar instalado no runtime hospedado, senao a rota
+#                         quebra com ModuleNotFoundError na hora de usar, mesmo que o
+#                         resto do app suba normalmente)
+# pypdf (src/editais_documentos.py) NAO entra: so e importado por modulos do pipeline
+# (refresh_editais.py), nunca alcancado a partir de webapp/main.py.
 #
 # uvicorn fica de fora de proposito: o runtime Python da Vercel importa o objeto
 # ASGI `app` diretamente (ver api/index.py) e roda seu proprio servidor -- nao
@@ -41,4 +45,5 @@ psycopg-pool
 requests
 numpy
 pandas
+openpyxl
 python-dotenv

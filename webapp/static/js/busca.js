@@ -145,7 +145,7 @@ function renderResultados(data) {
   html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px;">
     <span class="progress-label" id="busca-contagem">${fmtNum(ultimosResultados.length)} operações parecidas encontradas</span>
     <div style="display:flex; gap:8px; align-items:center;">
-      <button id="busca-exportar-btn" class="acao-btn" style="padding:6px 12px; font-size:13px;">Exportar CSV</button>
+      <button id="busca-exportar-btn" class="acao-btn" style="padding:6px 12px; font-size:13px;">Exportar Excel</button>
       <select id="busca-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
         <option value="relevancia">Mais relevante</option>
         <option value="data-desc">Mais recente</option>
@@ -160,22 +160,36 @@ function renderResultados(data) {
 
   document.getElementById("busca-resultado").innerHTML = html;
   document.getElementById("busca-ordenar").addEventListener("change", renderListaResultados);
-  document.getElementById("busca-exportar-btn").addEventListener("click", () => {
-    exportarCSV(`busca-${(data.query || "resultado").replace(/[^a-z0-9]+/gi, "-")}.csv`, ultimosResultados, [
-      { chave: "cliente", rotulo: "Cliente" },
-      { chave: "cnpj", rotulo: "CNPJ" },
-      { chave: "agencia", rotulo: "Agência" },
-      { chave: "setor_bndes", rotulo: "Setor" },
-      { chave: "subsetor_bndes", rotulo: "Subsetor" },
-      { chave: "segmento", rotulo: "Segmento" },
-      { chave: "uf", rotulo: "UF" },
-      { chave: "data_contratacao", rotulo: "Data" },
-      { chave: "valor_contratado", rotulo: "Valor contratado" },
-      { chave: "valor_desembolsado", rotulo: "Valor desembolsado" },
-      { chave: "descricao_projeto", rotulo: "Descrição do projeto" },
-      { chave: "score", rotulo: "Similaridade" },
-      { chave: "motivo", rotulo: "Motivo da correspondência" },
-    ]);
+  document.getElementById("busca-exportar-btn").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const textoOriginal = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Gerando...";
+    try {
+      // Reenvia as MESMAS linhas ja renderizadas na tela (ultimosResultados) -- o
+      // backend monta o .xlsx em cima delas, nunca re-roda a busca, pra garantir que
+      // o arquivo bate exatamente com o que a pessoa viu (ver webapp/exportar_excel.py).
+      const resp = await fetch("/api/busca/exportar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: data.query, resultados: ultimosResultados }),
+      });
+      if (!resp.ok) throw new Error("falha ao gerar excel");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `busca-${(data.query || "resultado").replace(/[^a-z0-9]+/gi, "-")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Não foi possível gerar o Excel. Tente novamente.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = textoOriginal;
+    }
   });
   renderListaResultados();
 }
@@ -190,6 +204,7 @@ function _filtrosBusca() {
     valor_minimo: valorMinimoMilhoes ? Number(valorMinimoMilhoes) * 1e6 : "",
     regiao: document.getElementById("bu-f-regiao").value,
     produto: document.getElementById("bu-f-produto").value,
+    porte: document.getElementById("bu-f-porte").value,
   };
 }
 
@@ -204,6 +219,7 @@ function _sincronizarFiltrosBuscaNaURL(q) {
     valor_minimo: document.getElementById("bu-f-valor-minimo").value,
     regiao: document.getElementById("bu-f-regiao").value,
     produto: document.getElementById("bu-f-produto").value,
+    porte: document.getElementById("bu-f-porte").value,
   });
 }
 
@@ -213,6 +229,7 @@ function _aplicarFiltrosBuscaDaURL() {
   if (params.has("valor_minimo")) document.getElementById("bu-f-valor-minimo").value = params.get("valor_minimo");
   if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
   if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
+  if (params.has("porte")) document.getElementById("bu-f-porte").value = params.get("porte");
 
   const q = (params.get("q") || "").trim();
   if (q) {
@@ -232,6 +249,7 @@ async function _popularFiltrosBusca() {
     };
     fill("bu-f-agencia", filtros.agencias);
     fill("bu-f-produto", filtros.produtos);
+    fill("bu-f-porte", filtros.portes);
   } catch (e) {
     // filtros da busca sao um extra -- se /api/filtros falhar aqui, a busca livre
     // (sem filtro nenhum) continua funcionando normalmente.
@@ -326,7 +344,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Mudar um filtro re-roda a busca atual (se ja tiver uma) -- filtro sem busca
   // nenhuma feita ainda nao faz nada sozinho, precisa de uma query pra filtrar.
-  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto"].forEach((id) => {
+  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto", "bu-f-porte"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       if (input.value.trim().length >= 3) runBusca(input.value.trim());
       else _sincronizarFiltrosBuscaNaURL(input.value.trim());
