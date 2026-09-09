@@ -81,6 +81,19 @@ body {
   gap: 10px;
 }
 
+/* So em telas largas o suficiente pra brand+abas+pill caberem numa linha sem
+   espremer ninguem: forca tudo numa linha so, e quem absorve a falta de espaco e
+   o .tabs (ja tem min-width:0 + overflow-x:auto, rola horizontal em vez de forcar
+   quebra de linha no container inteiro) -- sem isso, o status-pill (ultimo item)
+   as vezes ia sozinho pra uma segunda linha meio solta em larguras intermediarias
+   de desktop (bug real reportado pelo usuario). Em telas mais estreitas (tablet/
+   celular), mantem o `wrap` do bloco base acima -- empilhar brand/abas/pill em
+   linhas separadas e o comportamento certo la, ja testado e funcionando. */
+@media (min-width: 900px) {
+  .topbar { flex-wrap: nowrap; }
+  .topbar .brand, .status-pill { flex-shrink: 0; white-space: nowrap; }
+}
+
 .topbar-logo { height: 26px; width: auto; }
 
 .topbar .brand {
