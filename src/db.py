@@ -73,12 +73,21 @@ def _get_pool():
     real do provedor) faz requisicoes concorrentes REUSAREM um numero pequeno de
     conexoes fisicas em vez de multiplicar 1-pra-1 com o trafego.
 
-    min_size baixo (nao mantem conexoes ociosas abertas a toa) + max_size=8 (deixa
-    bastante folga sob os 20 do Aiven free tier pra scripts de pipeline/acesso manual
-    concorrente). FastAPI roda rotas sincronas (`def`, nao `async def` -- confirmado
-    neste projeto) num threadpool do Starlette, entao um pool sincrono e bloqueante
-    do psycopg_pool e exatamente o caso de uso certo (thread-safe, cada thread pega
-    sua propria conexao emprestada).
+    min_size=0 (nao mantem conexao ociosa aberta a toa -- instancia serverless e
+    efemera, um min_size>=1 so paga o custo de abrir uma conexao que pode nunca ser
+    usada de novo antes da instancia reciclar) + max_size=3 (BEM mais conservador do
+    que "metade do teto do provedor" pareceria sugerir): a Vercel pode escalar pra
+    VARIAS instancias da function rodando ao mesmo tempo sob trafego concorrente, e
+    CADA instancia tem seu PROPRIO pool (variavel global `_POOL` e por processo, nao
+    compartilhada entre instancias) -- um max_size=8 com so 2 instancias concorrentes
+    ja seriam 16 conexoes, estourando o limite de 15 do pooler em modo session da
+    Supabase (bug real reproduzido em producao: EMAXCONNSESSION mesmo com o pool
+    ligado). max_size=3 da margem pra ~5 instancias concorrentes ficarem dentro do
+    teto de 15, ou ~6 dentro do teto de 20 do Aiven. FastAPI roda rotas sincronas
+    (`def`, nao `async def` -- confirmado neste projeto) num threadpool do
+    Starlette, entao um pool sincrono e bloqueante do psycopg_pool e exatamente o
+    caso de uso certo (thread-safe, cada thread pega sua propria conexao
+    emprestada).
 
     check=ConnectionPool.check_connection -- BUG REAL corrigido por isso: sem essa
     opcao (nao ligada por padrao no psycopg_pool), uma conexao MORTA por uma acao do
