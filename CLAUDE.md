@@ -6,7 +6,7 @@ não-óbvias que já foram tomadas — sem precisar reconstruir esse contexto do
 por commit. `README.md`/`DEPLOY.md`/`RESUME.md` também existem mas ficam desatualizados rápido
 (são notas point-in-time); este arquivo é o que deve ser mantido mais preciso e atual.
 
-**Data da última revisão a fundo deste arquivo: 2026-09-08.**
+**Data da última revisão a fundo deste arquivo: 2026-09-09.**
 
 ## O que é a plataforma
 
@@ -17,7 +17,7 @@ operações desde 2002); há também um catálogo separado de **linhas de crédi
 analisando o mercado de crédito incentivado brasileiro (ex: para prospecção, benchmarking,
 inteligência de mercado) — não é uma ferramenta de originação/contratação de crédito.
 
-100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Supabase)
+100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Aiven)
 hospedados juntos na Vercel. Não existe mais "modo local" com banco separado (SQLite) — tanto
 rodando localmente (`uvicorn`, para desenvolvimento) quanto em produção, o app fala com o MESMO
 Postgres via `DATABASE_URL`.
@@ -36,7 +36,14 @@ Postgres via `DATABASE_URL`.
   inteiro). Acessado com `psycopg` (v3). Uma única variável de ambiente `DATABASE_URL` é
   usada tanto pelo backend quanto pelos scripts de pipeline (GitHub Actions) — ver
   `scripts/migrate_supabase_to_aiven.py` pra como a migração foi feita (COPY tabela por
-  tabela, contagens conferidas, tudo bateu exato).
+  tabela, contagens conferidas, tudo bateu exato). O corte de verdade em produção (trocar
+  `DATABASE_URL` na Vercel E no secret do GitHub Actions) só terminou em 2026-09-09 — ver
+  a seção "Coisas a saber antes de mexer" pra armadilhas reais encontradas nesse processo
+  (env var da Vercel que parece salvar sem salvar, secret do GitHub Actions independente
+  do da Vercel). O projeto Supabase antigo **continua existindo, sem nenhum dado
+  apagado** — decisão deliberada de não descartar o backup até o Aiven se provar estável
+  por mais tempo em produção; a decisão de quando (e como) desligar/esvaziar o Supabase é
+  do usuário, não uma limpeza automática deste pipeline.
   **Atenção real sobre o Aiven free tier**: o serviço mostrou, nas primeiras horas depois
   de criado, janelas recorrentes de indisponibilidade — ora `ReadOnlySqlTransaction`
   (parece um backup/manutenção automática que bloqueia só escrita), ora `AdminShutdown`
@@ -261,12 +268,24 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   `_normaliza_ortografia_sql()`; mesma normalização espelhada em
   `unify.py::_atualizar_search_vector()`): as duas grafias (antiga, com P — "fibra
   óptica" — e atual, sem P — "fibra ótica") são o MESMO conceito na fala real, mas o
-  stemmer do Postgres as trata como palavras diferentes. Buscar "cabos de fibra otica"
-  rankeava uma ÓTICA (loja de óculos, match incidental do nome) ACIMA de uma empresa
-  real de fibra óptica, porque a descrição dela usava a grafia com P. Corrigido com
+  stemmer do Postgres as trata como palavras diferentes. Corrigido com
   `regexp_replace(..., 'optic', 'otic', 'gi')` aplicado nos DOIS lados (query e
   indexação) depois de `unaccent()`. Backfill já rodado contra toda a base (ver
-  `scripts/backfill_search_taxonomia.py`).
+  `scripts/backfill_search_taxonomia.py`) — confirmado que "otica" e "óptica" agora
+  retornam exatamente o mesmo resultado/ordem, a normalização em si funciona.
+  **PARCIALMENTE RESOLVIDO — sintoma original ainda ocorre, causa raiz é outra**:
+  buscar "cabos de fibra otica" ainda rankeia "Ótica Diniz Ltda" (loja de óculos)
+  ACIMA de uma empresa real de fibra óptica (verificado em produção em 2026-09-09).
+  Não é mais um mismatch de grafia (os dois lados já normalizam igual) — é um problema
+  de PESO ENTRE CAMPOS no mesmo tier de ranking (tier 5, `websearch_to_tsquery`/OR): a
+  loja de ótica bate só 1 das 4 palavras da query mas num campo de peso mais alto
+  (nome do cliente/segmento), enquanto a empresa de fibra óptica bate 3 das 4 palavras
+  num campo de peso mais baixo (`descricao_projeto`) — `ts_rank_cd` favorece o peso do
+  campo mais que a cobertura de palavras. Ainda não corrigido; candidatos pra próxima
+  tentativa: reduzir peso do campo cliente/segmento nesse tier especificamente, ou
+  excluir matches de palavra isolada desse jeito (similar ao que já é feito pra
+  `PALAVRAS_GENERICAS_QUERY`) quando a cobertura de palavras da query é muito menor
+  que a de outro candidato no mesmo tier.
 - **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
   larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
@@ -283,11 +302,46 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   `%%`, senão quebra o parser de placeholder do psycopg.
 - **Pool de conexões de verdade** (`src/db.py`, `get_connection(pooled=True)`) — a webapp
   (`webapp/main.py`, todos os ~26 call sites) usa um `psycopg_pool.ConnectionPool` real
-  (`min_size=1, max_size=8`), não mais uma conexão nova por requisição. Histórico: primeiro
-  corrigido (2026-09-04) esgotando o limite de 15 conexões do pooler em modo *session* da
-  Supabase; depois de migrar pro Aiven (2026-09-08, sem pooler gerenciado no plano
-  gratuito, só um teto bruto de 20 conexões), a solução virou um pool client-side de
-  verdade em vez de apontar pra um endpoint de pooler gerenciado.
+  (`min_size=0, max_size=2`), não mais uma conexão nova por requisição. Histórico completo
+  de um incidente real de produção (2026-09-04 a 2026-09-09), na ordem em que aconteceu:
+  1. Esgotamento do limite de 15 conexões do pooler em modo *session* da Supabase
+     (`EMAXCONNSESSION`) sob carga concorrente real — cada instância serverless da Vercel
+     tem seu PRÓPRIO pool (`_POOL` é global por processo, não compartilhado entre
+     instâncias), então `max_size` alto multiplica pelo número de instâncias concorrentes,
+     não é um teto global.
+  2. Tentativa de reduzir `max_size` de 8 pra 3 — um commit real só editou a DOCSTRING,
+     o `ConnectionPool(...)` de verdade continuou em `max_size=8`. Só descoberto testando
+     produção ao vivo (curl direto), não por leitura de código. **Esse mesmo tipo de bug
+     se repetiu uma SEGUNDA vez** (2026-09-09, ao reduzir de 3 pra 2) — lição reforçada:
+     depois de qualquer mudança num valor destes, `grep` o valor literal no código, não
+     confie na docstring nem na mensagem do commit anterior.
+  3. Migração completa de banco pra Aiven (2026-09-08 — ver seção "Stack e topologia de
+     deploy" acima) — Aiven free tier não tem pooler gerenciado, só um teto bruto de 20
+     conexões, então a solução virou depender só do pool client-side (sem apontar pra
+     endpoint de pooler nenhum).
+  4. **Armadilha real na hora de aplicar a migração em produção**: trocar a env var
+     `DATABASE_URL` na Vercel (dashboard → Settings → Environment Variables → editar) pode
+     **parecer que salvou sem ter salvado de verdade** — a UI mostrou o valor novo digitado
+     de volta na tela após clicar "Save", mas o campo "Last Updated" da variável continuou
+     com a data antiga, e um redeploy subsequente continuou conectando no host antigo
+     (confirmado lendo os logs de runtime da Vercel: a mensagem de warning do
+     `psycopg_pool` inclui o host de verdade da conexão, `rolling back returned
+     connection: <psycopg.Connection ... host=...>` — essa é a forma mais confiável de
+     confirmar qual banco a produção está realmente usando). **Lição**: depois de editar
+     uma env var na Vercel, sempre conferir que a listagem voltou a mostrar "Updated just
+     now" antes de assumir que o redeploy vai pegar o valor novo — se ainda mostrar a data
+     antiga, o clique em Save não registrou e precisa repetir.
+  5. O secret `DATABASE_URL` do GitHub Actions é INDEPENDENTE do env var da Vercel — os
+     workflows agendados (`refresh-operacoes.yml`, `refresh-editais.yml`,
+     `enrich-cnae.yml`) continuaram escrevendo no Supabase antigo por um dia inteiro
+     depois da migração até esse secret também ser atualizado à mão (GitHub →
+     Settings → Secrets and variables → Actions). Detectado comparando contagem de linhas
+     tabela a tabela entre os dois bancos: 11 das 12 tabelas bateram exato, só
+     `refresh_editais_log` tinha 1 linha a mais no Supabase — o run diário de
+     2026-09-09 rodou contra o secret desatualizado antes da correção. Sem perda de dado
+     real (o run não encontrou editais novos pra gravar), só uma linha de auditoria que
+     nunca chegou no Aiven. **Sempre que trocar `DATABASE_URL` em produção, atualizar os
+     DOIS lugares (Vercel E GitHub Actions secret) e conferir contagens depois.**
   `_PooledConnection`: wrapper fino que só troca o significado de `.close()` (devolve pro
   pool via `putconn()` em vez de fechar de verdade) — evita reescrever os ~26 call sites
   que já fazem `conn = get_connection(...); try: ...; finally: conn.close()`.
@@ -300,8 +354,13 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   uma nova na hora se estiver morta. Testado ao vivo (matando as conexões do pool via
   `pg_terminate_backend()`, simulando o `AdminShutdown` real): 0 erros com o fix; sem ele,
   a mesma simulação derrubava a webapp inteira.
-  Testado sob carga: 120 requisições HTTP simultâneas contra o Aiven (bem acima do caso
-  real de ~15-20 por carga de página) — 0 erros.
+  Testado sob carga: 120 requisições HTTP simultâneas contra o Aiven (via simulação local)
+  e, depois de virar o `DATABASE_URL` de produção pra Aiven de verdade, 45 requisições HTTP
+  concorrentes direto contra produção (30 buscas + 15 kpis) — 0 erros nos dois casos.
+  `max_size=2` dá margem pra ~10 instâncias concorrentes da Vercel ficarem dentro do teto
+  de 20 conexões do Aiven; não há evidência de que subir esse valor traga ganho de
+  latência (o gargalo real está em rede/processamento por requisição, não fila de
+  conexão), então manter em 2 em vez de arriscar sem necessidade comprovada.
   `DATABASE_URL_POOLER` (se definida) tem prioridade sobre `DATABASE_URL` só pro pool —
   hoje **opcional/legado**: só relevante se um provedor futuro oferecer um endpoint de
   pooler GERENCIADO separado (ex: Supabase em modo transaction); sem essa variável
