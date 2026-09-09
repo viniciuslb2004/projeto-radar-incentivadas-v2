@@ -61,6 +61,87 @@
 .loading-texto { font-size: 13px; color: var(--blue-lighter); }
 .loading-logo { height: 56px; width: auto; margin-bottom: 8px; }
 
+/* ============ Tela de login (custom, substitui o dialogo nativo do navegador) ============
+   So aparece quando SITE_PASSWORD esta configurada (deploy hospedado) e ainda nao ha
+   credencial valida guardada (ver _tentarLogin()/sessionStorage em common.js). As
+   rotas /api/* continuam exigindo HTTP Basic por baixo dos panos (ver
+   webapp/main.py::_verificar_acesso) -- so o HTML/CSS/JS estatico virou publico, pra
+   esta tela poder carregar e testar as credenciais via fetch() ANTES de mostrar
+   qualquer dado real, sem nunca disparar o dialogo feio nativo do navegador. */
+#login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  background: var(--navy-900);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#login-overlay.hidden { display: none; }
+
+#login-card {
+  background: var(--steel);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  padding: 32px 36px;
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: #fff;
+}
+
+.login-logo { height: 44px; width: auto; margin-bottom: 10px; }
+.login-titulo { font-weight: 700; font-size: 16px; text-align: center; }
+.login-subtitulo { font-size: 12px; color: var(--blue-lighter); text-align: center; margin-bottom: 16px; }
+
+#login-card label {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--blue-lighter);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 10px;
+}
+#login-card input {
+  width: 100%;
+  border: 1px solid var(--blue-mid);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-size: 14px;
+  margin-top: 4px;
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
+#login-card input::placeholder { color: var(--blue-lighter); }
+#login-card input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
+
+.login-erro {
+  color: #ff9b9b;
+  font-size: 12px;
+  margin-top: 12px;
+  text-align: center;
+}
+.login-erro.hidden { display: none; }
+
+#login-btn {
+  margin-top: 20px;
+  width: 100%;
+  background: var(--navy-900);
+  color: #fff;
+  border: 1px solid var(--blue-mid);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#login-btn:hover { background: var(--navy); }
+#login-btn:disabled { opacity: 0.6; cursor: default; }
+
 body {
   margin: 0;
   font-family: var(--font);

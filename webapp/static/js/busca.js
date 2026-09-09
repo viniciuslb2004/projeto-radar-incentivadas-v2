@@ -181,9 +181,13 @@ function renderResultados(data) {
 }
 
 function _filtrosBusca() {
+  // Valor minimo e digitado em R$ MILHOES na UI (ex: "15" = R$15.000.000) -- mais
+  // facil de digitar do que o valor cheio; a API continua recebendo o valor real
+  // (em reais), so a multiplicacao por 1e6 acontece aqui.
+  const valorMinimoMilhoes = document.getElementById("bu-f-valor-minimo").value;
   return {
     agencia: document.getElementById("bu-f-agencia").value,
-    valor_minimo: document.getElementById("bu-f-valor-minimo").value,
+    valor_minimo: valorMinimoMilhoes ? Number(valorMinimoMilhoes) * 1e6 : "",
     regiao: document.getElementById("bu-f-regiao").value,
     produto: document.getElementById("bu-f-produto").value,
   };

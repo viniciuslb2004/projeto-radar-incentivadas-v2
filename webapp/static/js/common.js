@@ -41,12 +41,35 @@ function _urlCompleta(url) {
 // explicitamente, entao nao sao afetadas.
 const TIMEOUT_PADRAO_MS = 45000;
 
+// ============ Login (tela custom, ver #login-overlay em index.html) ============
+// As rotas /api/* continuam exigindo HTTP Basic por baixo dos panos (ver
+// webapp/main.py::_verificar_acesso), mas o HTML/CSS/JS estatico virou publico --
+// em vez do navegador mostrar o dialogo NATIVO feio de usuario/senha (que so
+// dispara em navegacao de pagina inteira, nunca em fetch()), a propria pagina
+// carrega e testa as credenciais via fetch() contra /api/status. O header
+// "Authorization: Basic ..." fica guardado em sessionStorage (some ao fechar a
+// aba -- "temporario" por design, mesmo padrao ja usado pro historico de busca).
+const AUTH_HEADER_KEY = "radar_auth_header";
+
+function _getAuthHeader() {
+  try { return sessionStorage.getItem(AUTH_HEADER_KEY) || null; } catch (e) { return null; }
+}
+function _setAuthHeader(header) {
+  try { sessionStorage.setItem(AUTH_HEADER_KEY, header); } catch (e) { /* sem storage -- login nao persiste entre reloads, mas continua funcionando na mesma pagina */ }
+}
+
+class ErroAutenticacao extends Error {}
+
 async function fetchJSON(url, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
+  const headers = {};
+  const auth = _getAuthHeader();
+  if (auth) headers["Authorization"] = auth;
   try {
-    const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
+    const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include", headers });
+    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
     return await r.json();
   } finally {
     clearTimeout(timer);
@@ -59,19 +82,77 @@ async function postJSON(url, body, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
+  const headers = { "Content-Type": "application/json" };
+  const auth = _getAuthHeader();
+  if (auth) headers["Authorization"] = auth;
   try {
     const r = await fetch(fullUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       credentials: "include",
       signal: controller.signal,
     });
+    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
     return await r.json();
   } finally {
     clearTimeout(timer);
   }
 }
+
+function _mostrarLoginOverlay(mensagemErro) {
+  document.getElementById("login-overlay").classList.remove("hidden");
+  const erro = document.getElementById("login-erro");
+  if (mensagemErro) {
+    erro.textContent = mensagemErro;
+    erro.classList.remove("hidden");
+  } else {
+    erro.classList.add("hidden");
+  }
+  document.getElementById("login-usuario").focus();
+}
+
+// Testa as credenciais digitadas direto (nao via fetchJSON, que usaria o header ja
+// GUARDADO em vez do candidato que ainda nem foi validado) -- so guarda de verdade
+// se /api/status responder 200.
+async function _tentarLogin(usuario, senha) {
+  const header = "Basic " + btoa(usuario + ":" + senha);
+  try {
+    const r = await fetch(_urlCompleta("/api/status"), { headers: { Authorization: header }, credentials: "include" });
+    if (r.status === 200) {
+      _setAuthHeader(header);
+      return true;
+    }
+  } catch (e) {
+    // erro de rede tratado como falha de login tambem -- usuario ve a mesma
+    // mensagem e pode tentar de novo.
+  }
+  return false;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("login-card").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("login-btn");
+    btn.disabled = true;
+    btn.textContent = "Entrando...";
+    const usuario = document.getElementById("login-usuario").value;
+    const senha = document.getElementById("login-senha").value;
+    const ok = await _tentarLogin(usuario, senha);
+    btn.disabled = false;
+    btn.textContent = "Entrar";
+    if (ok) {
+      // Recarrega a pagina inteira em vez de tentar re-disparar manualmente a
+      // inicializacao de cada aba (consolidado.js, tendencias.js etc, cada um so
+      // roda seu proprio DOMContentLoaded uma vez) -- mais simples e robusto:
+      // com o header ja guardado, o proximo /api/status já passa direto.
+      location.reload();
+    } else {
+      document.getElementById("login-senha").value = "";
+      _mostrarLoginOverlay("Usuário ou senha incorretos.");
+    }
+  });
+});
 
 // Exporta uma lista de objetos como CSV (abre direto no Excel/Sheets) -- so client-side,
 // sem ida ao servidor, pra funcionar igual no modo local e no hospedado. `colunas` e uma
@@ -242,8 +323,12 @@ async function initFiltersAndTabs() {
   try {
     status = await fetchJSON("/api/status");
   } catch (e) {
-    pill.textContent = "não foi possível conectar ao servidor";
     _esconderLoadingOverlay();
+    if (e instanceof ErroAutenticacao) {
+      _mostrarLoginOverlay();
+      return;
+    }
+    pill.textContent = "não foi possível conectar ao servidor";
     return;
   }
   window.MODO_HOSPEDADO = !!status.hospedado;
