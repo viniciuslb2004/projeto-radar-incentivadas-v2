@@ -78,7 +78,18 @@ def _get_pool():
     concorrente). FastAPI roda rotas sincronas (`def`, nao `async def` -- confirmado
     neste projeto) num threadpool do Starlette, entao um pool sincrono e bloqueante
     do psycopg_pool e exatamente o caso de uso certo (thread-safe, cada thread pega
-    sua propria conexao emprestada)."""
+    sua propria conexao emprestada).
+
+    check=ConnectionPool.check_connection -- BUG REAL corrigido por isso: sem essa
+    opcao (nao ligada por padrao no psycopg_pool), uma conexao MORTA por uma acao do
+    lado do servidor (confirmado ao vivo contra o Aiven free tier: AdminShutdown
+    durante uma manutencao automatica) ficava presa dentro do pool e era devolvida
+    pra TODA requisicao seguinte, quebrando a webapp inteira (500 em toda rota que
+    toca o banco) ate o processo ser reiniciado -- o pool nunca percebia sozinho que
+    a conexao tinha morrido. Com o check, getconn() valida a conexao (um SELECT
+    simples) antes de devolver, descarta e abre uma nova na hora se a antiga estiver
+    morta -- custa uma ida a mais ao banco por checkout, troca aceitavel por nunca
+    mais travar a webapp inteira numa conexao morta."""
     global _POOL
     if _POOL is None:
         from psycopg_pool import ConnectionPool
@@ -86,7 +97,10 @@ def _get_pool():
         database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
-        _POOL = ConnectionPool(database_url, min_size=1, max_size=8, open=True)
+        _POOL = ConnectionPool(
+            database_url, min_size=1, max_size=8, open=True,
+            check=ConnectionPool.check_connection,
+        )
     return _POOL
 
 
