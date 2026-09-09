@@ -75,15 +75,22 @@ def _get_pool():
 
     min_size=0 (nao mantem conexao ociosa aberta a toa -- instancia serverless e
     efemera, um min_size>=1 so paga o custo de abrir uma conexao que pode nunca ser
-    usada de novo antes da instancia reciclar) + max_size=3 (BEM mais conservador do
+    usada de novo antes da instancia reciclar) + max_size=2 (BEM mais conservador do
     que "metade do teto do provedor" pareceria sugerir): a Vercel pode escalar pra
     VARIAS instancias da function rodando ao mesmo tempo sob trafego concorrente, e
     CADA instancia tem seu PROPRIO pool (variavel global `_POOL` e por processo, nao
     compartilhada entre instancias) -- um max_size=8 com so 2 instancias concorrentes
     ja seriam 16 conexoes, estourando o limite de 15 do pooler em modo session da
     Supabase (bug real reproduzido em producao: EMAXCONNSESSION mesmo com o pool
-    ligado). max_size=3 da margem pra ~5 instancias concorrentes ficarem dentro do
-    teto de 15, ou ~6 dentro do teto de 20 do Aiven. FastAPI roda rotas sincronas
+    ligado, causa raiz do incidente que motivou a migracao pro Aiven). max_size=2 da
+    margem pra ~10 instancias concorrentes ficarem dentro do teto bruto de 20 conexoes
+    do Aiven (sem pooler gerenciado nesse plano, entao esse teto e o unico limite que
+    resta hoje) -- testado ao vivo em producao contra o Aiven com 45 requisicoes
+    concorrentes (30 buscas + 15 kpis) em paralelo, 0 erros. Nao ha evidencia de que
+    subir pra 3 traga ganho de latencia perceptivel (o gargalo real medido foi rede/
+    processamento por requisicao, nao fila de conexao), e 3 reduziria essa margem de
+    ~10 pra ~6 instancias concorrentes antes de estourar o teto -- por isso manter em
+    2 em vez de arriscar subir sem necessidade comprovada. FastAPI roda rotas sincronas
     (`def`, nao `async def` -- confirmado neste projeto) num threadpool do
     Starlette, entao um pool sincrono e bloqueante do psycopg_pool e exatamente o
     caso de uso certo (thread-safe, cada thread pega sua propria conexao
