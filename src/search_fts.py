@@ -229,24 +229,12 @@ def buscar_texto(
                         WHEN search_vector @@ websearch_to_tsquery('portuguese', {_norm("unaccent(?)")}) THEN 5
                         ELSE NULL
                     END AS prioridade,
-                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', {_norm("unaccent(?)")})) AS rank_fts,
-                    -- Cobertura (tier 5 apenas, ver ORDER BY): quantas PALAVRAS DISTINTAS
-                    -- da query aparecem no documento, uma a uma -- corrige um bug real e
-                    -- documentado (ver CLAUDE.md): "cabos de fibra otica" rankeava uma
-                    -- OTICA (loja de oculos, bate so 1 palavra num campo de peso alto,
-                    -- nome/segmento) ACIMA da empresa real de fibra optica (bate 3 das 4
-                    -- palavras num campo de peso mais baixo, descricao) -- ts_rank_cd pesa
-                    -- mais o CAMPO onde bateu do que quantas palavras da query realmente
-                    -- batem. Cobertura alta desempata a favor de quem cobre mais a query,
-                    -- nao so quem bate em um campo "caro".
-                    (SELECT COUNT(*) FROM unnest(?::text[]) t(termo)
-                     WHERE search_vector @@ websearch_to_tsquery('portuguese', {_norm("unaccent(t.termo)")})
-                    ) AS cobertura
+                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', {_norm("unaccent(?)")})) AS rank_fts
                 FROM operations
                 WHERE 1=1 {filtro_sql}
             ) sub
             WHERE prioridade IS NOT NULL
-            ORDER BY prioridade ASC, (CASE WHEN prioridade = 5 THEN cobertura END) DESC NULLS LAST, rank_fts DESC
+            ORDER BY prioridade ASC, rank_fts DESC
             LIMIT ?
         """
         params_principal = [
@@ -257,7 +245,6 @@ def buscar_texto(
             query_fts_frase,  # tier 4 frase (WHEN)
             query_fts,  # tier 5 fts OR (WHEN)
             query_fts,  # rank_fts (usa a query OR pra ordenar dentro de cada tier)
-            palavras,  # cobertura: uma palavra por vez (tier 5)
         ]
         params_principal.extend(params_extra_principal)
         params_principal.append(limite)
