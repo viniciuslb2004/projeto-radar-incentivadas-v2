@@ -70,7 +70,7 @@ def _atualizar_textos_apos_correcao(conn, operation_id: int) -> None:
     ANTES da correcao (o motivo real de corrigir e melhorar a busca, nao so o rotulo
     exibido no dashboard)."""
     row = conn.execute(
-        "SELECT agencia, cliente, cnpj, setor_bndes, subsetor_bndes, segmento, produto, "
+        "SELECT agencia, cliente, razao_social_oficial, cnpj, setor_bndes, subsetor_bndes, segmento, produto, "
         "instrumento_financeiro, modalidade_apoio, indexador, valor_contratado, "
         "prazo_amortizacao_meses, descricao_projeto, municipio, uf FROM operations WHERE id = ?",
         (operation_id,),
@@ -78,7 +78,7 @@ def _atualizar_textos_apos_correcao(conn, operation_id: int) -> None:
     if not row:
         return
     campos = dict(zip(
-        ["agencia", "cliente", "cnpj", "setor_bndes", "subsetor_bndes", "segmento", "produto",
+        ["agencia", "cliente", "razao_social_oficial", "cnpj", "setor_bndes", "subsetor_bndes", "segmento", "produto",
          "instrumento_financeiro", "modalidade_apoio", "indexador", "valor_contratado",
          "prazo_amortizacao_meses", "descricao_projeto", "municipio", "uf"],
         row,
@@ -113,6 +113,7 @@ OPERATIONS_COLS = [
     "agencia", "instrumento", "fonte_id", "cliente", "cnpj", "uf", "municipio",
     "data_contratacao", "ano", "trimestre", "valor_contratado", "valor_desembolsado",
     "setor_bndes", "subsetor_bndes", "segmento", "setor_origem", "porte_cliente",
+    "natureza_cliente", "razao_social_oficial",
     "produto", "instrumento_financeiro", "modalidade_apoio", "indexador", "taxa_juros",
     "prazo_carencia_meses", "prazo_amortizacao_meses", "descricao_projeto", "agente_financeiro",
     "raw_table", "raw_id", "embedding_text", "search_document", "search_taxonomia_termos",
@@ -129,12 +130,16 @@ def _add_periodo(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
 def _load_cnae_lookup(conn) -> pd.DataFrame:
     # pd.read_sql precisa de um engine SQLAlchemy (nao da conexao psycopg crua --
     # pandas nao suporta isso de forma confiavel, ver docstring de db.get_engine()).
+    # natureza_juridica/porte_empresa/razao_social_oficial: identificacao da empresa
+    # (Empresas.zip da RFB, ver enrich_cnae.py::enrich_empresas()) -- volta pra
+    # `operations` via este mesmo merge, em vez de ficar so no detalhe de uma operacao.
     return pd.read_sql(
-        "SELECT cnpj, setor_bndes_mapeado, subsetor_bndes_mapeado, cnae_descricao FROM cnpj_cnae", get_engine()
+        "SELECT cnpj, setor_bndes_mapeado, subsetor_bndes_mapeado, cnae_descricao, "
+        "natureza_juridica, porte_empresa, razao_social_oficial FROM cnpj_cnae", get_engine()
     )
 
 
-def _build_bndes_ops(conn) -> pd.DataFrame:
+def _build_bndes_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
     # so as linhas de bndes_raw que ainda nao tem uma linha correspondente em operations
     df = pd.read_sql(
         "SELECT * FROM bndes_raw WHERE id NOT IN (SELECT raw_id FROM operations WHERE raw_table = 'bndes_raw')",
@@ -143,6 +148,11 @@ def _build_bndes_ops(conn) -> pd.DataFrame:
     if df.empty:
         return df
     df = _add_periodo(df, "data_contratacao")
+    # BNDES nao traz natureza juridica/razao social oficial na propria planilha (so
+    # porte_cliente, que fica como esta -- classificacao nativa do BNDES, mais
+    # confiavel que a da Receita Federal pra esse campo) -- complementa via o mesmo
+    # cache CNPJ->identificacao ja usado pra FINEP.
+    df = df.merge(cnae_lookup[["cnpj", "natureza_juridica", "razao_social_oficial"]], on="cnpj", how="left")
     out = pd.DataFrame({
         "agencia": "BNDES",
         "instrumento": df["forma_apoio"],
@@ -161,6 +171,8 @@ def _build_bndes_ops(conn) -> pd.DataFrame:
         "segmento": df["subsetor_cnae_nome"].str.strip(),
         "setor_origem": "nativo",
         "porte_cliente": df["porte_cliente"],
+        "natureza_cliente": df["natureza_juridica"],
+        "razao_social_oficial": df["razao_social_oficial"],
         "produto": df["produto"],
         "instrumento_financeiro": df["instrumento_financeiro"],
         "modalidade_apoio": df["modalidade_apoio"],
@@ -204,7 +216,9 @@ def _build_finep_direto_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
         "subsetor_bndes": df["subsetor_bndes_mapeado"],
         "segmento": df["cnae_descricao"],
         "setor_origem": setor_origem,
-        "porte_cliente": None,
+        "porte_cliente": df["porte_empresa"],
+        "natureza_cliente": df["natureza_juridica"],
+        "razao_social_oficial": df["razao_social_oficial"],
         "produto": "Credito Direto (FINEP)",
         "instrumento_financeiro": None,
         "modalidade_apoio": "REEMBOLSAVEL",
@@ -248,7 +262,9 @@ def _build_finep_descentralizado_ops(conn, cnae_lookup: pd.DataFrame) -> pd.Data
         "subsetor_bndes": df["subsetor_bndes_mapeado"],
         "segmento": df["cnae_descricao"],
         "setor_origem": setor_origem,
-        "porte_cliente": None,
+        "porte_cliente": df["porte_empresa"],
+        "natureza_cliente": df["natureza_juridica"],
+        "razao_social_oficial": df["razao_social_oficial"],
         "produto": "Credito Descentralizado (FINEP)",
         "instrumento_financeiro": None,
         "modalidade_apoio": "REEMBOLSAVEL",
@@ -387,6 +403,7 @@ def _search_document(row, boilerplate: set = frozenset()) -> str:
         descricao = None
     parts = [
         row.get("cliente"),
+        row.get("razao_social_oficial"),
         row.get("cnpj"),
         row.get("agencia"),
         row.get("setor_bndes"),
@@ -410,7 +427,7 @@ def _atualizar_search_vector(conn, ids: list) -> None:
     informados, direto das colunas ja gravadas (nao de search_document, que mistura
     tudo com o mesmo peso) -- chamado depois de qualquer insert/update que mude essas
     colunas. Pesos (Postgres usa A > B > C > D):
-      A: cliente/CNPJ (identificacao da empresa -- prioridade maxima)
+      A: cliente/razao social oficial/CNPJ (identificacao da empresa -- prioridade maxima)
       B: setor/subsetor/segmento + sinonimos/taxonomia (o que a empresa FAZ)
       C: produto/instrumento/indexador (caracteristicas da linha de credito)
       D: descricao do projeto/municipio/UF/agencia (texto livre, contexto)
@@ -433,7 +450,7 @@ def _atualizar_search_vector(conn, ids: list) -> None:
     conn.execute(
         """
         UPDATE operations SET search_vector =
-            setweight(to_tsvector('portuguese', regexp_replace(unaccent(coalesce(cliente, '') || ' ' || coalesce(cnpj, '')), '\\moptic', 'otic', 'gi')), 'A') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(coalesce(cliente, '') || ' ' || coalesce(razao_social_oficial, '') || ' ' || coalesce(cnpj, '')), '\\moptic', 'otic', 'gi')), 'A') ||
             setweight(to_tsvector('portuguese', regexp_replace(unaccent(
                 coalesce(setor_bndes, '') || ' ' || coalesce(subsetor_bndes, '') || ' ' ||
                 coalesce(segmento, '') || ' ' || coalesce(search_taxonomia_termos, '')
@@ -480,6 +497,7 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
         campos = {
             "agencia": row["agencia"],
             "cliente": row["cliente"],
+            "razao_social_oficial": row["razao_social_oficial"],
             "cnpj": row["cnpj"],
             "setor_bndes": row["setor_bndes_mapeado"],
             "subsetor_bndes": row["subsetor_bndes_mapeado"],
@@ -498,12 +516,15 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
         texto_taxonomia = _search_taxonomia_termos(campos)
         updates.append((
             row["setor_bndes_mapeado"], row["subsetor_bndes_mapeado"], row["cnae_descricao"],
+            row["porte_empresa"], row["natureza_juridica"], row["razao_social_oficial"],
             texto_embedding, texto_busca, texto_taxonomia, int(row["id"]),
         ))
 
     cur = conn.cursor()
     cur.executemany(
         "UPDATE operations SET setor_bndes = ?, subsetor_bndes = ?, segmento = ?, "
+        "porte_cliente = COALESCE(porte_cliente, ?), natureza_cliente = COALESCE(natureza_cliente, ?), "
+        "razao_social_oficial = ?, "
         "setor_origem = 'enriquecido', embedding_text = ?, search_document = ?, search_taxonomia_termos = ? WHERE id = ?",
         updates,
     )
@@ -511,6 +532,24 @@ def _reclassificar_pendentes(conn, cnae_lookup: pd.DataFrame, boilerplate: set) 
     ids = [u[-1] for u in updates]
     _atualizar_search_vector(conn, ids)
     return ids
+
+
+def reclassificar_pendentes(conn=None) -> list:
+    """Wrapper publico de _reclassificar_pendentes -- permite rodar a reclassificacao
+    uma SEGUNDA vez no mesmo refresh, depois de build_operations() ja ter rodado a
+    primeira, quando algo novo foi adicionado ao cache cnpj_cnae NO MEIO do refresh
+    (ver enrich_cnae.py::enrich_pendentes_via_api, chamada por refresh.py). Recarrega
+    o cnae_lookup na hora (nao reusa um snapshot antigo) para enxergar o que acabou de
+    ser gravado."""
+    fechar = conn is None
+    conn = conn or get_connection()
+    try:
+        cnae_lookup = _load_cnae_lookup(conn)
+        boilerplate = _descricoes_boilerplate(conn)
+        return _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
+    finally:
+        if fechar:
+            conn.close()
 
 
 def build_operations():
@@ -522,7 +561,7 @@ def build_operations():
     try:
         cnae_lookup = _load_cnae_lookup(conn)
         parts = [
-            _build_bndes_ops(conn),
+            _build_bndes_ops(conn, cnae_lookup),
             _build_finep_direto_ops(conn, cnae_lookup),
             _build_finep_descentralizado_ops(conn, cnae_lookup),
         ]

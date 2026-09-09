@@ -7,6 +7,7 @@ refresh semanal. So processa os CNPJs que efetivamente aparecem nas
 operacoes da FINEP (nao carrega o cadastro nacional inteiro).
 """
 import re
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -267,6 +268,108 @@ def _commit_rows_empresas(conn, novos: dict, basico_para_cnpjs: dict, naturezas:
     )
     conn.commit()
     return len(rows)
+
+
+BRASILAPI_CNPJ_URL = "https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
+# BrasilAPI roda atras da mitigacao de bot da Vercel -- o User-Agent padrao do
+# `requests` ("python-requests/X.X") e tratado como trafego suspeito e barrado com
+# 429 + header `x-vercel-mitigated: deny` (confirmado ao vivo: a MESMA chamada, so
+# trocando o User-Agent pra algo tipo navegador, passa de 429 pra 200 na hora --
+# nao era rate limit de verdade, era bloqueio de bot). GitHub Actions tambem usa o
+# User-Agent padrao do requests, entao sem isso o job semanal falharia do mesmo jeito.
+_HEADERS_BRASILAPI = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
+
+def _consultar_brasilapi(cnpj: str) -> dict:
+    """Uma chamada = CNAE + razao social + natureza juridica + porte + capital social,
+    tudo de uma vez -- ao contrario do job mensal (enrich()+enrich_empresas(), que
+    baixa Estabelecimentos*.zip e Empresas*.zip, varios GB cada). Devolve None se o
+    CNPJ nao for encontrado (404) -- deixa pra quem chamou decidir o que fazer, nunca
+    levanta erro pra um CNPJ so nao encontrado."""
+    resp = requests.get(BRASILAPI_CNPJ_URL.format(cnpj=cnpj), headers=_HEADERS_BRASILAPI, timeout=10)
+    if resp.status_code in (400, 404):
+        # 404: CNPJ bem formado mas nao encontrado. 400: a BrasilAPI validou o CNPJ
+        # (digito verificador etc) e recusou por formato invalido -- confirmado ao
+        # vivo com codigos sinteticos internos do BNDES (nao sao CNPJ real nenhum).
+        # Os dois casos sao permanentes (nunca vao ter sucesso numa retentativa),
+        # diferente de 429/5xx -- tratar igual evita gastar retry com backoff a toa.
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def enrich_pendentes_via_api(conn, cnpjs: set, divisao_map: dict) -> int:
+    """Resolve CNPJs 'pendente' um a um via BrasilAPI (publica, sem chave) -- chamada a
+    cada refresh SEMANAL (ver refresh.py), pra nao deixar uma operacao nova esperando
+    ate 30 dias pelo proximo job mensal (enrich()/enrich_empresas()) so pra saber o
+    setor/CNAE/identificacao dela. Complementa o job mensal, nunca substitui -- o job
+    mensal continua sendo quem processa o backlog historico em volume (baixando a base
+    inteira da RFB). So processa os CNPJs passados pelo chamador (normalmente: os que
+    ficaram 'pendente' no ultimo build_operations() e ainda nao estao em cnpj_cnae).
+    Falha por CNPJ (nao encontrado, erro de rede apos retries) so pula esse CNPJ e
+    segue pros outros -- nunca derruba o refresh inteiro."""
+    if not cnpjs:
+        return 0
+    agora = datetime.now(timezone.utc).isoformat()
+    gravados = 0
+    for cnpj in sorted(cnpjs):
+        dados = None
+        for tentativa in range(3):
+            try:
+                dados = _consultar_brasilapi(cnpj)
+                break
+            except requests.exceptions.RequestException as e:
+                print(f"  BrasilAPI: erro ao consultar {cnpj} (tentativa {tentativa + 1}/3): {e}")
+                time.sleep(2 * (tentativa + 1))
+        if not dados:
+            continue
+
+        cnae_fiscal = dados.get("cnae_fiscal")
+        cnae_codigo = str(cnae_fiscal).zfill(7) if cnae_fiscal else None
+        divisao = int(cnae_codigo[:2]) if cnae_codigo and cnae_codigo[:2].isdigit() else None
+        setor_bndes, subsetor_bndes = divisao_map.get(divisao, (None, None))
+        codigo_porte = dados.get("codigo_porte")
+        # PORTE_EMPRESA_RFB e chaveado pelo mesmo codigo (00/01/03/05) que a RFB usa
+        # tanto no arquivo bulk quanto na BrasilAPI (que so espelha os dados da RFB) --
+        # reaproveita a mesma tabela pra manter o rotulo identico ao do job mensal.
+        porte = PORTE_EMPRESA_RFB.get(str(codigo_porte).zfill(2)) if codigo_porte is not None else None
+
+        conn.execute(
+            """
+            INSERT INTO cnpj_cnae (
+                cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao,
+                setor_bndes_mapeado, subsetor_bndes_mapeado,
+                razao_social_oficial, natureza_juridica, porte_empresa, capital_social,
+                atualizado_em
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cnpj) DO UPDATE SET
+                razao_social=excluded.razao_social, cnae_codigo=excluded.cnae_codigo,
+                cnae_descricao=excluded.cnae_descricao, cnae_divisao=excluded.cnae_divisao,
+                setor_bndes_mapeado=excluded.setor_bndes_mapeado,
+                subsetor_bndes_mapeado=excluded.subsetor_bndes_mapeado,
+                razao_social_oficial=excluded.razao_social_oficial,
+                natureza_juridica=excluded.natureza_juridica,
+                porte_empresa=excluded.porte_empresa, capital_social=excluded.capital_social,
+                atualizado_em=excluded.atualizado_em
+            """,
+            (
+                cnpj, dados.get("nome_fantasia") or dados.get("razao_social"),
+                cnae_codigo, dados.get("cnae_fiscal_descricao"),
+                str(divisao) if divisao is not None else None,
+                setor_bndes, subsetor_bndes,
+                dados.get("razao_social"), dados.get("natureza_juridica"), porte,
+                dados.get("capital_social"), agora,
+            ),
+        )
+        gravados += 1
+        time.sleep(0.6)  # nao estourar o rate limit informal da API gratuita
+
+    conn.commit()
+    print(f"BrasilAPI: {gravados}/{len(cnpjs)} CNPJs pendentes resolvidos nesta rodada.")
+    return gravados
 
 
 def enrich_empresas(month: str = None, keep_downloads: bool = False) -> int:

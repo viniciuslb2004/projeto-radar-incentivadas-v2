@@ -11,6 +11,7 @@ quando o arquivo nao existe) e de uma variavel de ambiente real configurada na
 plataforma de deploy (ex: Vercel) em producao.
 """
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -591,7 +592,103 @@ MIGRACOES_COLUNAS = [
     ("cnpj_cnae", "natureza_juridica", "TEXT"),
     ("cnpj_cnae", "porte_empresa", "TEXT"),
     ("cnpj_cnae", "capital_social", "REAL"),
+    # Identificacao da empresa de volta em `operations` (antes so aparecia no detalhe
+    # de uma operacao, nunca virava dado filtravel/buscavel -- ver unify.py::
+    # _load_cnae_lookup/_build_*_ops). porte_cliente ja existia desde a criacao da
+    # tabela (so preenchido pra BNDES ate aqui); razao_social_oficial e coluna nova.
+    #
+    # natureza_cliente: BUG REAL encontrado rodando esta migracao ao vivo -- a coluna
+    # ja estava no texto do CREATE TABLE (SCHEMA, mais acima neste arquivo) ha tempo,
+    # mas nunca tinha sido adicionada aqui em MIGRACOES_COLUNAS -- como CREATE TABLE IF
+    # NOT EXISTS e no-op numa tabela ja existente, a coluna simplesmente nunca existiu
+    # de verdade em producao (confirmado via information_schema.columns: False). O
+    # backfill de razao_social_oficial abaixo falhou na primeira tentativa por causa
+    # disso (UndefinedColumn), sem gravar nada (erro pega antes de qualquer escrita).
+    # PRECISA vir ANTES de razao_social_oficial nesta lista -- a ordem da lista e a
+    # ordem de execucao, e o backfill de razao_social_oficial referencia
+    # natureza_cliente.
+    ("operations", "natureza_cliente", "TEXT"),
+    ("operations", "razao_social_oficial", "TEXT"),
 ]
+
+
+# Mesmo padrao de scripts/backfill_search_taxonomia.py -- o Aiven free tier ja
+# derrubou conexao/transacao de verdade no meio de escritas longas (ReadOnlySqlTransaction
+# durante backup automatico, AdminShutdown durante manutencao/reinicio), por janelas que
+# ja chegaram a passar de 90s. Orcamento de retry BEM maior que erro de lock comum, e
+# com RECONEXAO de verdade (a conexao antiga nao volta a funcionar sozinha).
+_MAX_TENTATIVAS_CONEXAO_MIGRACAO = 10
+_ESPERA_CONEXAO_MIGRACAO_S = 30.0
+_ERROS_CONEXAO_MIGRACAO = (psycopg.errors.ReadOnlySqlTransaction, psycopg.OperationalError)
+
+
+def _executar_com_retry_conexao(conn, sql, params=None):
+    """Roda uma unica instrucao (DDL ou um UPDATE de backfill -- de uma tabela inteira
+    ou de UM LOTE, ver _executar_update_em_lotes) com retry-e-reconexao se a conexao
+    cair no meio, e COMMITA na hora (nao acumula com o resto da migracao numa
+    transacao so).
+
+    BUG REAL encontrado ao vivo rodando esta migracao em producao: um AdminShutdown
+    (reinicio/manutencao automatica do Aiven, ja documentado como recorrente) derrubou
+    a conexao DEPOIS do ALTER TABLE (natureza_cliente, razao_social_oficial) mas ANTES
+    do commit -- a reconexao seguinte comecava uma sessao nova, sem essas colunas (o
+    ALTER TABLE nunca tinha sido commitado), e so o UPDATE de backfill era reexecutado,
+    falhando com UndefinedColumn contra uma coluna que "deveria" existir mas nunca foi
+    persistida. Commitar cada instrucao (ALTER TABLE E o backfill) assim que ela
+    termina evita perder trabalho que uma reconexao nao vai refazer sozinha.
+
+    SEGUNDO BUG REAL encontrado ao vivo (mesma sessao, depois deste fix): mesmo um
+    UPDATE monolitico contra as ~58 mil linhas de `operations`, com commit imediato,
+    ainda caiu 2 vezes seguidas em AdminShutdown NO MEIO da propria transacao -- e
+    CADA tentativa fracassada deixava dezenas de milhares de tuplas mortas (bloat)
+    pra tras, ao ponto de contribuir pra um esgotamento real de disco do plano free
+    do Aiven (1GB), que so foi resolvido rodando VACUUM manualmente. Dai
+    _executar_update_em_lotes(): quebrar em pedacos pequenos (commit por lote) limita
+    o bloat de uma falha a um pedaco pequeno da tabela, e cada transacao curta tem
+    bem menos chance de atravessar uma das janelas de instabilidade do Aiven."""
+    tentativas = 0
+    while True:
+        try:
+            conn.execute(sql, params)
+            conn.commit()
+            return conn
+        except _ERROS_CONEXAO_MIGRACAO as e:
+            tentativas += 1
+            if tentativas >= _MAX_TENTATIVAS_CONEXAO_MIGRACAO:
+                raise
+            print(
+                f"  (migracao: retry conexao {tentativas}/{_MAX_TENTATIVAS_CONEXAO_MIGRACAO} "
+                f"apos {type(e).__name__}, aguardando {_ESPERA_CONEXAO_MIGRACAO_S:.0f}s...)"
+            )
+            time.sleep(_ESPERA_CONEXAO_MIGRACAO_S)
+            for tentativa_reconexao in range(1, _MAX_TENTATIVAS_CONEXAO_MIGRACAO + 1):
+                try:
+                    conn = get_connection()
+                    break
+                except psycopg.OperationalError:
+                    if tentativa_reconexao == _MAX_TENTATIVAS_CONEXAO_MIGRACAO:
+                        raise
+                    time.sleep(_ESPERA_CONEXAO_MIGRACAO_S)
+
+
+def _executar_update_em_lotes(conn, sql_base, tamanho_lote=5000):
+    """Roda um UPDATE contra `operations` em lotes por FAIXA DE ID (cada lote com
+    commit e retry-e-reconexao proprios, ver _executar_com_retry_conexao) -- se um
+    lote cair, so aquele precisa ser refeito, e o bloat de uma tentativa fracassada
+    fica contido a um pedaco pequeno da tabela em vez da tabela inteira (ver
+    docstring de _executar_com_retry_conexao pro incidente real que motivou isso).
+    `sql_base` precisa terminar em "AND o.id BETWEEN ? AND ?" -- o range de cada lote
+    e passado como parametro aqui, nunca formatado direto na string."""
+    min_id, max_id = conn.execute("SELECT MIN(id), MAX(id) FROM operations").fetchone()
+    if min_id is None:
+        return conn
+    inicio = min_id
+    while inicio <= max_id:
+        fim = min(inicio + tamanho_lote - 1, max_id)
+        conn = _executar_com_retry_conexao(conn, sql_base, (inicio, fim))
+        print(f"  (migracao: lote id {inicio}-{fim} de {max_id} concluido)")
+        inicio = fim + 1
+    return conn
 
 
 def _aplicar_migracoes(conn):
@@ -604,7 +701,7 @@ def _aplicar_migracoes(conn):
             ).fetchall()
             colunas_existentes[tabela] = {r[0] for r in rows}
         if colunas_existentes[tabela] and coluna not in colunas_existentes[tabela]:
-            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+            conn = _executar_com_retry_conexao(conn, f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
             colunas_existentes[tabela].add(coluna)
             if (tabela, coluna) == ("operations", "instrumento_financeiro"):
                 # Backfill unico: unify.py so preenche esta coluna para linhas
@@ -612,13 +709,39 @@ def _aplicar_migracoes(conn):
                 # reprocessa raw_id ja unificado) -- sem isso, todo o historico de
                 # BNDES ja carregado ficaria com instrumento_financeiro NULL para
                 # sempre. So roda quando a coluna acabou de ser criada (nao a cada
-                # init_db).
-                conn.execute(
+                # init_db). Em LOTES (ver _executar_update_em_lotes) -- mesmo risco de
+                # bloat/queda de conexao que o backfill de razao_social_oficial abaixo,
+                # tratado com o mesmo padrao por consistencia (esta migracao especifica
+                # ja rodou com sucesso nesta producao, mas o mesmo codigo roda em
+                # qualquer deploy novo/banco recriado do zero).
+                conn = _executar_update_em_lotes(
+                    conn,
                     "UPDATE operations SET instrumento_financeiro = ("
                     "  SELECT b.instrumento_financeiro FROM bndes_raw b WHERE b.id = operations.raw_id"
-                    ") WHERE raw_table = 'bndes_raw'"
+                    ") WHERE raw_table = 'bndes_raw' AND id BETWEEN ? AND ?",
+                )
+            if (tabela, coluna) == ("operations", "razao_social_oficial"):
+                # Backfill unico: da mesma forma que instrumento_financeiro acima, so
+                # cobre o historico ja carregado ate aqui -- daqui pra frente,
+                # unify.py::_build_*_ops ja preenche esses campos direto no insert.
+                # COALESCE em porte_cliente: nunca sobrescreve o porte NATIVO do BNDES
+                # (mais confiavel que a classificacao da Receita Federal), so preenche
+                # onde esta NULL (hoje: 100% das operacoes da FINEP). Em LOTES (ver
+                # _executar_update_em_lotes) -- um UPDATE monolitico contra as ~58 mil
+                # linhas ja derrubou a conexao (AdminShutdown) 2 vezes seguidas em
+                # producao, cada vez deixando dezenas de milhares de tuplas mortas.
+                conn = _executar_update_em_lotes(
+                    conn,
+                    "UPDATE operations o SET "
+                    "  porte_cliente = COALESCE(o.porte_cliente, c.porte_empresa), "
+                    "  natureza_cliente = COALESCE(o.natureza_cliente, c.natureza_juridica), "
+                    "  razao_social_oficial = c.razao_social_oficial "
+                    "FROM cnpj_cnae c WHERE c.cnpj = o.cnpj AND ("
+                    "  o.porte_cliente IS NULL OR o.natureza_cliente IS NULL OR c.razao_social_oficial IS NOT NULL"
+                    ") AND o.id BETWEEN ? AND ?",
                 )
     conn.commit()
+    return conn
 
 
 def init_db():
@@ -630,12 +753,12 @@ def init_db():
         # adicionada DEPOIS do executescript, o CREATE INDEX quebra achando que a
         # coluna nao existe. Rodar migracoes antes garante que colunas novas ja
         # existem quando os indices forem criados.
-        _aplicar_migracoes(conn)
+        conn = _aplicar_migracoes(conn)
         conn.execute(SCHEMA)
         conn.commit()
         # roda de novo: cobre o caso de banco novo (tabelas acabaram de ser criadas
         # agora pelo execute acima, entao a chamada anterior foi um no-op).
-        _aplicar_migracoes(conn)
+        conn = _aplicar_migracoes(conn)
     finally:
         conn.close()
 

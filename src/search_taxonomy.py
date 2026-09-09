@@ -384,3 +384,29 @@ def termos_para_segmento(segmento: str) -> list:
         if chave in seg_norm:
             termos.extend(valores)
     return termos
+
+
+def segmentos_sem_sinonimo(top_n: int = 20) -> list:
+    """Segmentos (CNAE) SEM nenhum sinonimo curado em SINONIMOS_SEGMENTO, ordenados por
+    quantas operacoes eles representam -- pra saber ONDE curar sinonimo novo traria mais
+    impacto pra busca (cobertura hoje e curada, nao exaustiva, ver docstring do modulo).
+    So sinaliza, nunca inventa/adiciona termo sozinho -- decisao de produto e nunca
+    inventar valor/sinonimo nao verificado, ver CLAUDE.md."""
+    from db import get_connection
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT segmento, COUNT(*) FROM operations "
+            "WHERE segmento IS NOT NULL AND segmento <> '' "
+            "GROUP BY segmento ORDER BY COUNT(*) DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    sem_sinonimo = []
+    for segmento, n_operacoes in rows:
+        seg_norm = normalizar(segmento)
+        if not any(chave in seg_norm for chave in SINONIMOS_SEGMENTO):
+            sem_sinonimo.append({"segmento": segmento, "n_operacoes": n_operacoes})
+    return sem_sinonimo[:top_n]
