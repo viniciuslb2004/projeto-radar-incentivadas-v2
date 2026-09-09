@@ -107,7 +107,7 @@ def _get_pool():
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
         _POOL = ConnectionPool(
-            database_url, min_size=0, max_size=3, open=True,
+            database_url, min_size=0, max_size=2, open=True,
             check=ConnectionPool.check_connection,
         )
     return _POOL
