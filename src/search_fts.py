@@ -119,7 +119,7 @@ def _rows_para_resultados(rows) -> list:
 
 def buscar_texto(
     query: str, limite: int = 200, agencia: str = None, valor_minimo: float = None,
-    regiao: str = None, produto: str = None,
+    regiao: str = None, produto: str = None, porte: str = None,
 ) -> dict:
     """Busca determinística: normalizacao de acento/caixa (unaccent/lower, via SQL),
     correspondencia exata/prefixo e full-text em portugues primeiro (tiers 1-4, todas
@@ -129,7 +129,7 @@ def buscar_texto(
     resultados. Ordenado por prioridade e depois por relevancia dentro de cada
     prioridade.
 
-    agencia/valor_minimo/regiao/produto sao FILTROS ESTRUTURADOS explicitos (vindos
+    agencia/valor_minimo/regiao/produto/porte sao FILTROS ESTRUTURADOS explicitos (vindos
     de selects/input na UI, ver webapp/main.py e busca.js) -- mesmo padrao ja usado
     pra UF dentro da propria query de texto livre (AND, nunca dentro do ranking de
     texto), so que aqui vem prontos do chamador em vez de extraidos da query."""
@@ -194,6 +194,10 @@ def buscar_texto(
         filtros_extra.append("produto = ?")
         params_extra_principal.append(produto)
         params_extra_trigrama.append(produto)
+    if porte:
+        filtros_extra.append("porte_cliente = ?")
+        params_extra_principal.append(porte)
+        params_extra_trigrama.append(porte)
     filtro_sql = ("AND " + " AND ".join(filtros_extra)) if filtros_extra else ""
 
     # regexp_replace(unaccent(?), ...) -- ver _normaliza_ortografia_sql(): unifica
@@ -225,12 +229,24 @@ def buscar_texto(
                         WHEN search_vector @@ websearch_to_tsquery('portuguese', {_norm("unaccent(?)")}) THEN 5
                         ELSE NULL
                     END AS prioridade,
-                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', {_norm("unaccent(?)")})) AS rank_fts
+                    ts_rank_cd(search_vector, websearch_to_tsquery('portuguese', {_norm("unaccent(?)")})) AS rank_fts,
+                    -- Cobertura (tier 5 apenas, ver ORDER BY): quantas PALAVRAS DISTINTAS
+                    -- da query aparecem no documento, uma a uma -- corrige um bug real e
+                    -- documentado (ver CLAUDE.md): "cabos de fibra otica" rankeava uma
+                    -- OTICA (loja de oculos, bate so 1 palavra num campo de peso alto,
+                    -- nome/segmento) ACIMA da empresa real de fibra optica (bate 3 das 4
+                    -- palavras num campo de peso mais baixo, descricao) -- ts_rank_cd pesa
+                    -- mais o CAMPO onde bateu do que quantas palavras da query realmente
+                    -- batem. Cobertura alta desempata a favor de quem cobre mais a query,
+                    -- nao so quem bate em um campo "caro".
+                    (SELECT COUNT(*) FROM unnest(?::text[]) t(termo)
+                     WHERE search_vector @@ websearch_to_tsquery('portuguese', {_norm("unaccent(t.termo)")})
+                    ) AS cobertura
                 FROM operations
                 WHERE 1=1 {filtro_sql}
             ) sub
             WHERE prioridade IS NOT NULL
-            ORDER BY prioridade ASC, rank_fts DESC
+            ORDER BY prioridade ASC, (CASE WHEN prioridade = 5 THEN cobertura END) DESC NULLS LAST, rank_fts DESC
             LIMIT ?
         """
         params_principal = [
@@ -241,6 +257,7 @@ def buscar_texto(
             query_fts_frase,  # tier 4 frase (WHEN)
             query_fts,  # tier 5 fts OR (WHEN)
             query_fts,  # rank_fts (usa a query OR pra ordenar dentro de cada tier)
+            palavras,  # cobertura: uma palavra por vez (tier 5)
         ]
         params_principal.extend(params_extra_principal)
         params_principal.append(limite)
