@@ -6,7 +6,7 @@ não-óbvias que já foram tomadas — sem precisar reconstruir esse contexto do
 por commit. `README.md`/`DEPLOY.md`/`RESUME.md` também existem mas ficam desatualizados rápido
 (são notas point-in-time); este arquivo é o que deve ser mantido mais preciso e atual.
 
-**Data da última revisão a fundo deste arquivo: 2026-09-04.**
+**Data da última revisão a fundo deste arquivo: 2026-09-08.**
 
 ## O que é a plataforma
 
@@ -27,9 +27,27 @@ Postgres via `DATABASE_URL`.
 - **Backend**: FastAPI (`webapp/main.py`), rotas `/api/*`.
 - **Frontend**: SPA vanilla JS sem framework/bundler, um único `webapp/static/index.html` com
   5 `<section class="view">` (uma por aba), troca de aba 100% client-side.
-- **Banco**: Postgres via Supabase, acessado com `psycopg` (v3). Uma única variável de ambiente
-  `DATABASE_URL` (pooler da Supabase) é usada tanto pelo backend quanto pelos scripts de
-  pipeline (GitHub Actions).
+- **Banco**: Postgres no **Aiven** (migrado do Supabase em 2026-09-08 — Supabase bateu no
+  limite de 500MB do plano gratuito; Aiven dá 1GB grátis, Postgres de verdade, real de
+  verdade — confirmado suporte a `unaccent`/`pg_trgm`/`setweight`/`ts_rank_cd`/
+  `websearch_to_tsquery`, as funções exatas que este projeto usa pra ranking de busca.
+  CockroachDB foi considerado por ter 10GB grátis, mas DESCARTADO: não suporta
+  `setweight`/`ts_rank_cd`/`websearch_to_tsquery`, exigiria reescrever o motor de busca
+  inteiro). Acessado com `psycopg` (v3). Uma única variável de ambiente `DATABASE_URL` é
+  usada tanto pelo backend quanto pelos scripts de pipeline (GitHub Actions) — ver
+  `scripts/migrate_supabase_to_aiven.py` pra como a migração foi feita (COPY tabela por
+  tabela, contagens conferidas, tudo bateu exato).
+  **Atenção real sobre o Aiven free tier**: o serviço mostrou, nas primeiras horas depois
+  de criado, janelas recorrentes de indisponibilidade — ora `ReadOnlySqlTransaction`
+  (parece um backup/manutenção automática que bloqueia só escrita), ora `AdminShutdown`
+  (derruba a conexão de vez, parece reinício automático). Confirmado ao vivo: uma janela
+  dessas pode durar mais de 90 segundos. Qualquer script de escrita longa contra este
+  banco precisa de retry-com-reconexão e um orçamento de espera de VÁRIOS MINUTOS, não
+  segundos — ver `scripts/backfill_search_taxonomia.py` (`MAX_TENTATIVAS_CONEXAO=10`,
+  `ESPERA_CONEXAO_S=30`, contador de tentativa SEPARADO do de erro de lock) como padrão
+  de referência. A webapp em si já está protegida disso via o pool de conexões (ver
+  "Coisas a saber antes de mexer" abaixo) — o risco descrito aqui é só pra scripts novos
+  que abrem uma conexão e a mantêm por muito tempo.
 - **Deploy**: Vercel. `vercel.json` define `outputDirectory: webapp/static` (front servido
   direto pela CDN) + rewrite de `/api/*` para `api/index.py` (function serverless Python que só
   faz `from webapp.main import app`). Ver `DEPLOY.md` para o passo a passo já feito.
@@ -239,6 +257,22 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   indicação nenhuma na UI de que o período exibido não era o filtro de verdade. Corrigido: o
   teto de 365 dias só vale quando NENHUM filtro é passado (padrão "toda a base"); com filtro
   explícito, o período anterior tem sempre o MESMO TAMANHO EXATO do selecionado.
+- **Variante ortográfica "óptica"/"ótica" na busca** (`src/search_fts.py`,
+  `_normaliza_ortografia_sql()`; mesma normalização espelhada em
+  `unify.py::_atualizar_search_vector()`): as duas grafias (antiga, com P — "fibra
+  óptica" — e atual, sem P — "fibra ótica") são o MESMO conceito na fala real, mas o
+  stemmer do Postgres as trata como palavras diferentes. Buscar "cabos de fibra otica"
+  rankeava uma ÓTICA (loja de óculos, match incidental do nome) ACIMA de uma empresa
+  real de fibra óptica, porque a descrição dela usava a grafia com P. Corrigido com
+  `regexp_replace(..., 'optic', 'otic', 'gi')` aplicado nos DOIS lados (query e
+  indexação) depois de `unaccent()`. Backfill já rodado contra toda a base (ver
+  `scripts/backfill_search_taxonomia.py`).
+- **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
+  larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
+  segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
+  `flex-wrap:nowrap` e brand/pill ganham `flex-shrink:0` — quem absorve a falta de
+  espaço é `.tabs` (já rola horizontal). Abaixo de 900px, mantido o empilhamento
+  original (mobile/tablet já funcionava bem assim).
 
 ## Coisas a saber antes de mexer
 
@@ -247,28 +281,35 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   — nunca escreva `%s` direto nas queries deste projeto, sempre `?`. Isso também significa que
   um `%` literal dentro de uma string SQL (ex: `LIKE '%%texto%%'`) precisa ser escapado como
   `%%`, senão quebra o parser de placeholder do psycopg.
-- **Conexões ao Postgres não são pooled no código** (cada chamada de rota abre uma
-  `psycopg.connect()` nova e fecha no fim) — isso já foi observado esgotando o limite de 15
-  conexões do pooler em modo *session* da Supabase (`max clients reached in session mode`),
-  causando 500 intermitentes reais em produção. **Corrigido em 2026-09-04**: a webapp agora usa
-  `get_connection(pooled=True)` (`webapp/main.py`, todos os ~26 call sites), que aponta pro
-  pooler da Supabase em modo **TRANSACTION** (porta 6543, variável `DATABASE_URL_POOLER`) em vez
-  de modo session (porta 5432, `DATABASE_URL`) — com `prepare_threshold=None` (obrigatório sob
-  modo transaction, senão dá erro intermitente de "prepared statement does not exist", já que
-  cada transação pode cair numa conexão física diferente por trás do pooler). Os scripts de
-  pipeline (`refresh.py`, `enrich_cnae.py` etc., chamados só via GitHub Actions) continuam
-  chamando `get_connection()` sem argumento (`DATABASE_URL`, modo session/direto) — sessões
-  longas com poucas conexões são o caso de uso OPOSTO ao que o modo transaction resolve.
-  Testado (script isolado + burst HTTP real): 18 conexões simultâneas (nível real de uma única
-  carga de página) OK em várias rodadas repetidas, o que já quebrava no modo session. Uma rajada
-  sintética muito mais extrema (30 simultâneas) ainda pode ocasionalmente dar
-  `ECHECKOUTRETRIES` — melhora substancial, não elimina 100% um pico extremo.
-  **Pendência que precisa de ação humana** (fora do alcance de qualquer IA sem acesso ao
-  dashboard): confirmar que a variável de ambiente `DATABASE_URL_POOLER` está configurada no
-  projeto da Vercel (Settings → Environment Variables) — mesmo valor de `DATABASE_URL` só
-  trocando a porta 5432→6543 (mesmo host/usuário/senha). Sem ela lá, `get_connection(pooled=True)`
-  cai de volta em `DATABASE_URL` automaticamente (nunca quebra por faltar, só deixa de
-  aproveitar a melhoria) — ver `src/db.py::get_connection()`.
+- **Pool de conexões de verdade** (`src/db.py`, `get_connection(pooled=True)`) — a webapp
+  (`webapp/main.py`, todos os ~26 call sites) usa um `psycopg_pool.ConnectionPool` real
+  (`min_size=1, max_size=8`), não mais uma conexão nova por requisição. Histórico: primeiro
+  corrigido (2026-09-04) esgotando o limite de 15 conexões do pooler em modo *session* da
+  Supabase; depois de migrar pro Aiven (2026-09-08, sem pooler gerenciado no plano
+  gratuito, só um teto bruto de 20 conexões), a solução virou um pool client-side de
+  verdade em vez de apontar pra um endpoint de pooler gerenciado.
+  `_PooledConnection`: wrapper fino que só troca o significado de `.close()` (devolve pro
+  pool via `putconn()` em vez de fechar de verdade) — evita reescrever os ~26 call sites
+  que já fazem `conn = get_connection(...); try: ...; finally: conn.close()`.
+  **Bug real já corrigido**: `ConnectionPool` NÃO valida a conexão no `getconn()` por
+  padrão — uma conexão morta por ação do servidor (confirmado: `AdminShutdown` do Aiven
+  numa manutenção automática) ficava PRESA no pool, devolvida pra toda requisição
+  seguinte, derrubando a webapp inteira (500 em toda rota que toca o banco) até reiniciar
+  o processo na mão. Corrigido com `check=ConnectionPool.check_connection` na criação do
+  pool — todo checkout roda uma verificação antes de devolver a conexão, descarta e abre
+  uma nova na hora se estiver morta. Testado ao vivo (matando as conexões do pool via
+  `pg_terminate_backend()`, simulando o `AdminShutdown` real): 0 erros com o fix; sem ele,
+  a mesma simulação derrubava a webapp inteira.
+  Testado sob carga: 120 requisições HTTP simultâneas contra o Aiven (bem acima do caso
+  real de ~15-20 por carga de página) — 0 erros.
+  `DATABASE_URL_POOLER` (se definida) tem prioridade sobre `DATABASE_URL` só pro pool —
+  hoje **opcional/legado**: só relevante se um provedor futuro oferecer um endpoint de
+  pooler GERENCIADO separado (ex: Supabase em modo transaction); sem essa variável
+  definida (caso do Aiven agora), o pool conecta direto na `DATABASE_URL` normal — ele
+  mesmo já faz o papel de pooler do lado do cliente.
+  Scripts de pipeline (`refresh.py`, `enrich_cnae.py` etc., só via GitHub Actions)
+  continuam chamando `get_connection()` sem argumento (conexão direta, sem pool) — sessões
+  longas com poucas conexões são o caso de uso oposto ao que o pool resolve.
 - **Sessões/agentes de IA concorrentes podem compartilhar este mesmo working directory** (já
   aconteceu nesta sessão) — antes de `git add <arquivo> && git commit`, prefira conferir
   `git diff <arquivo>` primeiro se houver qualquer suspeita de edição concorrente, pra não
