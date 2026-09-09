@@ -18,6 +18,31 @@ function currentLinhasFilters() {
   };
 }
 
+// ============ Filtros na URL (ver secao "Filtros na URL" em common.js) ============
+// linhas-ordenar (ordenacao) e a pagina atual da paginacao ficam DE FORA de
+// proposito -- mesma logica ja aplicada a granularidade do grafico de serie
+// temporal em common.js e a ordenacao de Editais: mudam so como/em que ordem os
+// mesmos dados sao exibidos, nao qual fatia deles aparece.
+function _sincronizarFiltrosLinhasNaURL() {
+  sincronizarFiltrosNaURL(currentLinhasFilters());
+}
+
+function _aplicarFiltrosLinhasDaURL() {
+  const params = paramsDaURL();
+  const CAMPO_PARA_ID = {
+    instituicao: "ln-f-instituicao",
+    setor: "ln-f-setor",
+    porte: "ln-f-porte",
+    regiao: "ln-f-regiao",
+    status: "ln-f-status",
+    fluxo: "ln-f-fluxo",
+  };
+  Object.entries(CAMPO_PARA_ID).forEach(([campo, id]) => {
+    if (params.has(campo)) document.getElementById(id).value = params.get(campo);
+  });
+  if (params.has("q")) document.getElementById("linhas-busca-input").value = params.get("q");
+}
+
 async function initLinhasFiltros() {
   if (linhasFiltrosInicializados) return;
   const filtros = await fetchJSON("/api/linhas/filtros");
@@ -199,17 +224,39 @@ async function openLinhaDetalhe(id) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(
-    "#ln-f-instituicao, #ln-f-setor, #ln-f-porte, #ln-f-regiao, #ln-f-status, #ln-f-fluxo, #linhas-ordenar"
-  ).forEach((el) => el.addEventListener("change", () => loadLinhas(0)));
-  document.getElementById("linhas-busca-btn").addEventListener("click", () => loadLinhas(0));
-  document.getElementById("linhas-busca-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") loadLinhas(0);
+    "#ln-f-instituicao, #ln-f-setor, #ln-f-porte, #ln-f-regiao, #ln-f-status, #ln-f-fluxo"
+  ).forEach((el) => el.addEventListener("change", () => {
+    _sincronizarFiltrosLinhasNaURL();
+    loadLinhas(0);
+  }));
+  document.getElementById("linhas-ordenar").addEventListener("change", () => loadLinhas(0));
+  document.getElementById("linhas-busca-btn").addEventListener("click", () => {
+    _sincronizarFiltrosLinhasNaURL();
+    loadLinhas(0);
   });
+  document.getElementById("linhas-busca-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      _sincronizarFiltrosLinhasNaURL();
+      loadLinhas(0);
+    }
+  });
+  // Digitar sem apertar Enter/clicar tambem deve refletir na URL depois que o
+  // usuario para de digitar (debounce), sem forcar uma nova busca a cada tecla.
+  document.getElementById("linhas-busca-input").addEventListener(
+    "input",
+    debounce(_sincronizarFiltrosLinhasNaURL, 400)
+  );
 
   // Antes so carregava filtros/lista no CLICK da aba "Linhas Incentivadas" -- com as
   // rotas por caminho (/linhas-incentivadas), entrar direto pela URL ou dar F5 nunca
   // clica o botao da aba, entao a pagina ficava vazia pra sempre. Carrega igual as
   // outras abas (ver editais.js/tendencias.js): incondicional, ja no DOMContentLoaded.
   await initLinhasFiltros();
+
+  // Link compartilhado/F5: aplica os filtros da URL so depois das opcoes acima
+  // estarem populadas, e so quando a aba ativa na URL e de fato Linhas
+  // Incentivadas (ver _viewInicialDaURL).
+  if (_viewInicialDaURL() === "linhas") _aplicarFiltrosLinhasDaURL();
+
   loadLinhas(0);
 });

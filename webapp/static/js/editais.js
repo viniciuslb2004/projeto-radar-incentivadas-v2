@@ -78,6 +78,24 @@ function currentEditaisFilters() {
   };
 }
 
+// ============ Filtros na URL (ver secao "Filtros na URL" em common.js) ============
+// ed-ordenar (ordenacao da lista) fica DE FORA de proposito -- mesma logica ja
+// aplicada a granularidade do grafico de serie temporal em common.js: muda so
+// como os mesmos dados sao exibidos, nao qual fatia deles aparece.
+function _sincronizarFiltrosEditaisNaURL() {
+  sincronizarFiltrosNaURL(currentEditaisFilters());
+}
+
+function _aplicarFiltrosEditaisDaURL() {
+  const params = paramsDaURL();
+  if (params.has("situacao")) document.getElementById("ed-f-situacao").value = params.get("situacao");
+  if (params.has("aplicavel_empresa")) document.getElementById("ed-f-empresa").value = params.get("aplicavel_empresa");
+  if (params.has("tema")) document.getElementById("ed-f-tema").value = params.get("tema");
+  if (params.has("regiao")) document.getElementById("ed-f-regiao").value = params.get("regiao");
+  if (params.has("tipo_oportunidade")) document.getElementById("ed-f-tipo").value = params.get("tipo_oportunidade");
+  if (params.has("q")) document.getElementById("ed-f-texto").value = params.get("q");
+}
+
 async function loadEditaisFiltrosOpcoes() {
   const filtros = await fetchJSON("/api/editais/filtros");
   const fill = (id, values) => {
@@ -113,6 +131,7 @@ async function loadEditaisDashboard(filters) {
         const tema = temas[els[0].index].tema;
         if (tema === "Não classificado") return;
         document.getElementById("ed-f-tema").value = tema;
+        _sincronizarFiltrosEditaisNaURL();
         refreshEditais();
       },
     },
@@ -268,11 +287,27 @@ async function runEditaisEndgame(q) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadEditaisFiltrosOpcoes();
+
+  // Link compartilhado/F5: aplica os filtros da URL so depois das opcoes de
+  // tema/regiao/tipo estarem populadas acima, e so quando a aba ativa na URL e
+  // de fato Editais (ver _viewInicialDaURL).
+  if (_viewInicialDaURL() === "editais") _aplicarFiltrosEditaisDaURL();
+
   ["ed-f-situacao", "ed-f-empresa", "ed-f-tema", "ed-f-regiao", "ed-f-tipo"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", refreshEditais);
+    document.getElementById(id).addEventListener("change", () => {
+      _sincronizarFiltrosEditaisNaURL();
+      refreshEditais();
+    });
   });
+  document.getElementById("ed-f-texto").addEventListener(
+    "input",
+    debounce(_sincronizarFiltrosEditaisNaURL, 400)
+  );
   document.getElementById("ed-f-texto").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") refreshEditais();
+    if (e.key === "Enter") {
+      _sincronizarFiltrosEditaisNaURL();
+      refreshEditais();
+    }
   });
   document.getElementById("ed-ordenar").addEventListener("change", refreshEditais);
   document.getElementById("editais-exportar-btn").addEventListener("click", exportarEditaisCSV);

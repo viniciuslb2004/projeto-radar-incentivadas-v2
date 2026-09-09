@@ -193,6 +193,36 @@ function _filtrosBusca() {
   };
 }
 
+// ============ Filtros na URL (ver secao "Filtros na URL" em common.js) ============
+// valor_minimo entra na URL na MESMA UNIDADE exibida no campo (R$ milhoes) -- ao
+// contrario de _filtrosBusca() (que ja multiplica por 1e6 pra mandar pra API),
+// aqui guardamos o valor cru pra nao converter de novo na hora de ler de volta.
+function _sincronizarFiltrosBuscaNaURL(q) {
+  sincronizarFiltrosNaURL({
+    q: q || "",
+    agencia: document.getElementById("bu-f-agencia").value,
+    valor_minimo: document.getElementById("bu-f-valor-minimo").value,
+    regiao: document.getElementById("bu-f-regiao").value,
+    produto: document.getElementById("bu-f-produto").value,
+  });
+}
+
+function _aplicarFiltrosBuscaDaURL() {
+  const params = paramsDaURL();
+  if (params.has("agencia")) document.getElementById("bu-f-agencia").value = params.get("agencia");
+  if (params.has("valor_minimo")) document.getElementById("bu-f-valor-minimo").value = params.get("valor_minimo");
+  if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
+  if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
+
+  const q = (params.get("q") || "").trim();
+  if (q) {
+    document.getElementById("busca-input").value = q;
+    // Mesma regra ja usada pro botao/Enter: so dispara a busca de verdade com
+    // >=3 caracteres -- filtro sem query nao faz nada sozinho (ver runBusca).
+    if (q.length >= 3) runBusca(q);
+  }
+}
+
 async function _popularFiltrosBusca() {
   try {
     const filtros = await fetchJSON("/api/filtros");
@@ -210,6 +240,7 @@ async function _popularFiltrosBusca() {
 
 async function runBusca(q) {
   registrarHistoricoBusca(q);
+  _sincronizarFiltrosBuscaNaURL(q);
   const container = document.getElementById("busca-resultado");
   container.innerHTML = '<p class="empty-state">Buscando operações parecidas...</p>';
 
@@ -272,7 +303,7 @@ async function runBusca(q) {
   renderResultados(data);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const input = document.getElementById("busca-input");
   document.getElementById("busca-btn").addEventListener("click", () => {
     if (input.value.trim().length >= 3) runBusca(input.value.trim());
@@ -280,14 +311,25 @@ document.addEventListener("DOMContentLoaded", () => {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && input.value.trim().length >= 3) runBusca(input.value.trim());
   });
+  // Digitar sem apertar Enter/clicar tambem deve refletir na URL depois que o
+  // usuario para de digitar (debounce), mesmo sem uma busca nova ser executada.
+  input.addEventListener("input", debounce(() => _sincronizarFiltrosBuscaNaURL(input.value.trim()), 400));
+
   renderHistoricoBusca();
-  _popularFiltrosBusca();
+  await _popularFiltrosBusca();
+
+  // Link compartilhado/F5: aplica os filtros (e dispara a busca, se tinha query)
+  // ANTES so depois de popular as opcoes dos selects (bu-f-agencia/bu-f-produto
+  // sao preenchidos dinamicamente por _popularFiltrosBusca acima) -- e so quando
+  // a aba ativa na URL e de fato a Busca (ver _viewInicialDaURL).
+  if (_viewInicialDaURL() === "busca") _aplicarFiltrosBuscaDaURL();
 
   // Mudar um filtro re-roda a busca atual (se ja tiver uma) -- filtro sem busca
   // nenhuma feita ainda nao faz nada sozinho, precisa de uma query pra filtrar.
   ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       if (input.value.trim().length >= 3) runBusca(input.value.trim());
+      else _sincronizarFiltrosBuscaNaURL(input.value.trim());
     });
   });
 });

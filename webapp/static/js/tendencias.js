@@ -244,5 +244,9 @@ document.addEventListener("DOMContentLoaded", () => {
   onFiltersChange(refreshTendencias);
   document.getElementById("maiores-ordenar").addEventListener("change", () => loadMaioresOperacoes(currentFilters()));
   document.getElementById("maiores-exportar-btn").addEventListener("click", exportarMaioresOperacoesCSV);
-  setTimeout(() => refreshTendencias(currentFilters()), 300);
+  // Espera o filterbar compartilhado (agencia/setor/UF/data -- ver common.js)
+  // estar de fato pronto, incluindo os valores vindos de um link com filtro na
+  // URL, antes do fetch inicial -- ver comentario de filtrosProntosPromise em
+  // common.js sobre por que isso NAO pode ser so um setTimeout com prazo fixo.
+  filtrosProntosPromise.then(() => refreshTendencias(currentFilters()));
 });

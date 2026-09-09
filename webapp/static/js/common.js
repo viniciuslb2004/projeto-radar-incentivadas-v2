@@ -219,10 +219,52 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
 
-// Roteamento por caminho: a URL reflete APENAS qual aba esta aberta (/consolidado,
-// /tendencias, /busca, /editais, /linhas-incentivadas), nunca estado de filtro/select
-// (ex: granularidade do grafico) -- isso fica so na pagina (estado de sessao, se perde
-// ao recarregar), pedido explicito do usuario pra manter a barra de endereco limpa.
+// ============ Filtros na URL (query string) ============
+// Cada aba reflete os PROPRIOS filtros na query string (nunca o path, que ja
+// codifica qual aba esta aberta -- ver secao de roteamento logo abaixo), pra dar
+// pra compartilhar um link que abre a mesma aba com os mesmos filtros aplicados.
+// Usa SEMPRE replaceState (nunca pushState) pra nao poluir o historico de
+// voltar/avancar do navegador a cada filtro alterado -- so a troca de ABA deve
+// criar uma entrada de historico nova (ver _ativarView). Decisao deliberada e
+// CONSERVADORA sobre o que entra na URL: so filtros que restringem QUAL FATIA dos
+// dados aparece (setor, UF, agencia, data, texto de busca etc.). Qualquer coisa
+// que so muda COMO os mesmos dados sao exibidos (granularidade do grafico de
+// serie temporal -- ver #serie-granularidade, ja excluida explicitamente antes
+// por pedido do usuario -- e tambem os selects de ORDENACAO em Editais/Linhas/
+// Busca/modal de operacoes, e a pagina atual da paginacao de Linhas Incentivadas)
+// fica de fora, tratada como estado local da pagina (mesmo padrao ja usado pra
+// granularidade). Ambiguidade real: dava pra argumentar que ordenacao/pagina
+// tambem deveriam entrar agora que a URL passou a carregar filtro -- decisao
+// tomada foi NAO incluir (nenhum desses foi pedido explicitamente pra entrar na
+// URL), pra manter escopo minimo e consistente com a exclusao ja definida da
+// granularidade.
+function paramsDaURL() {
+  return new URLSearchParams(window.location.search);
+}
+
+function sincronizarFiltrosNaURL(params) {
+  const query = qs(params);
+  const destino = window.location.pathname + (query ? "?" + query : "");
+  if (destino !== window.location.pathname + window.location.search) {
+    window.history.replaceState(window.history.state, "", destino);
+  }
+}
+
+// Debounce generico -- usado pelos campos de texto livre (query da Busca, texto da
+// Editais, busca de Linhas Incentivadas) pra nao chamar sincronizarFiltrosNaURL a
+// cada tecla digitada. O VALOR final ainda fica refletido na URL assim que o
+// usuario para de digitar (`ms` depois da ultima tecla).
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// Roteamento por caminho: a URL reflete qual aba esta aberta (/consolidado,
+// /tendencias, /busca, /editais, /linhas-incentivadas) via PATH -- os filtros de
+// cada aba (ver secao acima) vao na query string do mesmo caminho.
 const _SLUG_PARA_VIEW = {
   "": "consolidado",
   "consolidado": "consolidado",
@@ -250,9 +292,19 @@ function _ativarView(view, empilharHistorico) {
   document.getElementById("filterbar").style.display =
     view === "busca" || view === "editais" || view === "linhas" ? "none" : "flex";
   const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
-  if (window.location.pathname !== caminho) {
-    if (empilharHistorico) window.history.pushState({ view }, "", caminho);
-    else window.history.replaceState({ view }, "", caminho);
+  const mudouDeAba = window.location.pathname !== caminho;
+  if (empilharHistorico) {
+    // Clique numa aba: so cria uma entrada de historico nova se REALMENTE mudou
+    // de aba (clicar na aba ja ativa nao deve limpar filtro nenhum) -- e, ao
+    // mudar de verdade, LIMPA a query string de propósito: filtros sao por aba
+    // (ver "Filtros na URL" acima), entao abrir uma aba do zero via clique nunca
+    // deve herdar filtros que estavam na query string de outra aba.
+    if (mudouDeAba) window.history.pushState({ view }, "", caminho);
+  } else if (mudouDeAba) {
+    // Estado inicial (carregamento direto/F5) ou popstate (voltar/avancar):
+    // preserva a query string como estava -- pode ser um link compartilhado com
+    // filtros, ou uma entrada de historico anterior que ja tinha os seus.
+    window.history.replaceState({ view }, "", caminho + window.location.search);
   }
 }
 
@@ -312,12 +364,33 @@ function _esconderLoadingOverlay() {
   if (overlay) overlay.classList.add("hidden");
 }
 
+// Tendencias.js precisa dos valores do filterbar compartilhado (agencia/setor/
+// UF/data, incluindo os que vieram de um link com filtro na URL -- ver
+// initFiltersAndTabs abaixo) ja aplicados ANTES do seu proprio fetch inicial,
+// mas quem chama initFiltersAndTabs() e so consolidado.js. Em vez de um
+// setTimeout arbitrario torcendo pra initFiltersAndTabs() (que depende de
+// /api/status + /api/filtros por rede) terminar a tempo -- flaky de verdade
+// contra o Aiven free tier (ver CLAUDE.md) e que ja mostrou na pratica buscar
+// com os filtros ainda default/vazios quando a rede demora mais que o palpite
+// -- tendencias.js AGUARDA esta promise, resolvida no finally de
+// initFiltersAndTabs() (sucesso ou erro, pra nunca travar esperando pra sempre).
+let _resolverFiltrosProntos;
+const filtrosProntosPromise = new Promise((resolve) => { _resolverFiltrosProntos = resolve; });
+
 async function initFiltersAndTabs() {
   // Troca de aba e 100% client-side (so classes CSS) -- liga ISSO primeiro e
   // incondicionalmente, antes de qualquer fetch, pra a navegacao nunca depender
   // do backend responder.
   _ligarBotoesDeAba();
 
+  try {
+    await _initFiltersAndTabsImpl();
+  } finally {
+    _resolverFiltrosProntos();
+  }
+}
+
+async function _initFiltersAndTabsImpl() {
   const pill = document.getElementById("status-pill");
   let status;
   try {
@@ -391,15 +464,50 @@ async function initFiltersAndTabs() {
     anoFim.value = anos[anos.length - 1];
   }
 
+  // Link compartilhado / F5: se a URL ja tem filtros (so relevante quando a aba
+  // ativa e Consolidado ou Tendencias, que sao as duas que usam este filterbar
+  // compartilhado -- ver _viewInicialDaURL), sobrescreve os valores padrao ACIMA
+  // ANTES do primeiro fetch de cada aba (consolidado.js/tendencias.js so leem os
+  // valores via currentFilters() depois que initFiltersAndTabs() retorna).
+  const viewAtiva = _viewInicialDaURL();
+  if (viewAtiva === "consolidado" || viewAtiva === "tendencias") {
+    const paramsIniciais = paramsDaURL();
+    if (paramsIniciais.has("agencia")) document.getElementById("f-agencia").value = paramsIniciais.get("agencia");
+    if (paramsIniciais.has("setor")) document.getElementById("f-setor").value = paramsIniciais.get("setor");
+    if (paramsIniciais.has("uf")) document.getElementById("f-uf").value = paramsIniciais.get("uf");
+    if (paramsIniciais.has("mes_ini")) mesIni.value = paramsIniciais.get("mes_ini");
+    if (paramsIniciais.has("ano_ini")) anoIni.value = paramsIniciais.get("ano_ini");
+    if (paramsIniciais.has("mes_fim")) mesFim.value = paramsIniciais.get("mes_fim");
+    if (paramsIniciais.has("ano_fim")) anoFim.value = paramsIniciais.get("ano_fim");
+  }
+
   const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
   ["f-agencia", "f-setor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       if (CAMPOS_DATA.includes(id)) validarIntervaloDatas(id);
       notifyFiltersChange();
+      _sincronizarFiltrosCompartilhadosNaURL();
     });
   });
 
   _esconderLoadingOverlay();
+}
+
+// Filtros compartilhados por Consolidado e Tendencias (mesmo filterbar, ver
+// #filterbar em index.html) -- granularidade do grafico de serie temporal
+// (#serie-granularidade, fica dentro da secao visual do Consolidado) fica DE
+// FORA de proposito, pedido explicito e anterior do usuario (ver "Filtros na
+// URL" acima).
+function _sincronizarFiltrosCompartilhadosNaURL() {
+  sincronizarFiltrosNaURL({
+    agencia: document.getElementById("f-agencia").value,
+    setor: document.getElementById("f-setor").value,
+    uf: document.getElementById("f-uf").value,
+    mes_ini: document.getElementById("f-mes-ini").value,
+    ano_ini: document.getElementById("f-ano-ini").value,
+    mes_fim: document.getElementById("f-mes-fim").value,
+    ano_fim: document.getElementById("f-ano-fim").value,
+  });
 }
 
 // ============ Modal de drill-down ============
