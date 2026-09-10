@@ -583,6 +583,28 @@ sessão dele na hora (`exigir_admin`/`verificar_acesso_principal` conferem `ativ
 requisição) — testado ao vivo: desativar o próprio usuário logado derruba a sessão
 imediatamente, sem esperar o cookie expirar.
 
+**BUG REAL encontrado e corrigido em 2026-09-10, ANTES de ir pra produção**: o cookie de
+sessão migrou de `path="/admin"` (versão inicial deste painel) pra `path="/"` (quando o
+site principal passou a compartilhar a sessão). Contas que já tinham logado no painel
+`/admin` ANTES dessa migração de path continuam com o cookie antigo (`path=/admin`)
+guardado no navegador; um login novo grava um SEGUNDO cookie de mesmo nome
+(`admin_session`) com `path="/"` — o navegador manda os DOIS num request que bate os dois
+paths (qualquer rota `/admin/*`), e o parser de cookie do Starlette (`cookie_parser` em
+`starlette/requests.py`) é só um `dict` preenchido em ORDEM DE ITERAÇÃO da string
+`Cookie:` recebida — **last-write-wins, sem nenhuma lógica de especificidade de path**
+(confirmado lendo o código-fonte e reproduzido ao vivo: mandar
+`Cookie: admin_session=<valido>; admin_session=<invalido>` num request cru derruba a
+sessão mesmo com o token válido presente, só porque veio primeiro na string). Como a
+ordem que o navegador decide mandar cookies duplicados não é algo que o backend controla,
+isso derrubava a sessão de forma imprevisível logo depois de um login bem-sucedido.
+**Corrigido** em `definir_cookie_sessao`/`limpar_cookie_sessao`
+(`webapp/admin/auth.py`): toda vez que uma sessão é criada OU encerrada, o cookie no path
+antigo (`/admin`) é explicitamente expirado (`Max-Age=0`) na MESMA resposta — depois do
+primeiro login/logout no esquema novo, o navegador nunca mais tem os dois ao mesmo tempo.
+**Lição pra qualquer migração futura de `path`/`domain` de cookie**: nunca só trocar o
+path do `set_cookie` — sempre expirar explicitamente o cookie no path antigo também,
+senão qualquer sessão já ativa antes da mudança fica com as duas versões coexistindo.
+
 **Gestão de usuários (CRUD)**: `POST /admin/api/usuarios` cria conta nova (hash gerado na
 hora via `gerar_hash_senha`, senha em texto puro nunca persistida/logada/devolvida);
 `POST /admin/api/usuarios/{id}/ativo` ativa/desativa (soft); `DELETE /admin/api/usuarios/{id}`

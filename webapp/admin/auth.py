@@ -120,6 +120,23 @@ def definir_cookie_sessao(response: Response, token: str) -> None:
     # path="/" (nao mais so "/admin"): a mesma sessao agora vale tanto pro painel de
     # admin quanto pro site principal (ver docstring do modulo) -- o cookie precisa
     # ser enviado em requisicoes pra ambos.
+    #
+    # BUG REAL encontrado ao vivo (2026-09-10, antes de ir pra producao): contas que
+    # ja tinham logado no painel /admin ANTES desta mudanca de path (versao antiga,
+    # path="/admin") continuam com aquele cookie guardado no navegador. Depois desta
+    # mudanca, um login novo grava um SEGUNDO cookie de mesmo nome com path="/" -- o
+    # navegador manda os DOIS num request pro site principal (`Cookie: admin_session=
+    # <antigo>; admin_session=<novo>`), e o parser de cookie do Starlette
+    # (`cookie_parser` em starlette/requests.py) e so um dict preenchido em ORDEM DE
+    # ITERACAO da string recebida -- last-write-wins, sem nenhuma logica de
+    # especificidade de path (diferente do que um navegador faria sozinho). Dependendo
+    # da ordem que o navegador decidiu mandar as duas, `request.cookies["admin_session"]`
+    # podia pegar o token ANTIGO/invalido e derrubar a sessao (401 imprevisivel logo
+    # depois de um login bem-sucedido). Corrigido limpando explicitamente o cookie no
+    # path antigo (`/admin`) toda vez que uma sessao nova e criada -- depois do
+    # primeiro login/logout no esquema novo, o navegador nunca mais tem os dois ao
+    # mesmo tempo.
+    response.delete_cookie(SESSION_COOKIE, path="/admin")
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -133,6 +150,9 @@ def definir_cookie_sessao(response: Response, token: str) -> None:
 
 def limpar_cookie_sessao(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
+    # Mesmo motivo do comentario em definir_cookie_sessao -- garante que um cookie
+    # remanescente do esquema antigo (path="/admin") tambem some no logout.
+    response.delete_cookie(SESSION_COOKIE, path="/admin")
 
 
 def exigir_admin(request: Request):
