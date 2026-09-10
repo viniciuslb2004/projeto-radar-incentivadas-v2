@@ -45,16 +45,44 @@
         <div class="admin-refresh-card">
           <h3>Operações (BNDES + FINEP)</h3>
           <div id="admin-refresh-operacoes" class="admin-refresh-body">Carregando...</div>
+          <button id="admin-refresh-operacoes-btn" class="admin-toggle-btn admin-refresh-acao">Atualizar agora</button>
+          <div id="admin-refresh-operacoes-msg" class="admin-refresh-msg"></div>
         </div>
         <div class="admin-refresh-card">
           <h3>Editais FINEP</h3>
           <div id="admin-refresh-editais" class="admin-refresh-body">Carregando...</div>
+          <button id="admin-refresh-editais-btn" class="admin-toggle-btn admin-refresh-acao">Atualizar agora</button>
+          <div id="admin-refresh-editais-msg" class="admin-refresh-msg"></div>
         </div>
       </div>
     </section>
 
     <section class="admin-secao">
-      <h2>Usuários do painel</h2>
+      <h2>Enriquecimento de CNPJs pendentes</h2>
+      <p class="admin-secao-desc">
+        Resolve setor/CNAE dos CNPJs ainda pendentes via BrasilAPI, em lotes pequenos
+        (evita estourar o tempo de uma requisição). Clique de novo para processar o
+        próximo lote.
+      </p>
+      <button id="admin-enriquecer-btn" class="admin-toggle-btn admin-refresh-acao">Processar próximo lote (20)</button>
+      <div id="admin-enriquecer-msg" class="admin-refresh-msg"></div>
+    </section>
+
+    <section class="admin-secao">
+      <div class="admin-secao-header">
+        <h2>Usuários do painel</h2>
+        <button id="admin-novo-usuario-btn" class="admin-btn-primario">+ Novo usuário</button>
+      </div>
+      <form id="admin-novo-usuario-form" class="admin-form-usuario hidden">
+        <input type="text" id="admin-novo-usuario-username" placeholder="Usuário" autocomplete="off">
+        <input type="password" id="admin-novo-usuario-senha" placeholder="Senha" autocomplete="new-password">
+        <select id="admin-novo-usuario-role">
+          <option value="usuario">Usuário (site principal)</option>
+          <option value="admin">Admin (painel + site)</option>
+        </select>
+        <button type="submit" class="admin-toggle-btn">Criar</button>
+        <span id="admin-novo-usuario-erro" class="admin-form-erro hidden"></span>
+      </form>
       <div class="admin-usuarios-toolbar">
         <input type="text" id="admin-busca-usuario" placeholder="Buscar por usuário...">
       </div>
@@ -62,13 +90,97 @@
         <thead>
           <tr>
             <th>Usuário</th>
+            <th>Papel</th>
             <th>Status</th>
             <th>Criado em</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="admin-usuarios-tbody">
-          <tr><td colspan="4">Carregando...</td></tr>
+          <tr><td colspan="5">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Saúde do banco</h2>
+      <p class="admin-secao-desc admin-aviso">
+        <strong>Atenção:</strong> estes números são um proxy calculado via SQL (tamanho lógico,
+        bloat, conexões abertas) — <strong>NÃO</strong> é o % de disco oficial da Aiven (que
+        conta WAL/backup e só aparece no console.aiven.io). Útil como sinal de alerta cedo,
+        não como espelho exato do painel deles.
+      </p>
+      <section class="admin-cards" id="admin-saude-cards"></section>
+      <table class="admin-tabela admin-tabela-compacta">
+        <thead>
+          <tr>
+            <th>Tabela</th>
+            <th>Linhas vivas</th>
+            <th>Linhas mortas</th>
+            <th>Último vacuum</th>
+            <th>Último autovacuum</th>
+          </tr>
+        </thead>
+        <tbody id="admin-saude-tbody">
+          <tr><td colspan="5">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Correções manuais</h2>
+      <p class="admin-secao-desc">
+        Corrige setor/subsetor/segmento de uma operação específica — a correção prevalece
+        sobre reenriquecimentos automáticos futuros (aplicada a cada refresh semanal).
+      </p>
+      <div class="admin-correcao-form">
+        <input type="text" id="admin-correcao-busca" placeholder="Buscar operação por ID ou cliente...">
+        <div id="admin-correcao-resultados" class="admin-correcao-resultados hidden"></div>
+        <div id="admin-correcao-selecionada" class="admin-correcao-selecionada hidden"></div>
+        <div class="admin-correcao-campos hidden" id="admin-correcao-campos-wrap">
+          <select id="admin-correcao-campo">
+            <option value="setor_bndes">Setor BNDES</option>
+            <option value="subsetor_bndes">Subsetor BNDES</option>
+            <option value="segmento">Segmento</option>
+          </select>
+          <input type="text" id="admin-correcao-valor" placeholder="Novo valor">
+          <button id="admin-correcao-salvar-btn" class="admin-toggle-btn">Salvar correção</button>
+        </div>
+        <span id="admin-correcao-erro" class="admin-form-erro hidden"></span>
+      </div>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Operação</th>
+            <th>Campo</th>
+            <th>De</th>
+            <th>Para</th>
+            <th>Usuário</th>
+            <th>Quando</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="admin-correcoes-tbody">
+          <tr><td colspan="8">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Log de acessos (login/logout)</h2>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Usuário</th>
+            <th>Origem</th>
+            <th>Evento</th>
+            <th>IP</th>
+            <th>Quando</th>
+          </tr>
+        </thead>
+        <tbody id="admin-acessos-tbody">
+          <tr><td colspan="5">Carregando...</td></tr>
         </tbody>
       </table>
     </section>

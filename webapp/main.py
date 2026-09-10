@@ -2,7 +2,6 @@
 import datetime
 import logging
 import os
-import secrets
 import sys
 from pathlib import Path
 
@@ -10,13 +9,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
 from db import get_connection
 from search_fts import PORTE_NORMALIZADO_SQL
 from webapp.detalhe import montar_detalhe_amigavel
+from webapp.admin.auth import (
+    SESSION_COOKIE,
+    autenticar_credenciais,
+    criar_sessao,
+    definir_cookie_sessao,
+    encerrar_sessao,
+    limpar_cookie_sessao,
+    registrar_acesso,
+    validar_sessao_token,
+    verificar_acesso_principal,
+)
 
 # As rotas de IA/busca (abaixo) capturam Exception generico e devolvem {"erro": ...}
 # de proposito -- uma falha de IA nao deve derrubar a pagina inteira pro usuario.
@@ -35,37 +44,25 @@ logger = logging.getLogger("radar")
 # navegador via embeddings-client.js) sem precisar mudar nenhuma linha de codigo.
 MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
 
-# ============ Acesso (so ativo no deploy hospedado) ============
-# O app local (desktop) roda sem senha nenhuma, como sempre -- isso so entra em
-# jogo quando SITE_PASSWORD estiver configurada (deploy compartilhado, ver
-# DEPLOY.md). Continua sendo HTTP Basic por baixo dos panos (simples, sem sessao/
-# cookie pra gerenciar) -- mas so as rotas /api/* exigem (ver `if not
-# request.url.path.startswith("/api/"): return` abaixo). O HTML/CSS/JS estatico e
-# publico de proposito: em vez do navegador mostrar o dialogo NATIVO feio de
-# usuario/senha (que aparecia antes, numa chamada de pagina inteira), a propria
+# ============ Acesso (so ativo quando ha pelo menos uma conta cadastrada) ============
+# ATE 2026-09: login unico compartilhado via HTTP Basic (SITE_PASSWORD). Substituido
+# por contas individuais (tabela `admin_usuarios`, EXCECAO documentada a segregacao
+# do painel de admin -- ver webapp/admin/auth.py::verificar_acesso_principal e
+# CLAUDE.md, secao "Painel de Admin"). Sessao por cookie opaco (`admin_session`,
+# COMPARTILHADO com o painel /admin -- e a mesma tabela de contas), nunca mais HTTP
+# Basic. O app local sem nenhuma conta cadastrada (banco novo, seed.py nunca rodado)
+# continua rodando sem exigir login, mesmo espirito de antes sem SITE_PASSWORD. O
+# HTML/CSS/JS estatico e publico de proposito -- so as rotas /api/* exigem; a propria
 # pagina carrega uma tela de login customizada (ver #login-overlay em index.html,
-# _tentarLogin()/_mostrarLoginOverlay() em common.js) que testa as credenciais
-# contra /api/status via fetch() -- 401 de um fetch() NUNCA dispara o dialogo
-# nativo do navegador (isso so acontece em navegacao de pagina inteira ou recursos
-# tipo <img>), entao a experiencia fica 100% dentro da UI do proprio site.
-SITE_USER = os.environ.get("SITE_USER", "radar")
-SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "")
-_basic_auth = HTTPBasic(auto_error=False)
+# _tentarLogin()/_mostrarLoginOverlay() em common.js) que faz POST /api/login (cookie
+# de sessao, nao mais header Basic guardado em sessionStorage).
+_ROTAS_PUBLICAS_API = {"/api/login", "/api/logout"}
 
 
-def _verificar_acesso(request: Request, credentials: HTTPBasicCredentials = Depends(_basic_auth)):
-    if not SITE_PASSWORD or not request.url.path.startswith("/api/"):
+def _verificar_acesso(request: Request):
+    if not request.url.path.startswith("/api/") or request.url.path in _ROTAS_PUBLICAS_API:
         return
-    ok = credentials is not None and secrets.compare_digest(
-        credentials.username, SITE_USER
-    ) and secrets.compare_digest(credentials.password, SITE_PASSWORD)
-    if not ok:
-        # SEM WWW-Authenticate aqui de proposito: esse header e o que faz o
-        # navegador achar que deve mostrar o dialogo nativo em ALGUNS contextos --
-        # como toda chamada API já vem de fetch() (nunca navegacao de pagina
-        # inteira), o front-end trata o 401 sozinho (ver common.js) sem precisar
-        # do header, e evita qualquer risco do dialogo nativo aparecer.
-        raise HTTPException(status_code=401, detail="Acesso restrito")
+    verificar_acesso_principal(request)
 
 
 app = FastAPI(title="Radar de Credito Incentivado", dependencies=[Depends(_verificar_acesso)])
@@ -87,6 +84,69 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # (comentario no topo) para o que fazer se este painel for descontinuado um dia.
 from webapp.admin.routes import router as admin_router  # noqa: E402
 app.include_router(admin_router, prefix="/admin")
+
+
+def _ip_do_request(request: Request) -> str:
+    return request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+
+
+def _usuario_logado(request: Request):
+    """Username da sessao atual (site principal OU admin, mesma tabela/cookie), ou
+    None se ninguem estiver logado -- usado so pra atribuir autoria (ex: correcao
+    manual), nunca pra controle de acesso (isso e' _verificar_acesso, acima)."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    conn = get_connection(pooled=True)
+    try:
+        usuario = validar_sessao_token(conn, token)
+    finally:
+        conn.close()
+    return usuario["username"] if usuario else None
+
+
+@app.post("/api/login")
+def site_login(payload: dict, request: Request, response: Response):
+    """Login do SITE PRINCIPAL -- mesma tabela de contas do painel de admin
+    (admin_usuarios), qualquer role (admin ou usuario) pode logar aqui. Ver
+    webapp/admin/auth.py::verificar_acesso_principal para o gate correspondente."""
+    username = (payload.get("username") or "").strip()
+    senha = payload.get("password") or ""
+    conn = get_connection(pooled=True)
+    try:
+        usuario = autenticar_credenciais(conn, username, senha)
+        if usuario is None:
+            raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
+        token = criar_sessao(conn, usuario["id"])
+        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "login", _ip_do_request(request))
+    finally:
+        conn.close()
+    definir_cookie_sessao(response, token)
+    return {"ok": True, "username": usuario["username"]}
+
+
+@app.get("/api/me")
+def site_me(request: Request):
+    """Quem esta logado no site principal AGORA (ou None, se nao houver sessao ou o
+    login nem estiver configurado) -- usado so pra mostrar o nome + botao Sair na
+    topbar (ver common.js), nunca pra controle de acesso."""
+    return {"username": _usuario_logado(request)}
+
+
+@app.post("/api/logout")
+def site_logout(request: Request, response: Response):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        conn = get_connection(pooled=True)
+        try:
+            usuario = validar_sessao_token(conn, token)
+            if usuario is not None:
+                registrar_acesso(conn, usuario["id"], usuario["username"], "site", "logout", _ip_do_request(request))
+            encerrar_sessao(conn, token)
+        finally:
+            conn.close()
+    limpar_cookie_sessao(response)
+    return {"ok": True}
 
 
 @app.on_event("startup")
@@ -1259,11 +1319,13 @@ def enriquecimento_correcoes(limit: int = 50):
 
 
 @app.post("/api/enriquecimento/corrigir")
-def enriquecimento_corrigir(body: dict):
+def enriquecimento_corrigir(body: dict, request: Request):
     operation_id = (body or {}).get("operation_id")
     campo = (body or {}).get("campo")
     valor_novo = (body or {}).get("valor_novo")
-    usuario = (body or {}).get("usuario") or (SITE_USER if SITE_PASSWORD else None)
+    # Antes usava um usuario generico compartilhado (SITE_USER) -- agora que o login
+    # e por conta individual, atribui a correcao a quem esta de fato logado.
+    usuario = (body or {}).get("usuario") or _usuario_logado(request)
     if not operation_id or not campo or not valor_novo:
         return {"erro": "parametros 'operation_id', 'campo' e 'valor_novo' sao obrigatorios"}
     from unify import registrar_correcao_manual

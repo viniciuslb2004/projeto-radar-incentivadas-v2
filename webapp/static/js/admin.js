@@ -15,7 +15,26 @@
   const logoutBtn = document.getElementById("admin-logout-btn");
   const buscaInput = document.getElementById("admin-busca-usuario");
   const usuariosTbody = document.getElementById("admin-usuarios-tbody");
+  const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
+  const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
+  const novoUsuarioForm = document.getElementById("admin-novo-usuario-form");
+  const novoUsuarioErro = document.getElementById("admin-novo-usuario-erro");
+  const refreshOperacoesBtn = document.getElementById("admin-refresh-operacoes-btn");
+  const refreshEditaisBtn = document.getElementById("admin-refresh-editais-btn");
+  const enriquecerBtn = document.getElementById("admin-enriquecer-btn");
+  const saudeCardsEl = document.getElementById("admin-saude-cards");
+  const saudeTbody = document.getElementById("admin-saude-tbody");
+  const correcaoBuscaInput = document.getElementById("admin-correcao-busca");
+  const correcaoResultadosEl = document.getElementById("admin-correcao-resultados");
+  const correcaoSelecionadaEl = document.getElementById("admin-correcao-selecionada");
+  const correcaoCamposWrap = document.getElementById("admin-correcao-campos-wrap");
+  const correcaoCampoSelect = document.getElementById("admin-correcao-campo");
+  const correcaoValorInput = document.getElementById("admin-correcao-valor");
+  const correcaoSalvarBtn = document.getElementById("admin-correcao-salvar-btn");
+  const correcaoErroEl = document.getElementById("admin-correcao-erro");
+  const correcoesTbody = document.getElementById("admin-correcoes-tbody");
+  let operacaoSelecionada = null;
 
   async function apiFetch(path, options) {
     const resp = await fetch(API + path, Object.assign({ credentials: "same-origin" }, options));
@@ -78,6 +97,11 @@
           `<div class="admin-card"><div class="valor">${i.valor != null ? i.valor : "--"}</div><div class="rotulo">${i.rotulo}</div></div>`
       )
       .join("");
+    if (!dashboard.github_actions_configurado) {
+      [refreshOperacoesBtn, refreshEditaisBtn].forEach(function (btn) {
+        btn.title = "GITHUB_ACTIONS_TOKEN nao configurado -- peca pro usuario criar o token e configurar na Vercel.";
+      });
+    }
   }
 
   async function carregarDashboard() {
@@ -96,7 +120,7 @@
 
   function renderUsuarios(usuarios) {
     if (!usuarios.length) {
-      usuariosTbody.innerHTML = '<tr><td colspan="4">Nenhum usuário encontrado.</td></tr>';
+      usuariosTbody.innerHTML = '<tr><td colspan="5">Nenhum usuário encontrado.</td></tr>';
       return;
     }
     usuariosTbody.innerHTML = usuarios
@@ -104,11 +128,16 @@
         const pillClasse = u.ativo ? "ativo" : "inativo";
         const pillTexto = u.ativo ? "Ativo" : "Inativo";
         const acaoTexto = u.ativo ? "Desativar" : "Ativar";
+        const roleTexto = u.role === "admin" ? "Admin" : "Usuário";
         return `<tr>
           <td>${u.username}</td>
+          <td><span class="admin-pill admin-role">${roleTexto}</span></td>
           <td><span class="admin-pill ${pillClasse}">${pillTexto}</span></td>
           <td>${formatarData(u.criado_em)}</td>
-          <td><button class="admin-toggle-btn" data-id="${u.id}" data-ativo="${u.ativo}">${acaoTexto}</button></td>
+          <td>
+            <button class="admin-toggle-btn" data-acao="ativo" data-id="${u.id}" data-ativo="${u.ativo}">${acaoTexto}</button>
+            <button class="admin-toggle-btn" data-acao="excluir" data-id="${u.id}" data-username="${u.username}">Excluir</button>
+          </td>
         </tr>`;
       })
       .join("");
@@ -120,21 +149,93 @@
     renderUsuarios(dado.usuarios);
   }
 
+  function renderAcessos(acessos) {
+    if (!acessos.length) {
+      acessosTbody.innerHTML = '<tr><td colspan="5">Nenhum acesso registrado ainda.</td></tr>';
+      return;
+    }
+    acessosTbody.innerHTML = acessos
+      .map(
+        (a) => `<tr>
+          <td>${a.username}</td>
+          <td>${a.origem === "admin" ? "Painel admin" : "Site principal"}</td>
+          <td>${a.evento === "login" ? "Login" : "Logout"}</td>
+          <td>${a.ip || "--"}</td>
+          <td>${formatarData(a.criado_em)}</td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  async function carregarAcessos() {
+    const resp = await apiFetch("/acessos?limit=100");
+    const dado = await resp.json();
+    renderAcessos(dado.acessos);
+  }
+
   usuariosTbody.addEventListener("click", async function (ev) {
     const btn = ev.target.closest(".admin-toggle-btn");
     if (!btn) return;
     const id = btn.dataset.id;
-    const ativoAtual = btn.dataset.ativo === "true";
     btn.disabled = true;
     try {
-      await apiFetch(`/usuarios/${id}/ativo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ativo: !ativoAtual }),
-      });
+      if (btn.dataset.acao === "ativo") {
+        const ativoAtual = btn.dataset.ativo === "true";
+        await apiFetch(`/usuarios/${id}/ativo`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ativo: !ativoAtual }),
+        });
+      } else if (btn.dataset.acao === "excluir") {
+        if (!confirm(`Excluir o usuário "${btn.dataset.username}" definitivamente? Essa ação não pode ser desfeita.`)) {
+          btn.disabled = false;
+          return;
+        }
+        const resp = await apiFetch(`/usuarios/${id}`, { method: "DELETE" });
+        if (!resp.ok) {
+          const erro = await resp.json();
+          alert(erro.detail || "Não foi possível excluir este usuário.");
+        }
+      }
       await carregarUsuarios(buscaInput.value);
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  novoUsuarioBtn.addEventListener("click", function () {
+    novoUsuarioForm.classList.toggle("hidden");
+  });
+
+  novoUsuarioForm.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    novoUsuarioErro.classList.add("hidden");
+    const username = document.getElementById("admin-novo-usuario-username").value.trim();
+    const password = document.getElementById("admin-novo-usuario-senha").value;
+    const role = document.getElementById("admin-novo-usuario-role").value;
+    if (!username || !password) {
+      novoUsuarioErro.textContent = "Usuário e senha são obrigatórios.";
+      novoUsuarioErro.classList.remove("hidden");
+      return;
+    }
+    try {
+      const resp = await apiFetch("/usuarios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, role }),
+      });
+      if (!resp.ok) {
+        const erro = await resp.json();
+        novoUsuarioErro.textContent = erro.detail || "Não foi possível criar o usuário.";
+        novoUsuarioErro.classList.remove("hidden");
+        return;
+      }
+      novoUsuarioForm.reset();
+      novoUsuarioForm.classList.add("hidden");
+      await carregarUsuarios(buscaInput.value);
+    } catch (e) {
+      novoUsuarioErro.textContent = "Não foi possível criar o usuário.";
+      novoUsuarioErro.classList.remove("hidden");
     }
   });
 
@@ -146,10 +247,215 @@
     }, 250);
   });
 
+  async function dispararRefresh(btn, msgEl, path) {
+    btn.disabled = true;
+    msgEl.textContent = "Disparando...";
+    msgEl.className = "admin-refresh-msg";
+    try {
+      const resp = await apiFetch(path, { method: "POST" });
+      const dado = await resp.json();
+      if (!resp.ok) {
+        msgEl.textContent = dado.detail || "Não foi possível disparar.";
+        msgEl.className = "admin-refresh-msg erro";
+      } else {
+        msgEl.textContent = dado.mensagem || "Disparado com sucesso.";
+        msgEl.className = "admin-refresh-msg sucesso";
+      }
+    } catch (e) {
+      msgEl.textContent = "Erro de rede ao disparar.";
+      msgEl.className = "admin-refresh-msg erro";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  refreshOperacoesBtn.addEventListener("click", function () {
+    dispararRefresh(refreshOperacoesBtn, document.getElementById("admin-refresh-operacoes-msg"), "/refresh/operacoes");
+  });
+  refreshEditaisBtn.addEventListener("click", function () {
+    dispararRefresh(refreshEditaisBtn, document.getElementById("admin-refresh-editais-msg"), "/refresh/editais");
+  });
+
+  enriquecerBtn.addEventListener("click", async function () {
+    const msgEl = document.getElementById("admin-enriquecer-msg");
+    enriquecerBtn.disabled = true;
+    msgEl.textContent = "Processando lote (pode levar alguns segundos)...";
+    msgEl.className = "admin-refresh-msg";
+    try {
+      const resp = await apiFetch("/enriquecer-pendentes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tamanho_lote: 20 }),
+      });
+      const dado = await resp.json();
+      if (!resp.ok) {
+        msgEl.textContent = dado.detail || "Não foi possível processar.";
+        msgEl.className = "admin-refresh-msg erro";
+      } else {
+        msgEl.textContent = `Processados ${dado.processados}, resolvidos ${dado.resolvidos_cnpj_cnae}, reclassificados ${dado.operacoes_reclassificadas}. Restam ${dado.restantes} pendentes.`;
+        msgEl.className = "admin-refresh-msg sucesso";
+        await carregarDashboard();
+      }
+    } catch (e) {
+      msgEl.textContent = "Erro de rede ao processar.";
+      msgEl.className = "admin-refresh-msg erro";
+    } finally {
+      enriquecerBtn.disabled = false;
+    }
+  });
+
+  // ============ Saude do banco (proxy) ============
+  async function carregarSaudeBanco() {
+    const resp = await apiFetch("/saude-banco");
+    const dado = await resp.json();
+    saudeCardsEl.innerHTML = `
+      <div class="admin-card"><div class="valor">${dado.tamanho_logico_mb} MB</div><div class="rotulo">Tamanho lógico do banco</div></div>
+      <div class="admin-card"><div class="valor">${dado.conexoes_abertas}</div><div class="rotulo">Conexões abertas agora</div></div>
+    `;
+    if (!dado.tabelas_por_bloat.length) {
+      saudeTbody.innerHTML = '<tr><td colspan="5">Sem dados de estatísticas ainda.</td></tr>';
+      return;
+    }
+    saudeTbody.innerHTML = dado.tabelas_por_bloat
+      .map(
+        (t) => `<tr>
+          <td>${t.tabela}</td>
+          <td>${fmtNumOuTraco(t.linhas_vivas)}</td>
+          <td>${fmtNumOuTraco(t.linhas_mortas)}</td>
+          <td>${formatarData(t.ultimo_vacuum)}</td>
+          <td>${formatarData(t.ultimo_autovacuum)}</td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  function fmtNumOuTraco(v) {
+    return v != null ? v : "--";
+  }
+
+  // ============ Correcoes manuais ============
+  let buscaCorrecaoTimeout = null;
+  correcaoBuscaInput.addEventListener("input", function () {
+    clearTimeout(buscaCorrecaoTimeout);
+    const termo = correcaoBuscaInput.value.trim();
+    if (!termo) {
+      correcaoResultadosEl.classList.add("hidden");
+      return;
+    }
+    buscaCorrecaoTimeout = setTimeout(async function () {
+      const resp = await apiFetch("/operacoes/buscar?q=" + encodeURIComponent(termo));
+      const dado = await resp.json();
+      if (!dado.operacoes.length) {
+        correcaoResultadosEl.innerHTML = '<div class="admin-correcao-resultado-item">Nenhuma operação encontrada.</div>';
+      } else {
+        correcaoResultadosEl.innerHTML = dado.operacoes
+          .map(
+            (o) =>
+              `<button type="button" class="admin-correcao-resultado-item" data-op='${JSON.stringify(o).replace(/'/g, "&#39;")}'>` +
+              `#${o.id} — ${o.cliente || "(sem nome)"} — setor: ${o.setor_bndes || "--"} / ${o.subsetor_bndes || "--"} / ${o.segmento || "--"}</button>`
+          )
+          .join("");
+      }
+      correcaoResultadosEl.classList.remove("hidden");
+    }, 250);
+  });
+
+  correcaoResultadosEl.addEventListener("click", function (ev) {
+    const item = ev.target.closest(".admin-correcao-resultado-item[data-op]");
+    if (!item) return;
+    operacaoSelecionada = JSON.parse(item.dataset.op);
+    correcaoSelecionadaEl.textContent = `Operação selecionada: #${operacaoSelecionada.id} — ${operacaoSelecionada.cliente || "(sem nome)"}`;
+    correcaoSelecionadaEl.classList.remove("hidden");
+    correcaoCamposWrap.classList.remove("hidden");
+    correcaoResultadosEl.classList.add("hidden");
+    correcaoBuscaInput.value = "";
+  });
+
+  correcaoSalvarBtn.addEventListener("click", async function () {
+    correcaoErroEl.classList.add("hidden");
+    if (!operacaoSelecionada) return;
+    const valorNovo = correcaoValorInput.value.trim();
+    if (!valorNovo) {
+      correcaoErroEl.textContent = "Informe o novo valor.";
+      correcaoErroEl.classList.remove("hidden");
+      return;
+    }
+    correcaoSalvarBtn.disabled = true;
+    try {
+      const resp = await apiFetch("/correcoes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation_id: operacaoSelecionada.id,
+          campo: correcaoCampoSelect.value,
+          valor_novo: valorNovo,
+        }),
+      });
+      const dado = await resp.json();
+      if (!resp.ok) {
+        correcaoErroEl.textContent = dado.detail || "Não foi possível salvar.";
+        correcaoErroEl.classList.remove("hidden");
+        return;
+      }
+      correcaoValorInput.value = "";
+      correcaoCamposWrap.classList.add("hidden");
+      correcaoSelecionadaEl.classList.add("hidden");
+      operacaoSelecionada = null;
+      await carregarCorrecoes();
+    } finally {
+      correcaoSalvarBtn.disabled = false;
+    }
+  });
+
+  function renderCorrecoes(correcoes) {
+    if (!correcoes.length) {
+      correcoesTbody.innerHTML = '<tr><td colspan="8">Nenhuma correção registrada ainda.</td></tr>';
+      return;
+    }
+    correcoesTbody.innerHTML = correcoes
+      .map(
+        (c) => `<tr>
+          <td>#${c.operation_id} — ${c.cliente || "(sem nome)"}</td>
+          <td>${c.campo}</td>
+          <td>${c.valor_anterior || "--"}</td>
+          <td>${c.valor_novo}</td>
+          <td>${c.usuario || "--"}</td>
+          <td>${formatarData(c.criado_em)}</td>
+          <td><span class="admin-pill ${c.ativa ? "ativo" : "inativo"}">${c.ativa ? "Ativa" : "Inativa"}</span></td>
+          <td>${c.ativa ? `<button class="admin-toggle-btn" data-id="${c.id}">Desativar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  async function carregarCorrecoes() {
+    const resp = await apiFetch("/correcoes?limit=50");
+    const dado = await resp.json();
+    renderCorrecoes(dado.correcoes);
+  }
+
+  correcoesTbody.addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".admin-toggle-btn");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await apiFetch(`/correcoes/${btn.dataset.id}/desativar`, { method: "POST" });
+      await carregarCorrecoes();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   async function iniciarPainel(username) {
     usuarioLogadoEl.textContent = username;
     mostrarPainel();
-    await Promise.all([carregarDashboard(), carregarUsuarios("")]);
+    await Promise.all([
+      carregarDashboard(),
+      carregarUsuarios(""),
+      carregarAcessos(),
+      carregarSaudeBanco(),
+      carregarCorrecoes(),
+    ]);
   }
 
   loginForm.addEventListener("submit", async function (ev) {

@@ -73,12 +73,12 @@
 .loading-logo { height: 56px; width: auto; margin-bottom: 8px; }
 
 /* ============ Tela de login (custom, substitui o dialogo nativo do navegador) ============
-   So aparece quando SITE_PASSWORD esta configurada (deploy hospedado) e ainda nao ha
-   credencial valida guardada (ver _tentarLogin()/sessionStorage em common.js). As
-   rotas /api/* continuam exigindo HTTP Basic por baixo dos panos (ver
-   webapp/main.py::_verificar_acesso) -- so o HTML/CSS/JS estatico virou publico, pra
-   esta tela poder carregar e testar as credenciais via fetch() ANTES de mostrar
-   qualquer dado real, sem nunca disparar o dialogo feio nativo do navegador. */
+   So aparece quando ha pelo menos uma conta cadastrada (admin_usuarios) e ainda nao
+   ha sessao valida (cookie `admin_session`, ver _tentarLogin() em common.js). As
+   rotas /api/* continuam exigindo sessao por baixo dos panos (ver
+   webapp/main.py::_verificar_acesso / webapp/admin/auth.py::verificar_acesso_principal)
+   -- so o HTML/CSS/JS estatico e publico, pra esta tela poder carregar e fazer login
+   via fetch() ANTES de mostrar qualquer dado real. */
 #login-overlay {
   position: fixed;
   inset: 0;
@@ -173,18 +173,20 @@ body {
   gap: 10px;
 }
 
-/* So em telas largas o suficiente pra brand+abas+pill caberem numa linha sem
+/* So em telas largas o suficiente pra brand+abas+usuario caberem numa linha sem
    espremer ninguem: forca tudo numa linha so, e quem absorve a falta de espaco e
    o .tabs-wrap (ja tem min-width:0 + .tabs dentro dele com overflow-x:auto, rola
    horizontal em vez de forcar quebra de linha no container inteiro) -- sem isso,
-   o status-pill (ultimo item) as vezes ia sozinho pra uma segunda linha meio
-   solta em larguras intermediarias de desktop (bug real reportado pelo usuario).
-   Em telas mais estreitas (tablet/celular), mantem o `wrap` do bloco base acima
-   -- empilhar brand/abas/pill em linhas separadas e o comportamento certo la,
-   ja testado e funcionando. */
+   o ultimo item da direita as vezes ia sozinho pra uma segunda linha meio solta
+   em larguras intermediarias de desktop (bug real reportado pelo usuario, na
+   epoca com o status-pill morando aqui -- o status-pill migrou pra .status-strip
+   abaixo, mas o mesmo risco existe agora pro bloco usuario/Sair). Em telas mais
+   estreitas (tablet/celular), mantem o `wrap` do bloco base acima -- empilhar
+   brand/abas/usuario em linhas separadas e o comportamento certo la, ja testado
+   e funcionando. */
 @media (min-width: 900px) {
   .topbar { flex-wrap: nowrap; }
-  .topbar .brand, .status-pill { flex-shrink: 0; white-space: nowrap; }
+  .topbar .brand, .topbar-usuario { flex-shrink: 0; white-space: nowrap; }
 }
 
 .topbar-logo { height: 26px; width: auto; }
@@ -275,6 +277,36 @@ body {
 
 .tab-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .tab-btn.active { background: var(--steel-2); color: #fff; }
+
+.topbar-usuario {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--blue-lighter);
+}
+.topbar-usuario.hidden { display: none; }
+.topbar-logout-btn {
+  background: transparent;
+  border: 1px solid var(--blue-mid);
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.topbar-logout-btn:hover { background: var(--steel); }
+
+/* Faixa fina entre a topbar principal e a barra de filtros -- so o status-pill
+   (contagem total + data do ultimo refresh) mora aqui agora; o canto superior
+   direito da topbar principal, antes ocupado por ele, virou usuario logado + Sair
+   (ver .topbar-usuario acima) assim que o login por conta individual existiu. */
+.status-strip {
+  background: var(--navy-900);
+  padding: 4px 28px;
+  display: flex;
+  justify-content: flex-end;
+}
 
 .status-pill {
   font-size: 11px;

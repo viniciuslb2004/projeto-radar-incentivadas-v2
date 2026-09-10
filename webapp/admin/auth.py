@@ -1,11 +1,15 @@
-"""Autenticacao do painel de admin -- sistema SEPARADO do login unico (`SITE_PASSWORD`)
-do site publico (ver `_verificar_acesso` em webapp/main.py). Contas individuais
-(`admin_usuarios`) com senha com hash (PBKDF2-HMAC-SHA256) + sessao por cookie assinado
-opaco (`admin_sessoes`), nada disso reaproveita ou depende do mecanismo do site publico.
+"""Autenticacao do painel de admin -- e, por uma EXCECAO DOCUMENTADA e deliberada
+(ver CLAUDE.md, secao "Painel de Admin"), tambem do login do site principal desde
+que este passou a usar contas individuais em vez da senha unica `SITE_PASSWORD`.
+Contas (`admin_usuarios`, com coluna `role`: 'admin' | 'usuario') com senha com hash
+(PBKDF2-HMAC-SHA256) + sessao por token opaco (`admin_sessoes`), COMPARTILHADA entre
+o painel `/admin` e o site principal -- um `admin` acessa os dois; um `usuario`
+comum acessa so o site principal (ver `exigir_admin` vs `sessao_atual` abaixo).
 
 Formato do hash de senha: "pbkdf2_sha256$<iteracoes>$<salt_base64>$<hash_base64>" -- a
 senha em si NUNCA e armazenada nem loga em lugar nenhum, so este hash. Ver
-webapp/admin/seed.py para como a conta inicial e criada.
+webapp/admin/seed.py para como as contas seed sao criadas, e `gerar_hash_senha()`
+abaixo para como uma conta nova (criada pelo painel) gera o hash dela.
 """
 import base64
 import hashlib
@@ -14,13 +18,24 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import HTTPException, Request, Response
 
 from db import get_connection
 
 SESSION_COOKIE = "admin_session"
 SESSION_TTL_HORAS = 24
 PBKDF2_ALGORITMO = "pbkdf2_sha256"
+PBKDF2_ITERACOES = 600_000
+
+
+def gerar_hash_senha(senha: str) -> str:
+    """Gera um hash no MESMO formato/parametros usados pelas contas seed (ver
+    seed.py) -- usado só quando uma conta nova é criada pelo próprio painel
+    (POST /admin/api/usuarios). A senha em texto puro fica só na memória deste
+    request, nunca é persistida nem devolvida na resposta."""
+    salt = os.urandom(16)
+    hash_calculado = hashlib.pbkdf2_hmac("sha256", senha.encode("utf-8"), salt, PBKDF2_ITERACOES)
+    return f"{PBKDF2_ALGORITMO}${PBKDF2_ITERACOES}${base64.b64encode(salt).decode()}${base64.b64encode(hash_calculado).decode()}"
 
 
 def verificar_senha(senha: str, hash_armazenado: str) -> bool:
@@ -45,6 +60,23 @@ def _cookie_secure() -> bool:
     return bool(os.environ.get("VERCEL"))
 
 
+def autenticar_credenciais(conn, username: str, senha: str):
+    """Verifica username+senha contra admin_usuarios (precisa estar ativo) e devolve
+    {'id','username','role'} se validas, None caso contrario -- usado tanto pelo
+    login do painel /admin quanto pelo login do site principal (MESMA tabela de
+    contas, ver docstring do modulo)."""
+    row = conn.execute(
+        "SELECT id, password_hash, ativo, role FROM admin_usuarios WHERE username = ?",
+        (username,),
+    ).fetchone()
+    if row is None:
+        return None
+    usuario_id, password_hash, ativo, role = row
+    if not ativo or not verificar_senha(senha, password_hash):
+        return None
+    return {"id": usuario_id, "username": username, "role": role}
+
+
 def criar_sessao(conn, usuario_id: int) -> str:
     token = secrets.token_urlsafe(32)
     agora = datetime.now(timezone.utc)
@@ -62,18 +94,18 @@ def encerrar_sessao(conn, token: str) -> None:
     conn.commit()
 
 
-def _usuario_da_sessao(conn, token: str):
+def validar_sessao_token(conn, token: str):
     if not token:
         return None
     row = conn.execute(
-        "SELECT u.id, u.username, u.ativo, s.expira_em "
+        "SELECT u.id, u.username, u.ativo, u.role, s.expira_em "
         "FROM admin_sessoes s JOIN admin_usuarios u ON u.id = s.usuario_id "
         "WHERE s.token = ?",
         (token,),
     ).fetchone()
     if row is None:
         return None
-    usuario_id, username, ativo, expira_em = row
+    usuario_id, username, ativo, role, expira_em = row
     if not ativo:
         return None
     expira = datetime.fromisoformat(expira_em)
@@ -81,10 +113,13 @@ def _usuario_da_sessao(conn, token: str):
         expira = expira.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) >= expira:
         return None
-    return {"id": usuario_id, "username": username}
+    return {"id": usuario_id, "username": username, "role": role}
 
 
 def definir_cookie_sessao(response: Response, token: str) -> None:
+    # path="/" (nao mais so "/admin"): a mesma sessao agora vale tanto pro painel de
+    # admin quanto pro site principal (ver docstring do modulo) -- o cookie precisa
+    # ser enviado em requisicoes pra ambos.
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -92,23 +127,61 @@ def definir_cookie_sessao(response: Response, token: str) -> None:
         httponly=True,
         secure=_cookie_secure(),
         samesite="strict",
-        path="/admin",
+        path="/",
     )
 
 
 def limpar_cookie_sessao(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE, path="/admin")
+    response.delete_cookie(SESSION_COOKIE, path="/")
 
 
 def exigir_admin(request: Request):
-    """Dependency que barra qualquer rota de dado do admin sem sessao valida --
-    nunca confia em esconder a rota so no frontend."""
+    """Dependency que barra qualquer rota de dado do painel /admin sem sessao
+    valida E com role='admin' -- uma conta 'usuario' (site principal) autentica
+    mas nao passa daqui. Nunca confia em esconder a rota so no frontend."""
     token = request.cookies.get(SESSION_COOKIE)
     conn = get_connection(pooled=True)
     try:
-        usuario = _usuario_da_sessao(conn, token)
+        usuario = validar_sessao_token(conn, token)
+    finally:
+        conn.close()
+    if usuario is None or usuario["role"] != "admin":
+        raise HTTPException(status_code=401, detail="Sessao invalida ou expirada")
+    return usuario
+
+
+def verificar_acesso_principal(request: Request):
+    """Gate do SITE PRINCIPAL (usado por webapp/main.py::_verificar_acesso) -- e a
+    parte da EXCECAO documentada a segregacao (ver docstring do modulo e CLAUDE.md):
+    o login do site inteiro passou a depender de admin_usuarios. Abre UMA conexao
+    pra resolver os dois casos:
+      1. Nenhuma conta cadastrada ainda (banco novo/dev local sem seed rodado) --
+         acesso livre, mesmo espirito de rodar sem SITE_PASSWORD configurada antes.
+      2. Pelo menos uma conta existe -- exige sessao valida (qualquer role; so as
+         rotas do painel /admin, via exigir_admin, exigem role='admin' especificamente).
+    Levanta HTTPException(401) se autenticacao for necessaria e a sessao for
+    invalida/ausente; devolve None (silenciosamente) nos outros dois casos."""
+    conn = get_connection(pooled=True)
+    try:
+        tem_conta = conn.execute("SELECT 1 FROM admin_usuarios LIMIT 1").fetchone() is not None
+        if not tem_conta:
+            return None
+        token = request.cookies.get(SESSION_COOKIE)
+        usuario = validar_sessao_token(conn, token)
     finally:
         conn.close()
     if usuario is None:
-        raise HTTPException(status_code=401, detail="Sessao invalida ou expirada")
+        raise HTTPException(status_code=401, detail="Acesso restrito")
     return usuario
+
+
+def registrar_acesso(conn, usuario_id, username: str, origem: str, evento: str, ip: str = None) -> None:
+    """V1 do log de acessos (ver CLAUDE.md) -- so login/logout, nunca navegacao
+    dentro da pagina. username_snapshot garante que o log continua legivel mesmo
+    depois de um usuario ser excluido de verdade (usuario_id vira NULL)."""
+    conn.execute(
+        "INSERT INTO admin_acessos_log (usuario_id, username_snapshot, origem, evento, ip, criado_em) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (usuario_id, username, origem, evento, ip, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
