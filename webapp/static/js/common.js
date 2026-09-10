@@ -42,33 +42,20 @@ function _urlCompleta(url) {
 const TIMEOUT_PADRAO_MS = 45000;
 
 // ============ Login (tela custom, ver #login-overlay em index.html) ============
-// As rotas /api/* continuam exigindo HTTP Basic por baixo dos panos (ver
-// webapp/main.py::_verificar_acesso), mas o HTML/CSS/JS estatico virou publico --
-// em vez do navegador mostrar o dialogo NATIVO feio de usuario/senha (que so
-// dispara em navegacao de pagina inteira, nunca em fetch()), a propria pagina
-// carrega e testa as credenciais via fetch() contra /api/status. O header
-// "Authorization: Basic ..." fica guardado em sessionStorage (some ao fechar a
-// aba -- "temporario" por design, mesmo padrao ja usado pro historico de busca).
-const AUTH_HEADER_KEY = "radar_auth_header";
-
-function _getAuthHeader() {
-  try { return sessionStorage.getItem(AUTH_HEADER_KEY) || null; } catch (e) { return null; }
-}
-function _setAuthHeader(header) {
-  try { sessionStorage.setItem(AUTH_HEADER_KEY, header); } catch (e) { /* sem storage -- login nao persiste entre reloads, mas continua funcionando na mesma pagina */ }
-}
-
+// Ate 2026-09: HTTP Basic + header guardado em sessionStorage. Substituido por
+// sessao de cookie (conta individual, tabela `admin_usuarios`, EXCECAO documentada
+// a segregacao do painel /admin -- ver webapp/admin/auth.py e CLAUDE.md, secao
+// "Painel de Admin"). O cookie e httponly (JS nunca le/escreve ele diretamente) e
+// enviado automaticamente pelo navegador via `credentials: "include"` -- por isso
+// fetchJSON/postJSON abaixo nao precisam mais montar nenhum header de Authorization.
 class ErroAutenticacao extends Error {}
 
 async function fetchJSON(url, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
-  const headers = {};
-  const auth = _getAuthHeader();
-  if (auth) headers["Authorization"] = auth;
   try {
-    const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include", headers });
+    const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
     if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
     return await r.json();
   } finally {
@@ -82,13 +69,10 @@ async function postJSON(url, body, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
-  const headers = { "Content-Type": "application/json" };
-  const auth = _getAuthHeader();
-  if (auth) headers["Authorization"] = auth;
   try {
     const r = await fetch(fullUrl, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       credentials: "include",
       signal: controller.signal,
@@ -112,22 +96,22 @@ function _mostrarLoginOverlay(mensagemErro) {
   document.getElementById("login-usuario").focus();
 }
 
-// Testa as credenciais digitadas direto (nao via fetchJSON, que usaria o header ja
-// GUARDADO em vez do candidato que ainda nem foi validado) -- so guarda de verdade
-// se /api/status responder 200.
+// POST /api/login com as credenciais digitadas -- em caso de sucesso, o backend ja
+// devolve o cookie de sessao (Set-Cookie), nada pra guardar manualmente aqui.
 async function _tentarLogin(usuario, senha) {
-  const header = "Basic " + btoa(usuario + ":" + senha);
   try {
-    const r = await fetch(_urlCompleta("/api/status"), { headers: { Authorization: header }, credentials: "include" });
-    if (r.status === 200) {
-      _setAuthHeader(header);
-      return true;
-    }
+    const r = await fetch(_urlCompleta("/api/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: usuario, password: senha }),
+      credentials: "include",
+    });
+    return r.status === 200;
   } catch (e) {
     // erro de rede tratado como falha de login tambem -- usuario ve a mesma
     // mensagem e pode tentar de novo.
+    return false;
   }
-  return false;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -151,6 +135,29 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("login-senha").value = "";
       _mostrarLoginOverlay("Usuário ou senha incorretos.");
     }
+  });
+
+  // Nome do usuario logado + botao Sair no canto da topbar (so aparece quando o
+  // login por conta individual estiver configurado E alguem estiver logado --
+  // ver /api/me em webapp/main.py). Sem login configurado (dev local sem nenhuma
+  // conta ainda), a rota devolve username=null e este bloco fica escondido.
+  fetch(_urlCompleta("/api/me"), { credentials: "include" })
+    .then((r) => (r.ok ? r.json() : { username: null }))
+    .then((dado) => {
+      if (!dado.username) return;
+      document.getElementById("topbar-usuario-nome").textContent = dado.username;
+      document.getElementById("topbar-usuario").classList.remove("hidden");
+    })
+    .catch(() => {});
+
+  document.getElementById("topbar-logout-btn").addEventListener("click", async () => {
+    try {
+      await fetch(_urlCompleta("/api/logout"), { method: "POST", credentials: "include" });
+    } catch (e) {
+      // segue pro reload mesmo assim -- o pior caso e o cookie continuar valido
+      // ate expirar sozinho (24h), sem travar o usuario na tela.
+    }
+    location.reload();
   });
 });
 

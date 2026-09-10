@@ -61,9 +61,10 @@ Postgres via `DATABASE_URL`.
 - **Automação**: GitHub Actions (`.github/workflows/*.yml`), 3 workflows agendados (ver seção
   própria abaixo), todos usando o secret `DATABASE_URL`.
 - **Local dev**: `uvicorn webapp.main:app` a partir da raiz do repo; `.env` na raiz fornece
-  `DATABASE_URL` (via `python-dotenv`, carregado em `src/db.py`). Sem `SITE_PASSWORD` no `.env`
-  local, o servidor local roda sem exigir login (login só é forçado quando `SITE_PASSWORD` está
-  configurada, tipicamente só em produção).
+  `DATABASE_URL` (via `python-dotenv`, carregado em `src/db.py`). Login (ver seção "Painel de
+  Admin" abaixo): sem nenhuma linha em `admin_usuarios` (banco novo, `webapp/admin/seed.py`
+  nunca rodado), o servidor local roda sem exigir login — assim que a primeira conta existir
+  (local ou em produção), toda rota `/api/*` passa a exigir sessão válida.
 
 ## Modelo de dados (tabelas principais, ver schema completo em `src/db.py`)
 
@@ -377,6 +378,42 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
 
 ## Coisas a saber antes de mexer
 
+- **BUG REAL CRÍTICO encontrado e corrigido em 2026-09-10: TODAS as sequences de
+  colunas `IDENTITY` do banco estavam dessincronizadas em produção (Aiven)**,
+  travadas em `last_value=1` mesmo com dados reais até id 58824 (`operations`) —
+  `bndes_raw`, `finep_credito_direto_raw`, `finep_credito_descentralizado_raw`,
+  `finep_nao_aprovados_raw`, `operations`, `operations_correcoes_manuais`,
+  `refresh_log`, `refresh_editais_log`, `linhas_incentivadas`. **Causa raiz**: a
+  migração Supabase→Aiven (`scripts/migrate_supabase_to_aiven.py`, ver "Stack e
+  topologia de deploy" acima) usou `COPY` tabela por tabela — `COPY` escreve
+  direto nos ids explícitos de uma coluna `GENERATED ALWAYS AS IDENTITY` sem
+  passar pelo `nextval()`, então a sequence nunca avança; ela ficou parada no
+  valor de quando a tabela foi criada (1), enquanto os dados copiados já tinham
+  ids bem maiores. **Efeito pratico**: qualquer novo INSERT que dependa da
+  sequence (`INSERT INTO tabela (...) VALUES (...)` sem `id` explícito) falha com
+  `UniqueViolation: duplicate key ... already exists` assim que a sequence tenta
+  reusar um id já ocupado (ex: id=1). **Como foi descoberto**: ao vivo, testando
+  a tela de correções manuais do painel de admin (`POST /admin/api/correcoes`,
+  que chama `unify.py::registrar_correcao_manual`) — o INSERT em
+  `operations_correcoes_manuais` falhou com esse erro. Investigando mais a fundo:
+  **nenhuma tabela com IDENTITY tinha uma linha em `refresh_log`/
+  `refresh_editais_log` mais recente que 2026-09-08**, apesar do refresh diário
+  de editais (`refresh-editais.yml`, 08:00 UTC) e o semanal de operações rodarem
+  desde então — sinal forte de que os workflows agendados estavam **falhando
+  silenciosamente todo dia** desde o corte de produção pra Aiven (2026-09-09):
+  o primeiro INSERT de qualquer refresh (numa das tabelas afetadas) quebra a
+  execução inteira, e como até `refresh_log`/`refresh_editais_log` (onde o
+  resultado seria registrado) também estavam dessincronizadas, a falha não deixa
+  rastro nem no banco. **Corrigido** com `SELECT setval(pg_get_serial_sequence(
+  'tabela', 'id'), (SELECT MAX(id) FROM tabela))` em cada uma das 9 tabelas
+  (comando não-destrutivo, só avança o contador da sequence pro valor real já
+  em uso — nenhuma linha de dado foi tocada). **Depois de aplicar este fix,
+  confirme que o próximo refresh agendado (diário de editais, ou rode manual)
+  realmente grava uma linha nova em `refresh_log`/`refresh_editais_log` com
+  `status='ok'` — se isso não acontecer, o problema não era só a sequence.**
+  **Lição pra qualquer migração futura via `COPY`**: sempre rodar
+  `setval(pg_get_serial_sequence(...), MAX(id))` em toda tabela com coluna
+  IDENTITY logo depois do `COPY`, nunca assumir que a sequence "vem junto".
 - **`db_compat.py`** faz um monkeypatch global: todo `?` em queries SQL (estilo sqlite,
   convenção usada em 100% do código deste projeto) vira `%s` (estilo psycopg) transparentemente
   — nunca escreva `%s` direto nas queries deste projeto, sempre `?`. Isso também significa que
@@ -464,69 +501,159 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
 
 ## Painel de Admin (`/admin`)
 
-Área administrativa separada do site público, com contas individuais de verdade (login +
-senha com hash) em vez do login único compartilhado (`SITE_PASSWORD`, ver seção "Acesso" /
-`_verificar_acesso` em `webapp/main.py`) — os dois sistemas de autenticação são INDEPENDENTES,
-um não sabe da existência do outro.
+Área administrativa com contas individuais de verdade (login + senha com hash), que
+substituiu o antigo login único compartilhado (`SITE_PASSWORD`/HTTP Basic). O backend
+(`webapp/admin/`) continua um pacote isolado e removível, MAS — mudança de escopo aprovada
+explicitamente pelo usuário em 2026-09-10 — o login do SITE PRINCIPAL também passou a
+depender da mesma tabela `admin_usuarios`. Isso é uma EXCEÇÃO documentada à segregação
+original (ver "Acoplamento com o site principal" abaixo): o painel em si continua isolado
+(arquivos próprios, tabelas próprias), mas removê-lo sem reverter esse acoplamento primeiro
+quebraria o login do site inteiro.
 
-**Decisão deliberada de segregação** (pedido explícito do usuário: fácil de remover inteiro
-se um dia for descontinuado, sem tocar em nada do site público):
-- Todo o backend fica em `webapp/admin/` (pacote próprio): `auth.py` (hash de senha PBKDF2,
-  sessão por token opaco, dependency `exigir_admin`), `routes.py` (`APIRouter` com as rotas
-  `/api/*`, comentário no topo do arquivo com o passo a passo de remoção), `seed.py` (script
-  de migração/seed, roda manualmente, nunca automático).
-- `webapp/main.py` só tem duas linhas nesse pacote: o import e
-  `app.include_router(admin_router, prefix="/admin")` (logo após `STATIC_DIR`). Como o
-  prefixo é `/admin` (nunca `/api`), as rotas do admin **não passam** pelo
-  `_verificar_acesso`/`SITE_PASSWORD` do site público (aquele dependency só age em paths que
-  começam com `/api/`) — são dois portões de acesso completamente distintos.
-  Há também um pequeno ajuste (2 linhas) dentro do catch-all `spa_pagina()` existente, só pro
-  modo local (`uvicorn`): sem ele, esse catch-all (que roda antes do mount de arquivos
-  estáticos) intercepta qualquer caminho de um segmento só e devolve 404 pra `/admin.html`
-  mesmo o arquivo existindo de verdade — não seria um problema no deploy hospedado, onde
-  `vercel.json` resolve `/admin` direto na CDN antes de chegar no FastAPI.
-- Frontend em arquivos próprios, nunca dentro do `index.html`/`common.js` da SPA principal:
-  `webapp/static/admin.html` + `webapp/static/js/admin.js` + `webapp/static/css/admin.css`
-  (reaproveita só as variáveis de cor `:root` de `style.css`, importado antes). Não é uma 6ª
-  aba da SPA — é uma página HTML separada, com seu próprio JS de login/painel (não usa
-  `common.js`, `sessionStorage`/`Authorization` header do site público não têm nada a ver com
-  a sessão do admin).
-- Tabelas próprias e isoladas: `admin_usuarios` (`id`, `username`, `password_hash`, `ativo`,
-  `criado_em`) e `admin_sessoes` (`token` como PK, `usuario_id`, `criado_em`, `expira_em`,
-  `ON DELETE CASCADE` de `admin_usuarios`). Nenhuma delas é referenciada por
-  `operations`/`linhas_incentivadas`/`editais_raw` nem o contrário — o painel só faz
-  `SELECT COUNT(*)`/leituras pontuais nessas tabelas pras estatísticas (nunca escreve nelas).
-  **Diferente do resto do banco**: essas 2 tabelas NÃO estão no `SCHEMA`/`MIGRACOES_COLUNAS`
-  de `src/db.py` de propósito (mantém `db.py` inteiramente intocado) — são criadas por
-  `webapp/admin/seed.py`, rodado manualmente uma única vez (`python webapp/admin/seed.py`),
-  nunca por um startup automático da webapp nem pelo refresh semanal.
-- `vercel.json` tem 2 entradas próprias: rewrite `/admin` → `/admin.html` (arquivo estático
-  próprio, não `/index.html`) e `/admin/api/(.*)` → `/api` (sem isso, as chamadas
-  `/admin/api/*` do frontend nunca chegariam na function serverless em produção — só o
-  rewrite `/api/(.*)` original existia, e `/admin/api/*` não bate nesse padrão).
+**Estrutura (arquivos próprios, pacote `webapp/admin/`)**:
+- `auth.py`: hash de senha PBKDF2, geração de hash (`gerar_hash_senha`, usada ao criar conta
+  pelo painel), verificação de credenciais (`autenticar_credenciais`, compartilhada entre o
+  login do painel e o do site principal), sessão por token opaco (`admin_sessoes`),
+  `exigir_admin` (dependency do painel — exige role='admin'), `verificar_acesso_principal`
+  (gate do site principal — qualquer role, usado por `webapp/main.py::_verificar_acesso`),
+  `registrar_acesso` (log de login/logout).
+- `routes.py`: `APIRouter` com as rotas `/api/*` do painel (comentário no topo com o passo a
+  passo de remoção, incluindo a ressalva do acoplamento).
+- `seed.py`: script de migração/seed (schema + contas seed), roda manualmente
+  (`python webapp/admin/seed.py`), idempotente, nunca automático/no startup da webapp.
+- Frontend em arquivos próprios (nunca dentro do `index.html`/`common.js` da SPA principal):
+  `webapp/static/admin.html` + `admin.js` + `css/admin.css` (reaproveita as variáveis de cor
+  de `style.css`, importado antes). Página própria, não uma 6ª aba da SPA.
+- `webapp/main.py` importa de `webapp/admin/auth.py` (ver "Acoplamento" abaixo) e inclui o
+  router (`app.include_router(admin_router, prefix="/admin")`, logo após `STATIC_DIR`). Como
+  o prefixo é `/admin` (nunca `/api`), as rotas do painel não passam pelo gate do site
+  principal — são dois conjuntos de rotas distintos, com dependencies diferentes
+  (`exigir_admin` exige role='admin'; o gate do site aceita qualquer role).
+  Há também um pequeno ajuste dentro do catch-all `spa_pagina()`, só pro modo local
+  (`uvicorn`): sem ele, esse catch-all intercepta `/admin.html` e devolve 404 mesmo o arquivo
+  existindo — não é problema no deploy hospedado, onde `vercel.json` resolve `/admin` direto
+  na CDN.
+- `vercel.json` tem 2 rewrites próprios: `/admin` → `/admin.html` e `/admin/api/(.*)` → `/api`
+  (sem o segundo, as chamadas `/admin/api/*` nunca chegariam na function serverless — só o
+  rewrite `/api/(.*)` original existia).
+
+**Tabelas** (nenhuma referenciada por `operations`/`linhas_incentivadas`/`editais_raw` nem o
+contrário — criadas/migradas só por `webapp/admin/seed.py`, NUNCA pelo `SCHEMA`/
+`MIGRACOES_COLUNAS` de `src/db.py`, que continua inteiramente intocado):
+- `admin_usuarios`: `id`, `username` (unique), `password_hash`, `role` (`'admin'` |
+  `'usuario'` — coluna adicionada depois via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+  default `'admin'` pra não quebrar a conta que já existia antes dessa migração), `ativo`,
+  `criado_em`.
+- `admin_sessoes`: `token` (PK), `usuario_id` (`ON DELETE CASCADE`), `criado_em`, `expira_em`.
+- `admin_acessos_log`: V1 do "log de acessos" pedido pelo usuário — **só login/logout**, não
+  navegação/cliques dentro da página (isso seria uma V2, não construída ainda — analytics de
+  verdade é um projeto à parte, precisa de escopo confirmado antes). Colunas: `usuario_id`
+  (`ON DELETE SET NULL`), `username_snapshot` (texto — garante que o log continua legível
+  mesmo depois de um usuário ser EXCLUÍDO de verdade, sem precisar reconstituir via join),
+  `origem` (`'site'` | `'admin'`), `evento` (`'login'` | `'logout'`), `ip`, `criado_em`.
+
+**Papéis (`role`)**: `admin` acessa o painel `/admin` E o site principal (superset).
+`usuario` só acessa o site principal — tentar logar em `/admin/api/login` com uma conta
+`usuario` devolve 403; tentar acessar qualquer rota `/admin/api/*` com uma sessão `usuario`
+devolve 401 (`exigir_admin` confere o role a cada requisição, não só no login).
+
+**Acoplamento com o site principal (exceção documentada à segregação)**: `webapp/main.py`
+importa `verificar_acesso_principal`/`autenticar_credenciais`/etc. de `webapp/admin/auth.py`
+e expõe `/api/login`+`/api/logout` (rotas do SITE, não do painel — mesma tabela de contas,
+qualquer role). `_verificar_acesso` (gate global de `/api/*`) chama
+`verificar_acesso_principal`, que abre uma conexão e resolve dois casos: (1) nenhuma conta em
+`admin_usuarios` ainda (banco novo/dev local sem seed) → acesso livre, mesmo espírito de
+antes sem `SITE_PASSWORD`; (2) pelo menos uma conta existe → exige sessão válida (cookie
+`admin_session`, path `/` — COMPARTILHADO entre painel e site, diferente da versão inicial
+deste painel que usava `path=/admin`). Login do site (`common.js::_tentarLogin`) virou um
+POST JSON pra `/api/login` (cookie httponly de volta) em vez de HTTP Basic +
+`Authorization` header guardado em `sessionStorage` — `fetchJSON`/`postJSON` não montam mais
+nenhum header manual, o cookie viaja sozinho via `credentials:"include"`.
+**Se o painel de admin for removido**: reverter esse acoplamento (voltar `_verificar_acesso`
+pra algum mecanismo de auth do site principal) ANTES de apagar as tabelas/pacote — ver
+comentário no topo de `webapp/admin/routes.py`.
 
 **Sessão/senha**: hash `pbkdf2_sha256$<iterações>$<salt_base64>$<hash_base64>`
 (PBKDF2-HMAC-SHA256, 600.000 iterações), comparado com `hmac.compare_digest` (nunca `==`).
 Sessão = token opaco (`secrets.token_urlsafe`) gravado em `admin_sessoes` com expiração
-(24h), devolvido como cookie `admin_session` (httponly, `secure` quando `VERCEL` está
-definido, `samesite=strict`, `path=/admin`) — nunca um JWT/cookie assinado client-side, a
-validade é sempre conferida contra a linha em `admin_sessoes` no backend. Desativar um
-usuário (`ativo=false`) invalida a sessão dele na hora, mesmo com o cookie ainda válido
-(`exigir_admin` confere `ativo` a cada requisição) — testado ao vivo: desativar o próprio
-usuário logado derruba a sessão imediatamente, sem esperar o cookie expirar.
+(24h), cookie `admin_session` (httponly, `secure` quando `VERCEL` está definido,
+`samesite=strict`, `path=/`) — nunca JWT/cookie assinado client-side, validade sempre
+conferida contra a linha em `admin_sessoes` no backend. Desativar um usuário invalida a
+sessão dele na hora (`exigir_admin`/`verificar_acesso_principal` conferem `ativo` a cada
+requisição) — testado ao vivo: desativar o próprio usuário logado derruba a sessão
+imediatamente, sem esperar o cookie expirar.
 
-**Conta inicial**: `admin`, inserida por `seed.py` com um hash já pronto (a
-senha em texto puro nunca passou pelo código/commit/log — só o hash). Pra adicionar mais
-contas depois, seria natural evoluir `routes.py` com uma rota de criação (hoje só existe
-ativar/desativar via `/admin/api/usuarios/{id}/ativo`, não há rota de criação de usuário
-pelo painel ainda).
+**Gestão de usuários (CRUD)**: `POST /admin/api/usuarios` cria conta nova (hash gerado na
+hora via `gerar_hash_senha`, senha em texto puro nunca persistida/logada/devolvida);
+`POST /admin/api/usuarios/{id}/ativo` ativa/desativa (soft); `DELETE /admin/api/usuarios/{id}`
+exclui de verdade. **Guarda do último admin**: nenhuma das duas últimas rotas permite
+desativar/excluir um `role='admin'` se ele for o ÚLTIMO admin ativo restante — evita travar
+o painel inteiro sem ninguém pra reativar ninguém. Na prática só é alcançável no caso de
+autoexclusão/autodesativação (quem chama a rota já precisa ser um admin ativo, então excluir/
+desativar um admin QUE NÃO seja você mesmo nunca zera a contagem).
+
+**Contas seed** (inseridas por `seed.py`, hashes já prontos — senha em texto puro nunca
+passou pelo código/commit/log): `admin` (role `admin`) e `artica` (role `usuario`).
+
+**Botões de ação (aprovados junto com o CRUD, 2026-09-10)**:
+- **"Atualizar agora" (operações/editais)**: rodar `src/refresh.py`/`refresh_editais.py`
+  dentro de uma function serverless da Vercel é inviável (timeout de segundos/poucos minutos
+  contra um pipeline que pode levar até 180min) — os botões chamam a API do GitHub
+  (`POST /repos/{repo}/actions/workflows/{arquivo}/dispatches`) pra disparar os workflows
+  reais (`refresh-operacoes.yml`/`refresh-editais.yml`, já tinham `workflow_dispatch: {}`
+  habilitado). Precisa de um Personal Access Token do GitHub (escopo `actions:write` no
+  repo) numa env var **`GITHUB_ACTIONS_TOKEN`** — **só o usuário pode criar esse token e
+  configurar na Vercel**, o painel não tem como gerar isso sozinho; sem a env var, o botão
+  mostra um erro claro em vez de quebrar (testado ao vivo). Salvaguarda: antes de disparar,
+  confere `refresh_log`/`refresh_editais_log` por uma execução com `finished_at IS NULL`
+  (em andamento) e bloqueia com 409 se houver, pra evitar clique duplo/concorrência (dado o
+  incidente de disco cheio documentado abaixo).
+- **"Processar próximo lote" (CNPJs pendentes)**: reaproveita
+  `enrich_cnae.py::enrich_pendentes_via_api` + `unify.py::reclassificar_pendentes` (MESMO
+  código do refresh semanal), em lotes pequenos (20 por clique, configurável) pra não
+  estourar o timeout de uma function serverless — cada CNPJ leva ~0.6s (rate limit da
+  BrasilAPI) + rede. **Achado real testando ao vivo**: as 552 operações pendentes na base
+  hoje têm TODAS `cnpj IS NULL` — esse botão (e o enriquecimento incremental do próprio
+  refresh semanal, que usa a mesma query) não tem como resolver nenhuma delas, já que
+  dependem de CNPJ pra consultar a BrasilAPI. Não é um bug deste botão; é uma característica
+  real dos dados pendentes atuais — resolver isso precisaria de uma estratégia diferente
+  (não baseada em CNPJ) pra esse subconjunto especificamente, fora do escopo desta mudança.
+
+**Log de acessos**: seção própria no painel (`GET /admin/api/acessos`), lista os últimos 100
+eventos de login/logout (site + painel), com usuário, origem, IP e timestamp.
+
+**Saúde do banco (proxy)** (`GET /admin/api/saude-banco`, aprovado 2026-09-10): tamanho lógico
+(`pg_database_size`), conexões abertas (`pg_stat_activity`) e as 10 tabelas com mais bloat
+(`n_live_tup`/`n_dead_tup`/`last_vacuum`/`last_autovacuum` via `pg_stat_user_tables`). **Não é
+o % de disco oficial da Aiven** — aquele conta WAL/backup e só existe no console.aiven.io
+(exigiria a API deles, token novo, ação do usuário); a UI deixa esse aviso explícito de
+propósito, pra não criar falsa sensação de precisão. Foi construindo/testando esta seção que o
+bug real das sequences dessincronizadas (ver "Coisas a saber antes de mexer") foi descoberto.
+
+**Correções manuais** (`/admin/api/correcoes*` + `/admin/api/operacoes/buscar`, aprovado
+2026-09-10): tela sobre `operations_correcoes_manuais` que já existia (ver `src/db.py`) — só
+uma UI nova, nenhuma lógica duplicada. Busca operação por id exato ou cliente (ILIKE), escolhe
+um dos 3 campos corrigíveis (`setor_bndes`/`subsetor_bndes`/`segmento` — `unify.CAMPOS_CORRIGIVEIS`)
+e reaproveita `unify.py::registrar_correcao_manual` (a MESMA função que
+`webapp/main.py::enriquecimento_corrigir` já usava) pra aplicar e gravar o histórico.
+"Desativar" só marca `ativa=FALSE` (nunca `DELETE` — é histórico) e não reverte o valor já
+aplicado em `operations`; isso só muda o que o próximo refresh semanal vai (deixar de)
+reforçar (`unify.py::_reaplicar_correcoes_manuais`).
+
+**Usuário logado + Sair no site principal** (`webapp/static/index.html`/`common.js`, natural
+depois do acoplamento do login): o texto "N operações · atualizado em ..." que morava no canto
+superior direito da topbar principal migrou pra uma faixa fina própria (`.status-strip`) logo
+abaixo — o espaço que abriu no canto da topbar virou usuário logado + botão "Sair" (mesmo
+padrão visual do painel de admin), alimentado por um novo `GET /api/me` (site, não confundir
+com `GET /admin/api/me`, do painel).
 
 **Como remover o painel inteiro** (ver também o comentário no topo de
-`webapp/admin/routes.py`): `DROP TABLE admin_sessoes; DROP TABLE admin_usuarios;` + apagar a
-pasta `webapp/admin/` + apagar `webapp/static/admin.html`/`admin.js`/`admin.css` + remover as
-2 linhas de include em `webapp/main.py` (e o ajuste de 2 linhas em `spa_pagina()`) + remover
-as 2 entradas de rewrite de `vercel.json`. Nada disso toca em `operations`,
-`linhas_incentivadas`, `editais_raw` ou no login único do site público.
+`webapp/admin/routes.py`): 1) reverter o acoplamento do login do site principal (ver acima)
+ANTES de tudo; 2) `DROP TABLE admin_sessoes; DROP TABLE admin_acessos_log; DROP TABLE
+admin_usuarios;`; 3) apagar a pasta `webapp/admin/` + `webapp/static/admin.html`/`admin.js`/
+`css/admin.css`; 4) remover a linha de include em `webapp/main.py` (e o ajuste em
+`spa_pagina()`); 5) remover as 2 entradas de rewrite de `vercel.json`. Fora essa exceção
+documentada, nada disso toca em `operations`, `linhas_incentivadas` ou `editais_raw`.
 
 ## Onde procurar o quê (mapa rápido)
 
