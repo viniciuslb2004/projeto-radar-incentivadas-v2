@@ -398,7 +398,18 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
   `flex-wrap:nowrap` e brand/pill ganham `flex-shrink:0` — quem absorve a falta de
   espaço é `.tabs` (já rola horizontal). Abaixo de 900px, mantido o empilhamento
-  original (mobile/tablet já funcionava bem assim).
+  original (mobile/tablet já funcionava bem assim). **Efeito colateral dessa
+  correção, resolvido depois (2026-09-10)**: `.tabs` rolando horizontal nessa
+  mesma faixa (~950-1250px) mostrava uma barra de scroll nativa feia. Reduzida
+  a fonte da marca (17px→15px) e o padding dos botões de aba (16px→12px) pra
+  abrir espaço de verdade (elimina o scroll a partir de ~1250px, antes só
+  ~1280px); onde ainda não cabe, a barra nativa fica escondida
+  (`scrollbar-width:none`+`::-webkit-scrollbar{display:none}`, rolagem
+  continua funcionando por touch/wheel/arraste) e um novo wrapper
+  `.tabs-wrap` ganha um degrade sutil na borda (ligado/desligado por JS,
+  `_atualizarSombraAbas()` em `common.js`) como aviso visual de que há mais
+  abas fora da tela — sem isso, a existência de "Editais"/"Linhas
+  Incentivadas" nessa faixa de largura ficaria descobrível só por acidente.
 
 ## Coisas a saber antes de mexer
 
