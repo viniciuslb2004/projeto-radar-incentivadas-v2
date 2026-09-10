@@ -190,7 +190,7 @@ body {
 
 .topbar .brand {
   font-weight: 700;
-  font-size: 17px;
+  font-size: 15px;
   letter-spacing: 0.2px;
   display: flex;
   align-items: center;
@@ -205,30 +205,66 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* Envolve `.tabs` so pra hospedar os degrades de borda (`::before`/`::after`
+   abaixo) por cima da area de rolagem -- e ELE (nao mais `.tabs`) quem e o
+   item flex de `.topbar` agora, entao herda o `min-width:0`/`max-width:100%`
+   que antes viviam em `.tabs` (necessarios pro flex item realmente respeitar
+   o overflow em vez de so crescer alem do container -- gotcha classico de
+   flexbox, confirmado ao testar: sem isso, scrollWidth ficava igual a
+   clientWidth mesmo com as abas visualmente cortadas). */
+.tabs-wrap {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+.tabs-wrap::before, .tabs-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.tabs-wrap::before { left: 0; background: linear-gradient(to right, var(--navy), transparent); }
+.tabs-wrap::after { right: 0; background: linear-gradient(to left, var(--navy), transparent); }
+/* Classes ligadas por JS (`_atualizarSombraAbas` em common.js) -- so aparecem
+   quando `.tabs` realmente tem mais conteudo pra rolar NAQUELA direcao (nunca
+   um degrade decorativo fixo que apareceria mesmo com todas as abas cabendo
+   sem rolar). */
+.tabs-wrap.tem-mais-a-esquerda::before { opacity: 1; }
+.tabs-wrap.tem-mais-a-direita::after { opacity: 1; }
+
 .tabs {
   display: flex;
   gap: 4px;
-  /* Com 7 abas, nao cabe em telas estreitas (celular) -- em vez de deixar as ultimas
-     abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola horizontalmente.
-     Padrao comum de navegacao por abas em mobile, sem precisar de um menu hamburguer.
-     max-width+min-width:0 sao necessarios pro flex item realmente respeitar o
-     overflow em vez de so crescer alem do container (gotcha classico de flexbox --
-     confirmado ao testar: sem isso, scrollWidth ficava igual a clientWidth mesmo com
-     as abas visualmente cortadas). */
-  max-width: 100%;
-  min-width: 0;
+  /* Com 5 abas, pode nao caber em larguras de desktop intermediarias
+     (~950-1250px) nem em telas estreitas (celular) -- em vez de deixar as
+     ultimas abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola
+     horizontalmente. Padrao comum de navegacao por abas em mobile, sem
+     precisar de um menu hamburguer. */
   overflow-x: auto;
   flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  /* Rolagem continua funcionando por touch/wheel/arraste quando as abas nao
+     cabem -- so a BARRA em si fica escondida (feia nessas larguras,
+     reportado pelo usuario), tanto no Firefox (`scrollbar-width`) quanto em
+     Chrome/Edge/Safari (pseudo-elemento abaixo, unico jeito de esconder sem
+     tambem esconder o proprio scroll) -- os degrades de `.tabs-wrap` acima
+     sao o aviso visual de que da pra rolar, no lugar da barra nativa. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab-btn { flex-shrink: 0; }
 
 .tab-btn {
   background: transparent;
   border: none;
   color: var(--blue-lighter);
-  padding: 8px 16px;
+  padding: 8px 12px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;

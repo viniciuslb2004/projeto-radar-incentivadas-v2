@@ -391,12 +391,33 @@ function validarIntervaloDatas(campoAlterado) {
   }
 }
 
+// Liga/desliga os degrades de borda de `.tabs-wrap` (ver style.css) conforme
+// da pra rolar `.tabs` pra esquerda/direita NAQUELE momento -- a barra de
+// scroll nativa foi escondida de proposito (feia em larguras de desktop
+// intermediarias), entao esse e o unico aviso visual de que ha mais abas fora
+// da tela. Chamada no carregamento, ao redimensionar a janela e a cada scroll
+// dentro de `.tabs` (arrastar/roda do mouse muda quanto da pra rolar em cada
+// direcao).
+function _atualizarSombraAbas() {
+  const wrap = document.getElementById("tabs-wrap");
+  const tabs = document.getElementById("tabs");
+  if (!wrap || !tabs) return;
+  const folgaDireita = tabs.scrollWidth - tabs.clientWidth - tabs.scrollLeft;
+  wrap.classList.toggle("tem-mais-a-esquerda", tabs.scrollLeft > 2);
+  wrap.classList.toggle("tem-mais-a-direita", folgaDireita > 2);
+}
+
 function _ligarBotoesDeAba() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => _ativarView(btn.dataset.view, true));
   });
   window.addEventListener("popstate", () => _ativarView(_viewInicialDaURL(), false));
   _ativarView(_viewInicialDaURL(), false);
+
+  const tabsEl = document.getElementById("tabs");
+  if (tabsEl) tabsEl.addEventListener("scroll", _atualizarSombraAbas);
+  window.addEventListener("resize", _atualizarSombraAbas);
+  _atualizarSombraAbas();
 }
 
 // Esconde a tela de carregamento inicial -- chamada em TODO caminho de saida de
