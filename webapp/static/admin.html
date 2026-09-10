@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Admin &middot; Radar de Crédito Incentivado</title>
+<link rel="icon" type="image/png" href="/img/favicon.png">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-login-view" class="admin-login-wrap hidden">
+  <form id="admin-login-card" class="admin-login-card">
+    <img src="/img/logo-artica.png" alt="Ártica" class="login-logo">
+    <div class="login-titulo">Painel de Admin</div>
+    <div class="login-subtitulo">Radar de Crédito Incentivado &middot; acesso restrito</div>
+    <label for="admin-login-usuario">Usuário</label>
+    <input type="text" id="admin-login-usuario" autocomplete="username" autofocus>
+    <label for="admin-login-senha">Senha</label>
+    <input type="password" id="admin-login-senha" autocomplete="current-password">
+    <div id="admin-login-erro" class="login-erro hidden">Usuário ou senha incorretos.</div>
+    <button type="submit" id="admin-login-btn">Entrar</button>
+  </form>
+</div>
+
+<div id="admin-painel-view" class="hidden">
+  <div class="admin-topbar">
+    <div class="admin-brand">
+      <img src="/img/logo-artica.png" alt="Ártica" class="topbar-logo">
+      <div>Painel de Admin</div>
+    </div>
+    <div class="admin-topbar-right">
+      <span id="admin-usuario-logado"></span>
+      <button id="admin-logout-btn" class="admin-btn-secundario">Sair</button>
+    </div>
+  </div>
+
+  <main class="admin-main">
+    <section class="admin-cards" id="admin-cards"></section>
+
+    <section class="admin-secao">
+      <h2>Última atualização de bases</h2>
+      <div class="admin-refresh-grid">
+        <div class="admin-refresh-card">
+          <h3>Operações (BNDES + FINEP)</h3>
+          <div id="admin-refresh-operacoes" class="admin-refresh-body">Carregando...</div>
+        </div>
+        <div class="admin-refresh-card">
+          <h3>Editais FINEP</h3>
+          <div id="admin-refresh-editais" class="admin-refresh-body">Carregando...</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Usuários do painel</h2>
+      <div class="admin-usuarios-toolbar">
+        <input type="text" id="admin-busca-usuario" placeholder="Buscar por usuário...">
+      </div>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Usuário</th>
+            <th>Status</th>
+            <th>Criado em</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="admin-usuarios-tbody">
+          <tr><td colspan="4">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+
+<script src="/js/admin.js"></script>
+</body>
+</html>

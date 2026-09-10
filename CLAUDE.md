@@ -498,6 +498,72 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
 - **`webapp/static/index.html`/`common.js`/`main.py` são arquivos grandes** — ao editar, prefira
   `Grep`/`Read` com offset pontual em vez de carregar o arquivo inteiro de uma vez.
 
+## Painel de Admin (`/admin`)
+
+Área administrativa separada do site público, com contas individuais de verdade (login +
+senha com hash) em vez do login único compartilhado (`SITE_PASSWORD`, ver seção "Acesso" /
+`_verificar_acesso` em `webapp/main.py`) — os dois sistemas de autenticação são INDEPENDENTES,
+um não sabe da existência do outro.
+
+**Decisão deliberada de segregação** (pedido explícito do usuário: fácil de remover inteiro
+se um dia for descontinuado, sem tocar em nada do site público):
+- Todo o backend fica em `webapp/admin/` (pacote próprio): `auth.py` (hash de senha PBKDF2,
+  sessão por token opaco, dependency `exigir_admin`), `routes.py` (`APIRouter` com as rotas
+  `/api/*`, comentário no topo do arquivo com o passo a passo de remoção), `seed.py` (script
+  de migração/seed, roda manualmente, nunca automático).
+- `webapp/main.py` só tem duas linhas nesse pacote: o import e
+  `app.include_router(admin_router, prefix="/admin")` (logo após `STATIC_DIR`). Como o
+  prefixo é `/admin` (nunca `/api`), as rotas do admin **não passam** pelo
+  `_verificar_acesso`/`SITE_PASSWORD` do site público (aquele dependency só age em paths que
+  começam com `/api/`) — são dois portões de acesso completamente distintos.
+  Há também um pequeno ajuste (2 linhas) dentro do catch-all `spa_pagina()` existente, só pro
+  modo local (`uvicorn`): sem ele, esse catch-all (que roda antes do mount de arquivos
+  estáticos) intercepta qualquer caminho de um segmento só e devolve 404 pra `/admin.html`
+  mesmo o arquivo existindo de verdade — não seria um problema no deploy hospedado, onde
+  `vercel.json` resolve `/admin` direto na CDN antes de chegar no FastAPI.
+- Frontend em arquivos próprios, nunca dentro do `index.html`/`common.js` da SPA principal:
+  `webapp/static/admin.html` + `webapp/static/js/admin.js` + `webapp/static/css/admin.css`
+  (reaproveita só as variáveis de cor `:root` de `style.css`, importado antes). Não é uma 6ª
+  aba da SPA — é uma página HTML separada, com seu próprio JS de login/painel (não usa
+  `common.js`, `sessionStorage`/`Authorization` header do site público não têm nada a ver com
+  a sessão do admin).
+- Tabelas próprias e isoladas: `admin_usuarios` (`id`, `username`, `password_hash`, `ativo`,
+  `criado_em`) e `admin_sessoes` (`token` como PK, `usuario_id`, `criado_em`, `expira_em`,
+  `ON DELETE CASCADE` de `admin_usuarios`). Nenhuma delas é referenciada por
+  `operations`/`linhas_incentivadas`/`editais_raw` nem o contrário — o painel só faz
+  `SELECT COUNT(*)`/leituras pontuais nessas tabelas pras estatísticas (nunca escreve nelas).
+  **Diferente do resto do banco**: essas 2 tabelas NÃO estão no `SCHEMA`/`MIGRACOES_COLUNAS`
+  de `src/db.py` de propósito (mantém `db.py` inteiramente intocado) — são criadas por
+  `webapp/admin/seed.py`, rodado manualmente uma única vez (`python webapp/admin/seed.py`),
+  nunca por um startup automático da webapp nem pelo refresh semanal.
+- `vercel.json` tem 2 entradas próprias: rewrite `/admin` → `/admin.html` (arquivo estático
+  próprio, não `/index.html`) e `/admin/api/(.*)` → `/api` (sem isso, as chamadas
+  `/admin/api/*` do frontend nunca chegariam na function serverless em produção — só o
+  rewrite `/api/(.*)` original existia, e `/admin/api/*` não bate nesse padrão).
+
+**Sessão/senha**: hash `pbkdf2_sha256$<iterações>$<salt_base64>$<hash_base64>`
+(PBKDF2-HMAC-SHA256, 600.000 iterações), comparado com `hmac.compare_digest` (nunca `==`).
+Sessão = token opaco (`secrets.token_urlsafe`) gravado em `admin_sessoes` com expiração
+(24h), devolvido como cookie `admin_session` (httponly, `secure` quando `VERCEL` está
+definido, `samesite=strict`, `path=/admin`) — nunca um JWT/cookie assinado client-side, a
+validade é sempre conferida contra a linha em `admin_sessoes` no backend. Desativar um
+usuário (`ativo=false`) invalida a sessão dele na hora, mesmo com o cookie ainda válido
+(`exigir_admin` confere `ativo` a cada requisição) — testado ao vivo: desativar o próprio
+usuário logado derruba a sessão imediatamente, sem esperar o cookie expirar.
+
+**Conta inicial**: `admin`, inserida por `seed.py` com um hash já pronto (a
+senha em texto puro nunca passou pelo código/commit/log — só o hash). Pra adicionar mais
+contas depois, seria natural evoluir `routes.py` com uma rota de criação (hoje só existe
+ativar/desativar via `/admin/api/usuarios/{id}/ativo`, não há rota de criação de usuário
+pelo painel ainda).
+
+**Como remover o painel inteiro** (ver também o comentário no topo de
+`webapp/admin/routes.py`): `DROP TABLE admin_sessoes; DROP TABLE admin_usuarios;` + apagar a
+pasta `webapp/admin/` + apagar `webapp/static/admin.html`/`admin.js`/`admin.css` + remover as
+2 linhas de include em `webapp/main.py` (e o ajuste de 2 linhas em `spa_pagina()`) + remover
+as 2 entradas de rewrite de `vercel.json`. Nada disso toca em `operations`,
+`linhas_incentivadas`, `editais_raw` ou no login único do site público.
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |
@@ -512,5 +578,6 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |
+| Painel de Admin (`/admin`) | `webapp/admin/*`, `webapp/static/admin.html`, `webapp/static/js/admin.js` |
 | Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` |
 | Automação | `.github/workflows/*.yml` |

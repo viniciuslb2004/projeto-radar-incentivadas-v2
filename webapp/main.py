@@ -82,6 +82,11 @@ app.add_middleware(
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+# Painel de admin (/admin) -- pacote isolado e auto-contido, ver webapp/admin/routes.py
+# (comentario no topo) para o que fazer se este painel for descontinuado um dia.
+from webapp.admin.routes import router as admin_router  # noqa: E402
+app.include_router(admin_router, prefix="/admin")
+
 
 @app.on_event("startup")
 def _warmup_busca():
@@ -1278,6 +1283,15 @@ _SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incenti
 
 @app.get("/{pagina}", include_in_schema=False)
 async def spa_pagina(pagina: str):
+    # admin/admin.html: pagina propria e ISOLADA do painel de admin (ver
+    # webapp/admin/), nao faz parte da SPA principal -- tratada aqui em vez de em
+    # _SPA_PAGINAS so porque, sem isso, este catch-all (que roda ANTES do mount de
+    # arquivos estaticos abaixo) intercepta e devolve 404 pra qualquer caminho de UM
+    # segmento so que nao esteja na lista, inclusive um arquivo estatico que existe
+    # de verdade (admin.html). So importa no modo local (`uvicorn`) -- no deploy
+    # hospedado, o rewrite em vercel.json resolve "/admin" direto na CDN.
+    if pagina in ("admin", "admin.html"):
+        return FileResponse(STATIC_DIR / "admin.html")
     if pagina not in _SPA_PAGINAS:
         raise HTTPException(status_code=404)
     return FileResponse(STATIC_DIR / "index.html")

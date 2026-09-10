@@ -3,11 +3,13 @@
   "outputDirectory": "webapp/static",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/admin/api/(.*)", "destination": "/api" },
     { "source": "/consolidado", "destination": "/index.html" },
     { "source": "/tendencias", "destination": "/index.html" },
     { "source": "/busca", "destination": "/index.html" },
     { "source": "/editais", "destination": "/index.html" },
-    { "source": "/linhas-incentivadas", "destination": "/index.html" }
+    { "source": "/linhas-incentivadas", "destination": "/index.html" },
+    { "source": "/admin", "destination": "/admin.html" }
   ],
   "functions": {
     "api/index.py": {
