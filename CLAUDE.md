@@ -246,11 +246,36 @@ listas `_XXX_MANUAL`.
 Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
 (`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
 `history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
-`_viewInicialDaURL`) — nunca query string para estado de UI (ex: a granularidade do gráfico de
-Tendências fica só na página, não na URL; pedido explícito do usuário pra manter a barra de
-endereço limpa). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar) funciona
-via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`) + rewrites
-equivalentes em `vercel.json` (serve pro deploy hospedado).
+`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar)
+funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
++ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+
+**Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
+mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
+a mesma aba com os mesmos filtros aplicados (`sincronizarFiltrosNaURL`/`paramsDaURL` em
+`common.js`, um `_aplicarFiltros*DaURL()` por aba). Sempre `replaceState` (nunca `pushState`)
+pra filtro — só a troca de ABA cria uma entrada de histórico nova. Exclusão deliberada e
+conservadora: só entra o que restringe QUAL FATIA dos dados aparece (setor, UF, agência, data,
+texto de busca etc.) — o que só muda COMO os mesmos dados são exibidos (granularidade do
+gráfico de série temporal, ordenação em Editais/Linhas/Busca/modal de operações, página atual
+da paginação de Linhas) fica de fora, tratado como estado local da página.
+
+Trocar de aba por CLIQUE preserva o último conjunto de filtros que aquela aba (ou grupo de
+abas) já tinha nesta mesma visita à página — tanto na tela quanto na URL — em vez de limpar
+(comportamento antigo, corrigido em 2026-09-10 depois de reportado pelo usuário: "quando mudo
+de guia os filtros não acompanham"). Consolidado e Tendências compartilham o mesmo `#filterbar`
+(mesmos elementos DOM físicos, só escondido via `display:none` pras outras 3 abas), então são
+tratados como um único GRUPO (`_grupoDaView()` em `common.js`) — alternar entre os dois nunca
+limpa nada, já que o filtro de um É o do outro (mesmo input). Busca/Editais/Linhas são cada um
+o próprio grupo — filtros/conceitos de UI incompatíveis entre si (ex: Busca usa `regiao`,
+Consolidado usa `uf`), então NUNCA herdam filtro de um grupo diferente ao serem abertos; só
+restauram o que aquela aba especificamente já teve antes. Mecanismo: `_ultimaQueryPorGrupo`
+(cache em memória, não sobrevive a F5 de propósito — um F5/link direto usa a query já presente
+na URL) grava a última query de cada grupo toda vez que `sincronizarFiltrosNaURL` roda, e
+`_ativarView` consulta esse cache ao montar a URL de destino de um clique real numa aba. Não
+precisou mexer nos CAMPOS de filtro em si — eles já preservavam seu valor sozinhos ao trocar de
+aba (nenhum código os reseta quando a aba fica escondida), só a URL que ficava dessincronizada
+do que já estava na tela.
 
 Filtros de data (mês/ano início e fim, em várias abas) bloqueiam automaticamente um intervalo
 invertido (início > fim) — ver `validarIntervaloDatas()` em `common.js`, ajusta o lado que não
