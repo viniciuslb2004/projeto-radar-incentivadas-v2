@@ -55,6 +55,28 @@ PALAVRAS_GENERICAS_QUERY = {"empresa", "empresas", "companhia", "companhias"}
 # matches de UF dominar o ranking, mesmo com peso mais baixo. Confirmado
 # empiricamente: "empresa de hospitais em SP" so passou a achar o unico hospital real
 # da base depois de tratar a UF como filtro (AND uf = ?), tirando-a do ts_rank.
+# Normalizacao de porte EM TEMPO DE CONSULTA (nunca gravada) -- BNDES e RFB (via
+# enriquecimento da FINEP, ver enrich_cnae.py) classificam porte por metodologias
+# DIFERENTES, entao `operations.porte_cliente` guarda 2 vocabularios distintos ao
+# mesmo tempo (ex: BNDES "PEQUENA" vs RFB "Empresa de Pequeno Porte" pro mesmo
+# conceito). Pedido explicito do usuario (2026-09-10): colapsar em 4 categorias
+# canonicas pro filtro da Busca e pro grafico "Por porte" do Consolidado (ver
+# webapp/main.py::porte_breakdown/filtros) sem migrar/persistir nada -- so uma
+# expressao SQL reaplicada em toda consulta que agrupa/filtra por porte. "Demais"
+# (BNDES, faixa residual que nao distingue media de grande) e os valores "sem
+# classificacao limpa" da RFB caem juntos em "Não informado", igual pedido.
+PORTE_NORMALIZADO_SQL = """
+    CASE porte_cliente
+        WHEN 'Empresa de Pequeno Porte' THEN 'PEQUENA'
+        WHEN 'Micro Empresa' THEN 'MICRO'
+        WHEN 'GRANDE' THEN 'GRANDE'
+        WHEN 'MÉDIA' THEN 'MÉDIA'
+        WHEN 'PEQUENA' THEN 'PEQUENA'
+        WHEN 'MICRO' THEN 'MICRO'
+        ELSE 'Não informado'
+    END
+"""
+
 _UFS_VALIDAS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
     "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
@@ -199,7 +221,11 @@ def buscar_texto(
         params_extra_principal.append(produto)
         params_extra_trigrama.append(produto)
     if porte:
-        filtros_extra.append("porte_cliente = ?")
+        # Filtra pela categoria CANONICA (ver PORTE_NORMALIZADO_SQL) -- selecionar
+        # "PEQUENA" no dropdown precisa achar tanto o "PEQUENA" nativo do BNDES
+        # quanto o "Empresa de Pequeno Porte" da RFB (FINEP), senao o filtro so
+        # bate a metade das operacoes daquela categoria.
+        filtros_extra.append(f"({PORTE_NORMALIZADO_SQL}) = ?")
         params_extra_principal.append(porte)
         params_extra_trigrama.append(porte)
     filtro_sql = ("AND " + " AND ".join(filtros_extra)) if filtros_extra else ""

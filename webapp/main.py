@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
 from db import get_connection
+from search_fts import PORTE_NORMALIZADO_SQL
 from webapp.detalhe import montar_detalhe_amigavel
 
 # As rotas de IA/busca (abaixo) capturam Exception generico e devolvem {"erro": ...}
@@ -234,6 +235,14 @@ def filtros():
         def col_values(col):
             return [r[0] for r in cur.execute(f"SELECT DISTINCT {col} FROM operations WHERE {col} IS NOT NULL ORDER BY {col}").fetchall()]
 
+        # Portes: categorias CANONICAS (ver PORTE_NORMALIZADO_SQL), nao os 7 valores
+        # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
+        # informado" so aparece se alguma operacao realmente cair nela.
+        portes_presentes = {
+            r[0] for r in cur.execute(f"SELECT DISTINCT ({PORTE_NORMALIZADO_SQL}) FROM operations").fetchall()
+        }
+        portes = [p for p in ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "Não informado") if p in portes_presentes]
+
         min_max = cur.execute("SELECT MIN(data_contratacao), MAX(data_contratacao) FROM operations").fetchone()
         return {
             "agencias": col_values("agencia"),
@@ -241,7 +250,7 @@ def filtros():
             "ufs": col_values("uf"),
             "instrumentos": col_values("instrumento"),
             "produtos": col_values("produto"),
-            "portes": col_values("porte_cliente"),
+            "portes": portes,
             "anos": col_values("ano"),
             "data_min": min_max[0],
             "data_max": min_max[1],
@@ -419,9 +428,9 @@ def porte_breakdown(agencia: str = None, setor: str = None, uf: str = None, data
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(porte_cliente, 'Nao informado'), COUNT(*), SUM(valor_contratado)
+            SELECT ({PORTE_NORMALIZADO_SQL}) AS porte_normalizado, COUNT(*), SUM(valor_contratado)
             FROM operations {where}
-            GROUP BY porte_cliente
+            GROUP BY porte_normalizado
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
