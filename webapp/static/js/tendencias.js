@@ -29,7 +29,7 @@ async function loadTendenciasSetores(filters) {
   const data = await fetchJSON("/api/tendencias/setores?" + qs(filters));
   const periodoTxt = data.comparavel
     ? `${fmtPeriodo(data.periodo_atual)} vs. ${fmtPeriodo(data.periodo_anterior)}`
-    : `${fmtPeriodo(data.periodo_atual)} · sem dados no período anterior para comparar`;
+    : `${fmtPeriodo(data.periodo_atual)} · Não é possível informar as porcentagens devido a limitação de períodos da base`;
   document.getElementById("tend-header-alta").firstChild.textContent = `Setores em alta `;
   document.getElementById("tend-header-queda").firstChild.textContent = `Setores em queda `;
   document.querySelectorAll("#tend-header-alta .hint, #tend-header-queda .hint").forEach((el) => el.remove());
@@ -79,10 +79,18 @@ async function loadSubsetores(filters) {
   const alta = subsetoresValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = subsetoresValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
+  // ranking.comparavel=false (ver _ranking_variacao em main.py) -- periodo anterior
+  // parcial/totalmente fora da cobertura real da base -- variacao_pp vem null pra
+  // toda linha, entao alta/queda ficam vazios por acaso; sem essa mensagem
+  // especifica, a lista vazia pareceria "sem variacao real" em vez de "nao da pra
+  // comparar" (mesma classe de bug ja corrigida na secao de Setores acima).
+  const vazioSubsetor = ranking.comparavel
+    ? "Sem variação relevante"
+    : "Não é possível informar as porcentagens devido a limitação de períodos da base";
   const listaAlta = document.getElementById("lista-subsetor-alta");
   const listaQueda = document.getElementById("lista-subsetor-queda");
-  listaAlta.innerHTML = alta.map((r) => trendListItem(r, "up", "subsetor")).join("") || '<li class="empty-state">Sem variação relevante</li>';
-  listaQueda.innerHTML = queda.map((r) => trendListItem(r, "down", "subsetor")).join("") || '<li class="empty-state">Sem variação relevante</li>';
+  listaAlta.innerHTML = alta.map((r) => trendListItem(r, "up", "subsetor")).join("") || `<li class="empty-state">${vazioSubsetor}</li>`;
+  listaQueda.innerHTML = queda.map((r) => trendListItem(r, "down", "subsetor")).join("") || `<li class="empty-state">${vazioSubsetor}</li>`;
 
   [listaAlta, listaQueda].forEach((ul) => {
     ul.querySelectorAll("li[data-subsetor]").forEach((li) => {
@@ -138,10 +146,14 @@ async function loadSegmentos(filters) {
   const alta = segmentosValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = segmentosValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
+  // Mesmo caso de _ranking_variacao/comparavel=false explicado em loadSubsetores acima.
+  const vazioSegmento = ranking.comparavel
+    ? "Sem variação relevante"
+    : "Não é possível informar as porcentagens devido a limitação de períodos da base";
   const listaAlta = document.getElementById("lista-segmento-alta");
   const listaQueda = document.getElementById("lista-segmento-queda");
-  listaAlta.innerHTML = alta.map((r) => trendListItem(r, "up", "segmento")).join("") || '<li class="empty-state">Sem variação relevante</li>';
-  listaQueda.innerHTML = queda.map((r) => trendListItem(r, "down", "segmento")).join("") || '<li class="empty-state">Sem variação relevante</li>';
+  listaAlta.innerHTML = alta.map((r) => trendListItem(r, "up", "segmento")).join("") || `<li class="empty-state">${vazioSegmento}</li>`;
+  listaQueda.innerHTML = queda.map((r) => trendListItem(r, "down", "segmento")).join("") || `<li class="empty-state">${vazioSegmento}</li>`;
 
   [listaAlta, listaQueda].forEach((ul) => {
     ul.querySelectorAll("li[data-segmento]").forEach((li) => {
