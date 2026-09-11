@@ -478,12 +478,10 @@ async function _initFiltersAndTabsImpl() {
   window.MODO_HOSPEDADO = !!status.hospedado;
   window.BUSCA_IA_ATIVA = !!status.busca_ia_ativa;
   document.dispatchEvent(new CustomEvent("modo-hospedado-conhecido"));
-  if (status.ultimo_refresh && status.ultimo_refresh.finished_at) {
-    const d = new Date(status.ultimo_refresh.finished_at);
-    pill.textContent = `${fmtNum(status.n_operacoes)} operações · atualizado em ${d.toLocaleDateString("pt-BR")}`;
-  } else {
-    pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
-  }
+  // Pedido do usuario (2026-09-11): so a contagem, sem "atualizado em ..." --
+  // o dado de ultimo_refresh continua vindo de /api/status (usado em outros
+  // lugares, ex: painel de admin), so parou de aparecer aqui.
+  pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
 
   let filtros;
   try {
