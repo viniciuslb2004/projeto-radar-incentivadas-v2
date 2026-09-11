@@ -394,6 +394,16 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   `plainto_tsquery` por palavra, também dentro do CASE) chegou a ser testada e
   mediu uma query de 8 palavras subindo de ~9s pra **55s** só por causa disso,
   contra o Aiven — meça antes de assumir que "mais uma condição" é barato.
+- **"grupo"/"grupos" faltando em `PALAVRAS_GENERICAS_QUERY`** (`src/search_fts.py`):
+  mesmo problema que "empresa" (ver `_periodo_anterior`/hospital-vs-SP acima), só
+  descoberto depois — "grupo" é uma palavra de estrutura societária tão comum quanto
+  "empresa" (qualquer "Grupo X" da base), então diluía o OR de texto livre (tier 5) do
+  mesmo jeito. Confirmado ao vivo (2026-09-11): buscar "Grupo Belterra" achava a
+  empresa real (`AGROFLORESTAL BELTERRA AMAZONIA SPE SA`) só na posição 37/200, e
+  "grupo mombak" (`MOMBAK ANGICO-BRANCO FLORESTAL S.A.`) na posição 23/200 — nos dois
+  casos, buscar só pelo nome próprio (sem "grupo") já achava a empresa em 1º lugar,
+  confirmando que não era dado faltando, só a palavra genérica competindo no ranking.
+  Corrigido adicionando `"grupo"/"grupos"` ao mesmo set.
 - **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
   larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira

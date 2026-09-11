@@ -45,7 +45,15 @@ LIMIAR_SIMILARIDADE_TRGM = 0.25
 # especifico de "hospitais" no setor/segmento (peso B) -- essas ficam de fora do
 # OR-tsquery de texto livre (tier 4), mas continuam valendo normalmente nos tiers 1-3
 # (comparam a FRASE completa digitada, nao palavra a palavra).
-PALAVRAS_GENERICAS_QUERY = {"empresa", "empresas", "companhia", "companhias"}
+# "grupo"/"grupos": mesmo problema, confirmado ao vivo em 2026-09-11 -- "Grupo
+# Belterra" (posicao 37/200) e "grupo mombak" (posicao 23/200) rankeavam mal porque
+# "grupo" (termo de estrutura societaria comum, ex: "GRUPO CULTURAL BAGUNCACO",
+# "Grupo Salta Educação S.A.") diluia o OR de texto livre do mesmo jeito que
+# "empresa" ja fazia -- as duas empresas reais (AGROFLORESTAL BELTERRA AMAZONIA SPE
+# SA, MOMBAK ANGICO-BRANCO FLORESTAL S.A.) ja rankeavam em 1o lugar buscando so pelo
+# nome proprio (Belterra/MOMBAK...), confirmando que o problema era so a palavra
+# generica, nao dado faltando.
+PALAVRAS_GENERICAS_QUERY = {"empresa", "empresas", "companhia", "companhias", "grupo", "grupos"}
 
 # UF (2 letras) e um FILTRO estruturado, nao um termo de conteudo -- deixa-lo entrar
 # no OR-tsquery de texto livre (tier 4) e um problema pior do que "empresa": o codigo
