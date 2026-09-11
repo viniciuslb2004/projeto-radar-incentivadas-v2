@@ -41,6 +41,21 @@ function _urlCompleta(url) {
 // explicitamente, entao nao sao afetadas.
 const TIMEOUT_PADRAO_MS = 45000;
 
+// Usuario logado (username de /api/me, ou null se login individual nao estiver
+// configurado). Cacheado numa Promise unica -- varios lugares da SPA (topbar,
+// historico pessoal de busca) precisam saber "quem esta logado" e nao devem
+// disparar um /api/me por chamador.
+let _usuarioAtualPromise = null;
+function obterUsuarioAtual() {
+  if (!_usuarioAtualPromise) {
+    _usuarioAtualPromise = fetch(_urlCompleta("/api/me"), { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { username: null }))
+      .then((dado) => dado.username || null)
+      .catch(() => null);
+  }
+  return _usuarioAtualPromise;
+}
+
 // ============ Login (tela custom, ver #login-overlay em index.html) ============
 // Ate 2026-09: HTTP Basic + header guardado em sessionStorage. Substituido por
 // sessao de cookie (conta individual, tabela `admin_usuarios`, EXCECAO documentada
@@ -141,14 +156,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // login por conta individual estiver configurado E alguem estiver logado --
   // ver /api/me em webapp/main.py). Sem login configurado (dev local sem nenhuma
   // conta ainda), a rota devolve username=null e este bloco fica escondido.
-  fetch(_urlCompleta("/api/me"), { credentials: "include" })
-    .then((r) => (r.ok ? r.json() : { username: null }))
-    .then((dado) => {
-      if (!dado.username) return;
-      document.getElementById("topbar-usuario-nome").textContent = dado.username;
-      document.getElementById("topbar-usuario").classList.remove("hidden");
-    })
-    .catch(() => {});
+  obterUsuarioAtual().then((usuario) => {
+    if (!usuario) return;
+    document.getElementById("topbar-usuario-nome").textContent = usuario;
+    document.getElementById("topbar-usuario").classList.remove("hidden");
+  });
 
   document.getElementById("topbar-logout-btn").addEventListener("click", async () => {
     try {
