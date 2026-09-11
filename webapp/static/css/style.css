@@ -179,11 +179,12 @@ body {
    horizontal em vez de forcar quebra de linha no container inteiro) -- sem isso,
    o ultimo item da direita as vezes ia sozinho pra uma segunda linha meio solta
    em larguras intermediarias de desktop (bug real reportado pelo usuario, na
-   epoca com o status-pill morando aqui -- o status-pill migrou pra .status-strip
-   abaixo, mas o mesmo risco existe agora pro bloco usuario/Sair). Em telas mais
-   estreitas (tablet/celular), mantem o `wrap` do bloco base acima -- empilhar
-   brand/abas/usuario em linhas separadas e o comportamento certo la, ja testado
-   e funcionando. */
+   epoca com o status-pill morando aqui -- ele depois migrou pra uma faixa propria
+   e, mais tarde, pra dentro do .filterbar, ver comentario la; o mesmo risco de
+   quebra de linha existe agora pro bloco usuario/Sair). Em telas mais estreitas
+   (tablet/celular), mantem o `wrap` do bloco base acima -- empilhar brand/abas/
+   usuario em linhas separadas e o comportamento certo la, ja testado e
+   funcionando. */
 @media (min-width: 900px) {
   .topbar { flex-wrap: nowrap; }
   .topbar .brand, .topbar-usuario { flex-shrink: 0; white-space: nowrap; }
@@ -297,25 +298,6 @@ body {
 }
 .topbar-logout-btn:hover { background: var(--steel); }
 
-/* Faixa fina entre a topbar principal e a barra de filtros -- so o status-pill
-   (contagem total + data do ultimo refresh) mora aqui agora; o canto superior
-   direito da topbar principal, antes ocupado por ele, virou usuario logado + Sair
-   (ver .topbar-usuario acima) assim que o login por conta individual existiu. */
-.status-strip {
-  background: var(--navy-900);
-  padding: 4px 28px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.status-pill {
-  font-size: 11px;
-  color: var(--blue-lighter);
-  background: rgba(255,255,255,0.06);
-  padding: 5px 10px;
-  border-radius: 20px;
-}
-
 /* ============ Filter bar ============ */
 .filterbar {
   background: var(--card-bg);
@@ -325,6 +307,28 @@ body {
   gap: 14px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* Contagem total + data do ultimo refresh -- morava numa faixa escura propria
+   (.status-strip) entre a topbar e esta barra; o usuario pediu pra remover essa
+   faixa e trazer o texto pra dentro da barra de filtros (fundo claro, por isso
+   as cores mudaram pra combinar com o resto do .filterbar em vez do
+   translucido-sobre-escuro de antes). `margin-left:auto` empurra pro canto
+   direito quando cabe tudo numa linha só; com `flex-wrap:wrap` do .filterbar,
+   cai pra uma linha própria em telas estreitas em vez de espremer os selects.
+   Como esta barra só existe (`display:flex`, ver _ativarView em common.js) nas
+   abas Consolidado/Tendências, esse texto some junto nas outras 3 abas
+   (Busca/Editais/Linhas nunca mostraram esta barra) -- consequência direta do
+   pedido do usuário de colocar o texto DENTRO dela, não um efeito colateral
+   escondido. */
+.status-pill {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 5px 10px;
+  border-radius: 20px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .filterbar label {
