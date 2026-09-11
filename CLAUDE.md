@@ -703,7 +703,13 @@ depois do acoplamento do login): o texto "N operações · atualizado em ..." qu
 superior direito da topbar principal migrou pra uma faixa fina própria (`.status-strip`) logo
 abaixo — o espaço que abriu no canto da topbar virou usuário logado + botão "Sair" (mesmo
 padrão visual do painel de admin), alimentado por um novo `GET /api/me` (site, não confundir
-com `GET /admin/api/me`, do painel).
+com `GET /admin/api/me`, do painel). **Essa faixa (`.status-strip`) foi removida depois
+(2026-09-11)** — pedido do usuário: o texto (`#status-pill`) passou a viver DENTRO da
+`.filterbar` (barra branca de filtros), empurrado pro canto direito via `margin-left:auto`,
+em vez de numa faixa escura própria. Como `.filterbar` só é exibida (`display:flex`, ver
+`_ativarView` em `common.js`) nas abas Consolidado/Tendências, esse texto agora só aparece
+nessas duas — nas outras 3 (Busca/Editais/Linhas, que nunca mostraram essa barra) ele
+simplesmente não aparece, consequência direta e esperada de tê-lo colocado dentro dela.
 
 **Como remover o painel inteiro** (ver também o comentário no topo de
 `webapp/admin/routes.py`): 1) reverter o acoplamento do login do site principal (ver acima)
