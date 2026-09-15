@@ -739,6 +739,38 @@ Reaproveita `admin_acessos_log` (só filtra por `usuario_id`), nenhuma tabela no
 tracking novo — explicitamente MENOR que uma V2 de analytics (que continua fora do escopo,
 ver acima).
 
+**Cadastro público com aprovação** (`POST /api/registrar` + `/admin/api/usuarios/pendentes`
++ `/{id}/aprovar`/`/{id}/rejeitar`, aprovado 2026-09-15): a tela de login do SITE PRINCIPAL
+(`#login-overlay` em `index.html`) ganhou um segundo formulário (`#registrar-card`, alternado
+via botão "Criar conta" — `common.js::_mostrarRegistrarOverlay`/`_voltarParaLogin`) pra
+qualquer visitante pedir uma conta nova, sem precisar de um admin criar na mão.
+- **Schema**: nova coluna `admin_usuarios.status` (`'pendente'` | `'aprovado'` |
+  `'rejeitado'`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... DEFAULT 'aprovado'` — MESMO
+  padrão de `role`, ver `seed.py`) — default `'aprovado'` garante que toda conta que já
+  existia antes desta migração (seed + criadas pelo CRUD do painel) continua logando
+  normalmente sem aprovação retroativa nenhuma. Nenhuma tabela nova.
+- **`POST /api/registrar`** (rota pública, adicionada a `_ROTAS_PUBLICAS_API` em
+  `webapp/main.py`): valida username único + senha ≥8 caracteres, gera o hash na hora
+  (`gerar_hash_senha`, MESMA função usada pelo CRUD do painel — senha em texto puro nunca
+  persistida/logada), insere com `role='usuario'` **sempre** (nunca `'admin'` — promover a
+  admin continua sendo uma ação manual separada, via CRUD) e `status='pendente'`.
+- **Login com conta não aprovada**: `autenticar_credenciais` (`webapp/admin/auth.py`) devolve
+  o usuário mesmo com `status` diferente de `'aprovado'` (não filtra na query) — quem chama
+  (login do site em `webapp/main.py::site_login` E login do painel em
+  `webapp/admin/routes.py::login`) checa `mensagem_status_bloqueado(status)` DEPOIS de
+  validar a senha, e devolve uma mensagem especifica ("Sua conta ainda não foi aprovada por
+  um administrador." / "Sua solicitação de conta foi rejeitada.") em vez do genérico "usuário
+  ou senha incorretos" — dá pra saber a diferença entre "esqueci minha senha" e "minha conta
+  está pendente" sem vazar se o USERNAME existe (a mensagem só aparece depois da senha bater).
+  `_tentarLogin` (`common.js`) foi ajustado pra devolver `{ok, mensagem}` em vez de só um
+  booleano, propagando a mensagem real do backend pro usuário.
+- **Aprovação/rejeição**: nova seção "Contas pendentes de aprovação" no painel (própria,
+  separada do CRUD normal — `GET /admin/api/usuarios/pendentes`), com botões Aprovar/Rejeitar
+  (`POST .../aprovar` ou `.../rejeitar`, só mudam `status`, nunca `role`/`ativo`). O CRUD
+  normal (`GET /admin/api/usuarios`) agora filtra `status != 'pendente'` — contas pendentes
+  só aparecem na seção de aprovação, nunca na lista normal (evita confundir "editar uma conta
+  existente" com "decidir sobre um pedido novo").
+
 **Usuário logado + Sair no site principal** (`webapp/static/index.html`/`common.js`, natural
 depois do acoplamento do login): o texto "N operações · atualizado em ..." que morava no canto
 superior direito da topbar principal migrou pra uma faixa fina própria (`.status-strip`) logo

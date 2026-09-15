@@ -21,7 +21,9 @@ from webapp.admin.auth import (
     criar_sessao,
     definir_cookie_sessao,
     encerrar_sessao,
+    gerar_hash_senha,
     limpar_cookie_sessao,
+    mensagem_status_bloqueado,
     registrar_acesso,
     validar_sessao_token,
     verificar_acesso_principal,
@@ -56,7 +58,7 @@ MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
 # pagina carrega uma tela de login customizada (ver #login-overlay em index.html,
 # _tentarLogin()/_mostrarLoginOverlay() em common.js) que faz POST /api/login (cookie
 # de sessao, nao mais header Basic guardado em sessionStorage).
-_ROTAS_PUBLICAS_API = {"/api/login", "/api/logout"}
+_ROTAS_PUBLICAS_API = {"/api/login", "/api/logout", "/api/registrar"}
 
 
 def _verificar_acesso(request: Request):
@@ -117,12 +119,46 @@ def site_login(payload: dict, request: Request, response: Response):
         usuario = autenticar_credenciais(conn, username, senha)
         if usuario is None:
             raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
+        mensagem_bloqueio = mensagem_status_bloqueado(usuario["status"])
+        if mensagem_bloqueio:
+            raise HTTPException(status_code=401, detail=mensagem_bloqueio)
         token = criar_sessao(conn, usuario["id"])
         registrar_acesso(conn, usuario["id"], usuario["username"], "site", "login", _ip_do_request(request))
     finally:
         conn.close()
     definir_cookie_sessao(response, token)
     return {"ok": True, "username": usuario["username"]}
+
+
+@app.post("/api/registrar")
+def site_registrar(payload: dict):
+    """Cadastro publico (rota SEM autenticacao, ver _ROTAS_PUBLICAS_API abaixo) --
+    conta nasce com status='pendente' e role='usuario' (SEMPRE -- promover a admin
+    continua sendo uma acao manual separada, via CRUD do painel). Login com conta
+    pendente/rejeitada falha com mensagem especifica (ver mensagem_status_bloqueado
+    em webapp/admin/auth.py), nunca cria sessao."""
+    username = (payload.get("username") or "").strip()
+    senha = payload.get("password") or ""
+    if not username:
+        raise HTTPException(status_code=400, detail="Usuario e obrigatorio")
+    if len(senha) < 8:
+        raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 8 caracteres")
+
+    password_hash = gerar_hash_senha(senha)
+    conn = get_connection(pooled=True)
+    try:
+        ja_existe = conn.execute("SELECT 1 FROM admin_usuarios WHERE username = ?", (username,)).fetchone()
+        if ja_existe:
+            raise HTTPException(status_code=409, detail="Ja existe uma conta com esse nome de usuario")
+        conn.execute(
+            "INSERT INTO admin_usuarios (username, password_hash, role, status, ativo, criado_em) "
+            "VALUES (?, ?, 'usuario', 'pendente', TRUE, ?)",
+            (username, password_hash, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.get("/api/me")

@@ -90,7 +90,7 @@
 }
 #login-overlay.hidden { display: none; }
 
-#login-card {
+#login-card, #registrar-card {
   background: var(--steel);
   border-radius: var(--radius);
   box-shadow: 0 10px 40px rgba(0,0,0,0.35);
@@ -108,7 +108,7 @@
 .login-titulo { font-weight: 700; font-size: 16px; text-align: center; }
 .login-subtitulo { font-size: 12px; color: var(--blue-lighter); text-align: center; margin-bottom: 16px; }
 
-#login-card label {
+#login-card label, #registrar-card label {
   align-self: flex-start;
   font-size: 11px;
   color: var(--blue-lighter);
@@ -116,7 +116,7 @@
   letter-spacing: 0.4px;
   margin-top: 10px;
 }
-#login-card input {
+#login-card input, #registrar-card input {
   width: 100%;
   border: 1px solid var(--blue-mid);
   border-radius: 6px;
@@ -127,8 +127,8 @@
   background: rgba(255,255,255,0.08);
   color: #fff;
 }
-#login-card input::placeholder { color: var(--blue-lighter); }
-#login-card input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
+#login-card input::placeholder, #registrar-card input::placeholder { color: var(--blue-lighter); }
+#login-card input:focus, #registrar-card input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
 
 .login-erro {
   color: #ff9b9b;
@@ -152,6 +152,42 @@
 }
 #login-btn:hover { background: var(--navy); }
 #login-btn:disabled { opacity: 0.6; cursor: default; }
+
+.login-link-btn {
+  margin-top: 12px;
+  width: 100%;
+  background: transparent;
+  color: var(--blue-lighter);
+  border: none;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px;
+}
+.login-link-btn:hover { color: #fff; }
+
+.login-sucesso {
+  color: #9fe8a8;
+  font-size: 12px;
+  margin-top: 12px;
+  text-align: center;
+}
+.login-sucesso.hidden { display: none; }
+
+#registrar-btn {
+  margin-top: 20px;
+  width: 100%;
+  background: var(--navy-900);
+  color: #fff;
+  border: 1px solid var(--blue-mid);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#registrar-btn:hover { background: var(--navy); }
+#registrar-btn:disabled { opacity: 0.6; cursor: default; }
 
 body {
   margin: 0;

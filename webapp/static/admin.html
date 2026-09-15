@@ -69,6 +69,27 @@
     </section>
 
     <section class="admin-secao">
+      <h2>Contas pendentes de aprovação</h2>
+      <p class="admin-secao-desc">
+        Pedidos de cadastro feitos pela tela de login do site principal. Contas aprovadas
+        nascem sempre com papel "Usuário" — promover a admin é uma ação separada, pelo CRUD
+        abaixo.
+      </p>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Usuário</th>
+            <th>Solicitado em</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="admin-pendentes-tbody">
+          <tr><td colspan="3">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
       <div class="admin-secao-header">
         <h2>Usuários do painel</h2>
         <button id="admin-novo-usuario-btn" class="admin-btn-primario">+ Novo usuário</button>

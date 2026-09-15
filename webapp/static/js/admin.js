@@ -15,6 +15,7 @@
   const logoutBtn = document.getElementById("admin-logout-btn");
   const buscaInput = document.getElementById("admin-busca-usuario");
   const usuariosTbody = document.getElementById("admin-usuarios-tbody");
+  const pendentesTbody = document.getElementById("admin-pendentes-tbody");
   const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
   const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
@@ -153,6 +154,43 @@
     const dado = await resp.json();
     renderUsuarios(dado.usuarios);
   }
+
+  function renderPendentes(pendentes) {
+    if (!pendentes.length) {
+      pendentesTbody.innerHTML = '<tr><td colspan="3">Nenhuma solicitação pendente.</td></tr>';
+      return;
+    }
+    pendentesTbody.innerHTML = pendentes
+      .map(
+        (p) => `<tr>
+          <td>${p.username}</td>
+          <td>${formatarData(p.criado_em)}</td>
+          <td>
+            <button class="admin-toggle-btn" data-acao="aprovar" data-id="${p.id}">Aprovar</button>
+            <button class="admin-toggle-btn" data-acao="rejeitar" data-id="${p.id}">Rejeitar</button>
+          </td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  async function carregarPendentes() {
+    const resp = await apiFetch("/usuarios/pendentes");
+    const dado = await resp.json();
+    renderPendentes(dado.pendentes);
+  }
+
+  pendentesTbody.addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".admin-toggle-btn[data-acao]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await apiFetch(`/usuarios/${btn.dataset.id}/${btn.dataset.acao}`, { method: "POST" });
+      await Promise.all([carregarPendentes(), carregarUsuarios(buscaInput.value)]);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   function renderAcessos(acessos) {
     if (!acessos.length) {
@@ -514,6 +552,7 @@
     await Promise.all([
       carregarDashboard(),
       carregarUsuarios(""),
+      carregarPendentes(),
       carregarAcessos(),
       carregarSaudeBanco(),
       carregarCorrecoes(),

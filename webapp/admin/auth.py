@@ -62,19 +62,34 @@ def _cookie_secure() -> bool:
 
 def autenticar_credenciais(conn, username: str, senha: str):
     """Verifica username+senha contra admin_usuarios (precisa estar ativo) e devolve
-    {'id','username','role'} se validas, None caso contrario -- usado tanto pelo
-    login do painel /admin quanto pelo login do site principal (MESMA tabela de
-    contas, ver docstring do modulo)."""
+    {'id','username','role','status'} se validas, None caso contrario -- usado tanto
+    pelo login do painel /admin quanto pelo login do site principal (MESMA tabela de
+    contas, ver docstring do modulo). NAO filtra por `status` aqui de proposito --
+    devolve o usuario mesmo com status='pendente'/'rejeitado' pra quem chamou poder
+    mostrar uma mensagem especifica (ver `mensagem_status_bloqueado`) em vez do
+    generico "usuario ou senha incorretos"."""
     row = conn.execute(
-        "SELECT id, password_hash, ativo, role FROM admin_usuarios WHERE username = ?",
+        "SELECT id, password_hash, ativo, role, status FROM admin_usuarios WHERE username = ?",
         (username,),
     ).fetchone()
     if row is None:
         return None
-    usuario_id, password_hash, ativo, role = row
+    usuario_id, password_hash, ativo, role, status = row
     if not ativo or not verificar_senha(senha, password_hash):
         return None
-    return {"id": usuario_id, "username": username, "role": role}
+    return {"id": usuario_id, "username": username, "role": role, "status": status}
+
+
+def mensagem_status_bloqueado(status: str):
+    """Devolve uma mensagem de login clara pra status='pendente'/'rejeitado', ou
+    None se status='aprovado' (login pode prosseguir). Contas seed/antigas (criadas
+    antes deste cadastro publico existir) tem status='aprovado' por default via
+    migracao (ver seed.py), entao nunca caem aqui."""
+    if status == "pendente":
+        return "Sua conta ainda nao foi aprovada por um administrador."
+    if status == "rejeitado":
+        return "Sua solicitacao de conta foi rejeitada."
+    return None
 
 
 def criar_sessao(conn, usuario_id: int) -> str:

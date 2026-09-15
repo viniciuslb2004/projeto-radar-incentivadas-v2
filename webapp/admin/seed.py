@@ -80,6 +80,12 @@ CREATE INDEX IF NOT EXISTS idx_admin_acessos_log_criado_em ON admin_acessos_log(
 # da insercao.
 MIGRACAO_ROLE = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'"
 
+# 'pendente' | 'aprovado' | 'rejeitado' -- cadastro publico (POST /api/registrar,
+# ver webapp/main.py). Default 'aprovado' pelo MESMO motivo do MIGRACAO_ROLE acima:
+# todas as contas que ja existiam antes desta coluna (seed + criadas pelo CRUD do
+# painel) devem continuar logando normalmente sem precisar de aprovacao retroativa.
+MIGRACAO_STATUS = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'aprovado'"
+
 
 def main():
     from datetime import datetime, timezone
@@ -98,6 +104,10 @@ def main():
         conn.execute(MIGRACAO_ROLE)
         conn.commit()
         print("Coluna admin_usuarios.role pronta.")
+
+        conn.execute(MIGRACAO_STATUS)
+        conn.commit()
+        print("Coluna admin_usuarios.status pronta.")
 
         for username, password_hash, role in SEED_USUARIOS:
             ja_existe = conn.execute(

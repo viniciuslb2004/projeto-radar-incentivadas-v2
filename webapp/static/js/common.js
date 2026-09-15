@@ -101,6 +101,11 @@ async function postJSON(url, body, timeoutMs) {
 
 function _mostrarLoginOverlay(mensagemErro) {
   document.getElementById("login-overlay").classList.remove("hidden");
+  // Garante que a tela de LOGIN (nao a de cadastro) fica visivel -- cobre o caso
+  // raro de uma chamada de fundo devolver 401 enquanto o usuario esta na tela de
+  // "Criar conta" (ver registrar-card).
+  document.getElementById("registrar-card").classList.add("hidden");
+  document.getElementById("login-card").classList.remove("hidden");
   const erro = document.getElementById("login-erro");
   if (mensagemErro) {
     erro.textContent = mensagemErro;
@@ -113,6 +118,9 @@ function _mostrarLoginOverlay(mensagemErro) {
 
 // POST /api/login com as credenciais digitadas -- em caso de sucesso, o backend ja
 // devolve o cookie de sessao (Set-Cookie), nada pra guardar manualmente aqui.
+// Devolve {ok, mensagem} em vez de so um booleano -- desde que contas podem ficar
+// 'pendente'/'rejeitado' (ver cadastro publico abaixo), o motivo da falha nao e
+// mais sempre "usuario ou senha incorretos", e o backend ja manda a mensagem certa.
 async function _tentarLogin(usuario, senha) {
   try {
     const r = await fetch(_urlCompleta("/api/login"), {
@@ -121,12 +129,28 @@ async function _tentarLogin(usuario, senha) {
       body: JSON.stringify({ username: usuario, password: senha }),
       credentials: "include",
     });
-    return r.status === 200;
+    if (r.status === 200) return { ok: true };
+    const dado = await r.json().catch(() => ({}));
+    return { ok: false, mensagem: dado.detail || "Usuário ou senha incorretos." };
   } catch (e) {
     // erro de rede tratado como falha de login tambem -- usuario ve a mesma
     // mensagem e pode tentar de novo.
-    return false;
+    return { ok: false, mensagem: "Usuário ou senha incorretos." };
   }
+}
+
+function _mostrarRegistrarOverlay() {
+  document.getElementById("login-card").classList.add("hidden");
+  document.getElementById("registrar-card").classList.remove("hidden");
+  document.getElementById("registrar-erro").classList.add("hidden");
+  document.getElementById("registrar-sucesso").classList.add("hidden");
+  document.getElementById("registrar-usuario").focus();
+}
+
+function _voltarParaLogin() {
+  document.getElementById("registrar-card").classList.add("hidden");
+  document.getElementById("login-card").classList.remove("hidden");
+  document.getElementById("login-usuario").focus();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -137,10 +161,10 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.textContent = "Entrando...";
     const usuario = document.getElementById("login-usuario").value;
     const senha = document.getElementById("login-senha").value;
-    const ok = await _tentarLogin(usuario, senha);
+    const resultado = await _tentarLogin(usuario, senha);
     btn.disabled = false;
     btn.textContent = "Entrar";
-    if (ok) {
+    if (resultado.ok) {
       // Recarrega a pagina inteira em vez de tentar re-disparar manualmente a
       // inicializacao de cada aba (consolidado.js, tendencias.js etc, cada um so
       // roda seu proprio DOMContentLoaded uma vez) -- mais simples e robusto:
@@ -148,7 +172,49 @@ document.addEventListener("DOMContentLoaded", () => {
       location.reload();
     } else {
       document.getElementById("login-senha").value = "";
-      _mostrarLoginOverlay("Usuário ou senha incorretos.");
+      _mostrarLoginOverlay(resultado.mensagem);
+    }
+  });
+
+  document.getElementById("login-ir-criar-conta").addEventListener("click", _mostrarRegistrarOverlay);
+  document.getElementById("registrar-ir-login").addEventListener("click", _voltarParaLogin);
+
+  // Cadastro publico (POST /api/registrar) -- conta nasce 'pendente', precisa de
+  // aprovacao de um admin pelo painel antes de conseguir logar (ver
+  // webapp/admin/routes.py::aprovar_usuario / CLAUDE.md, secao "Painel de Admin").
+  document.getElementById("registrar-card").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("registrar-btn");
+    const erroEl = document.getElementById("registrar-erro");
+    const sucessoEl = document.getElementById("registrar-sucesso");
+    erroEl.classList.add("hidden");
+    sucessoEl.classList.add("hidden");
+    const usuario = document.getElementById("registrar-usuario").value.trim();
+    const senha = document.getElementById("registrar-senha").value;
+    btn.disabled = true;
+    btn.textContent = "Enviando...";
+    try {
+      const r = await fetch(_urlCompleta("/api/registrar"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: usuario, password: senha }),
+        credentials: "include",
+      });
+      const dado = await r.json().catch(() => ({}));
+      if (r.status === 200) {
+        document.getElementById("registrar-usuario").value = "";
+        document.getElementById("registrar-senha").value = "";
+        sucessoEl.classList.remove("hidden");
+      } else {
+        erroEl.textContent = dado.detail || "Não foi possível enviar a solicitação.";
+        erroEl.classList.remove("hidden");
+      }
+    } catch (e2) {
+      erroEl.textContent = "Erro de rede -- tente novamente.";
+      erroEl.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Solicitar conta";
     }
   });
 

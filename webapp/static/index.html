@@ -27,6 +27,21 @@
     <input type="password" id="login-senha" autocomplete="current-password">
     <div id="login-erro" class="login-erro hidden">Usuário ou senha incorretos.</div>
     <button type="submit" id="login-btn">Entrar</button>
+    <button type="button" id="login-ir-criar-conta" class="login-link-btn">Criar conta</button>
+  </form>
+
+  <form id="registrar-card" class="hidden">
+    <img src="/img/logo-artica.png" alt="Ártica" class="login-logo">
+    <div class="login-titulo">Criar conta</div>
+    <div class="login-subtitulo">Sua conta precisa ser aprovada por um administrador antes de acessar.</div>
+    <label for="registrar-usuario">Usuário</label>
+    <input type="text" id="registrar-usuario" autocomplete="username">
+    <label for="registrar-senha">Senha</label>
+    <input type="password" id="registrar-senha" autocomplete="new-password" placeholder="Mínimo 8 caracteres">
+    <div id="registrar-erro" class="login-erro hidden"></div>
+    <div id="registrar-sucesso" class="login-sucesso hidden">Solicitação enviada! Aguarde a aprovação de um administrador.</div>
+    <button type="submit" id="registrar-btn">Solicitar conta</button>
+    <button type="button" id="registrar-ir-login" class="login-link-btn">Já tenho conta &middot; entrar</button>
   </form>
 </div>
 
