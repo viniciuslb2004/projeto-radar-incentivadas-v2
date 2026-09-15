@@ -89,6 +89,7 @@
   justify-content: center;
 }
 #login-overlay.hidden { display: none; }
+#login-card.hidden, #registrar-card.hidden { display: none; }
 
 #login-card, #registrar-card {
   background: var(--steel);
