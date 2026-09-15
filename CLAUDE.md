@@ -243,13 +243,14 @@ listas `_XXX_MANUAL`.
 
 ## Frontend: roteamento e abas
 
-5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
-Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
-(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
-`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
-`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar)
-funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
-+ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+6 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas, Transações Salvas (esta última só faz sentido
+logado — ver seção própria mais abaixo). A URL reflete qual aba está aberta como CAMINHO
+(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`,
+`/transacoes-salvas`), via `history.pushState`/`popstate` em `common.js` (`_ativarView`/
+`_ligarBotoesDeAba`/`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 6 URLs
+(digitar/recarregar) funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro
+modo local `uvicorn`) + rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
 
 **Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
 mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
@@ -282,9 +283,15 @@ Filtros de data (mês/ano início e fim, em várias abas) bloqueiam automaticame
 invertido (início > fim) — ver `validarIntervaloDatas()` em `common.js`, ajusta o lado que não
 acabou de mudar pra igualar o que o usuário escolheu, com um aviso visual breve.
 
-Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador (nunca vai pro
-servidor, "temporário" por design) — substituiu 3 chips de exemplo fixos que existiam antes
-(`busca.js`, `registrarHistoricoBusca`/`renderHistoricoBusca`).
+Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador — substituiu 3
+chips de exemplo fixos que existiam antes (`busca.js`, `registrarHistoricoBusca`/
+`renderHistoricoBusca`). **Decisão original ("nunca vai pro servidor") revista em 2026-09-15**:
+agora que existem contas reais, o mesmo histórico também é gravado no servidor por usuário
+LOGADO (mostrado na aba "Transações Salvas", ver seção própria abaixo) — o localStorage
+continua existindo em paralelo, como fallback pra quando ninguém está logado, e sua CHAVE
+passou a ser sufixada por usuário (`obterUsuarioAtual()`, cacheado numa Promise em `common.js`)
+depois de um bug real (2026-09-11): chave fixa = duas contas diferentes no MESMO navegador
+viam o mesmo histórico local, já que `localStorage` é por origem, não por sessão/conta.
 
 Card "Por UF" do Consolidado (`loadUF()` em `consolidado.js`) era um bar chart Chart.js
 mostrando só o top-12 (`/api/uf` sempre devolveu as 27 UFs sem limite — o corte era só no
@@ -792,6 +799,71 @@ admin_usuarios;`; 3) apagar a pasta `webapp/admin/` + `webapp/static/admin.html`
 `spa_pagina()`); 5) remover as 2 entradas de rewrite de `vercel.json`. Fora essa exceção
 documentada, nada disso toca em `operations`, `linhas_incentivadas` ou `editais_raw`.
 
+## Transações Salvas (favoritos de operação + histórico de busca por usuário)
+
+Aba própria (`webapp/static/js/salvos.js`, rotas `/api/salvos*`, backend em `webapp/salvos.py`)
+adicionada em 2026-09-15, DEPOIS que o login por conta individual (`admin_usuarios`, ver seção
+"Painel de Admin" acima) já estava valendo pro site inteiro. Duas coisas, as duas escopadas por
+CONTA LOGADA (nunca por navegador/dispositivo — decisão de produto explícita do usuário:
+"individualizar os históricos, favoritos, entre outros"):
+
+1. **Favoritar uma operação** (`usuario_operacoes_salvas`: `usuario_id`, `operation_id` — FK
+   de verdade pra `operations(id)`, `ON DELETE CASCADE` —, `nota` opcional, `criado_em`, UNIQUE
+   `(usuario_id, operation_id)`). Botão ☆/★ (`#modal-favoritar-btn`) embutido no MESMO modal de
+   detalhe de operação que já existia (`common.js::openOperacaoDetalhe`/
+   `_configurarBotaoFavoritar`) — reaproveitado de qualquer lugar que já abre esse modal (Busca,
+   tabela de operações, grupo econômico), não duplicado por página. Os outros 3 lugares que
+   reusam o MESMO elemento de modal (`openOperacoesModal`, detalhe de edital, detalhe de linha
+   incentivada) escondem o botão explicitamente ao abrir — ele só faz sentido no detalhe de UMA
+   operação. Nota pessoal é um campo de texto livre por operação salva, só o dono vê
+   (`textarea` com `PATCH /api/salvos/operacoes/{id}`, salva no `blur`).
+   **Estrutura pensada pra uma extensão futura** (pedido explícito do usuário, não implementada
+   ainda): "buscar por empresa" a partir das operações salvas — como `usuario_operacoes_salvas`
+   só guarda `operation_id` e a tabela `operations` já tem `cnpj`/`cliente`, listar/agrupar as
+   operações salvas por empresa é um JOIN direto (`listar_operacoes_salvas` já devolve esses
+   campos hoje), sem precisar de coluna nova nem migração.
+2. **Histórico de busca no SERVIDOR** (`usuario_busca_historico`: `usuario_id`, `query`,
+   `fixada` BOOLEAN, `criado_em`) — grava a cada busca de um usuário LOGADO
+   (`webapp/main.py::_registrar_busca_se_logado`, chamado tanto pela rota GET padrão sem IA
+   quanto pela rota POST do modo IA opcional). Upsert por texto da query (case-insensitive):
+   pesquisar a MESMA query de novo só atualiza `criado_em`, nunca duplica linha
+   (`salvos.py::registrar_busca_historico`). Uma entrada pode ser FIXADA (`fixada=TRUE`) pra
+   ficar no topo da lista independente de recência — `listar_busca_historico` ordena
+   `fixada DESC, criado_em DESC`. Na aba Transações Salvas, cada item tem "Buscar de novo"
+   (preenche a query na aba Busca e dispara `runBusca()`), "Fixar"/"Desafixar" e "Remover";
+   "Limpar não fixadas" (`DELETE /api/salvos/historico`) nunca apaga o que foi fixado —
+   remoção de um item fixado é sempre individual, por decisão deliberada (nunca em massa por
+   engano).
+   **Decisão de escopo tomada nesta implementação, confirmada explicitamente com o usuário**:
+   o histórico pessoal em `localStorage` da aba Busca (ver seção "Frontend: roteamento e abas"
+   acima) CONTINUA existindo em paralelo, como fallback pra quando ninguém está logado — não
+   foi substituído. As duas fontes não se misturam na UI: o chip-based history da aba Busca
+   sempre lê/escreve local (`busca.js`), a lista da aba Transações Salvas sempre lê/escreve
+   servidor (`salvos.js`) — ambas são alimentadas pela MESMA ação de buscar, cada uma pelo seu
+   próprio caminho, sem um sincronizar o outro.
+
+**Por que as tabelas não têm FK pra `admin_usuarios`** (mesma segregação já documentada na
+seção "Painel de Admin"): `admin_usuarios` só existe depois que `webapp/admin/seed.py` roda —
+uma FK de verdade em `usuario_operacoes_salvas`/`usuario_busca_historico` (definidas em
+`src/db.py`, junto do resto do schema `operations`) quebraria `init_db()` (chamado pelo
+pipeline semanal via GitHub Actions, `src/refresh.py`) em qualquer ambiente onde
+`admin_usuarios` ainda não existe. `usuario_id` aqui é só um INTEGER solto, mesmo padrão já
+usado por `operations_correcoes_manuais.usuario` (esse é TEXT, não FK) — a validade do
+`usuario_id` é garantida pelo backend, nunca pelo banco: toda rota de `/api/salvos/*` exige
+`Depends(_exigir_usuario_logado)` (`webapp/main.py`), que resolve o usuário a partir do MESMO
+cookie de sessão (`admin_session` → `admin_sessoes` → `admin_usuarios.id`) que
+`_verificar_acesso`/`verificar_acesso_principal` já usam pro gate geral de `/api/*` — ou seja,
+`usuario_id` vem sempre de uma sessão de conta real validada no servidor, nunca de um
+identificador de dispositivo/navegador/sessão anônima enviado pelo cliente. Isso é o que
+garante o isolamento entre contas (testado ao vivo: duas contas de teste diferentes, cada uma
+só via os próprios favoritos/histórico).
+
+**Lembrete de infraestrutura pra quem for aplicar isso num ambiente novo**: como `init_db()`
+só é chamado pelos scripts de pipeline (nunca pela webapp em runtime), as duas tabelas novas só
+passam a existir de fato depois de rodar `python src/db.py` manualmente (ou o próximo
+`refresh.py`/`refresh_editais.py` agendado) contra o `DATABASE_URL` daquele ambiente — mesmo
+padrão de qualquer mudança de schema neste projeto, nada automático no deploy da Vercel.
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |
@@ -807,5 +879,6 @@ documentada, nada disso toca em `operations`, `linhas_incentivadas` ou `editais_
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |
 | Painel de Admin (`/admin`) | `webapp/admin/*`, `webapp/static/admin.html`, `webapp/static/js/admin.js` |
+| Transações Salvas (favoritos/histórico por usuário) | `webapp/salvos.py`, `webapp/static/js/salvos.js` |
 | Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` |
 | Automação | `.github/workflows/*.yml` |

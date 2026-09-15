@@ -35,29 +35,37 @@ _LARGURA_MAXIMA = 60
 _NAVY = "223850"
 _BORDA = "EBECED"
 
+# Colunas do export de Transacoes Salvas (ver webapp/salvos.py::listar_operacoes_salvas) --
+# mesma base de COLUNAS acima, so troca "score"/"motivo" (conceitos da Busca, sem
+# sentido aqui) por "nota"/"salvo_em" (proprios de uma operacao favoritada).
+COLUNAS_SALVAS = [c for c in COLUNAS if c[0] not in ("score", "motivo")] + [
+    ("nota", "Nota pessoal"),
+    ("salvo_em", "Salvo em"),
+]
 
-def gerar_xlsx_busca(query: str, linhas: list) -> bytes:
+
+def _gerar_xlsx(titulo_aba: str, colunas: list, linhas: list) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Busca"
+    ws.title = titulo_aba
 
     fonte_header = Font(color="FFFFFF", bold=True)
     preenchimento_header = PatternFill(start_color=_NAVY, end_color=_NAVY, fill_type="solid")
     borda_fina = Border(*(Side(style="thin", color=_BORDA) for _ in range(4)))
 
-    ws.append([rotulo for _, rotulo in COLUNAS])
+    ws.append([rotulo for _, rotulo in colunas])
     for cel in ws[1]:
         cel.font = fonte_header
         cel.fill = preenchimento_header
         cel.alignment = Alignment(vertical="center")
     ws.freeze_panes = "A2"
 
-    larguras = [len(rotulo) for _, rotulo in COLUNAS]
+    larguras = [len(rotulo) for _, rotulo in colunas]
     for linha in linhas:
-        valores = [linha.get(chave) for chave, _ in COLUNAS]
+        valores = [linha.get(chave) for chave, _ in colunas]
         ws.append(valores)
         r = ws.max_row
-        for i, (chave, _) in enumerate(COLUNAS, start=1):
+        for i, (chave, _) in enumerate(colunas, start=1):
             cel = ws.cell(row=r, column=i)
             cel.border = borda_fina
             if chave in _COLUNAS_MOEDA and cel.value is not None:
@@ -71,3 +79,13 @@ def gerar_xlsx_busca(query: str, linhas: list) -> bytes:
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def gerar_xlsx_busca(query: str, linhas: list) -> bytes:
+    return _gerar_xlsx("Busca", COLUNAS, linhas)
+
+
+def gerar_xlsx_operacoes_salvas(linhas: list) -> bytes:
+    """Exporta as operacoes salvas do usuario (ver webapp/main.py::salvos_exportar) --
+    mesmo gerador/estilo do export da Busca, colunas adaptadas (ver COLUNAS_SALVAS)."""
+    return _gerar_xlsx("Transações Salvas", COLUNAS_SALVAS, linhas)

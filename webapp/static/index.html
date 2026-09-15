@@ -57,6 +57,7 @@
       <button class="tab-btn" data-view="busca">Busca</button>
       <button class="tab-btn" data-view="editais">Editais</button>
       <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
+      <button class="tab-btn" data-view="salvos">Transações Salvas</button>
     </div>
   </div>
   <div class="topbar-usuario hidden" id="topbar-usuario">
@@ -368,6 +369,37 @@
     <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
   </section>
 
+  <!-- ===================== TRANSACOES SALVAS ===================== -->
+  <section id="view-salvos" class="view">
+    <div id="salvos-sem-login" class="hidden">
+      <p class="empty-state">Faça login para salvar operações e ver seu histórico de busca.</p>
+    </div>
+
+    <div id="salvos-conteudo">
+      <div id="salvos-resumo" class="kpi-row" style="margin-bottom:16px;"></div>
+
+      <div class="card">
+        <div class="card-header">
+          Operações salvas
+          <button id="salvos-exportar-btn" class="acao-btn" style="padding:6px 12px; font-size:12px; margin:0;">Exportar Excel</button>
+        </div>
+        <div class="card-body">
+          <div id="salvos-operacoes-lista"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="card-header">
+          Histórico de buscas
+          <button id="salvos-historico-limpar-btn" class="acao-btn" style="padding:6px 12px; font-size:12px; margin:0; background:transparent; color:#fff; border:1px solid rgba(255,255,255,0.4);">Limpar não fixadas</button>
+        </div>
+        <div class="card-body">
+          <div id="salvos-historico-lista"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -382,6 +414,7 @@
         <option value="instituicao-asc">Instituição (A-Z)</option>
         <option value="agencia-asc">Agência (A-Z)</option>
       </select>
+      <button class="fav-btn" id="modal-favoritar-btn" style="display:none;">☆ Salvar</button>
       <button class="close-btn" id="modal-close">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
@@ -401,5 +434,6 @@
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
 <script src="/js/linhas.js"></script>
+<script src="/js/salvos.js"></script>
 </body>
 </html>

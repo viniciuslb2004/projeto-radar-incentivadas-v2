@@ -562,6 +562,46 @@ CREATE INDEX IF NOT EXISTS idx_linhas_instituicao ON linhas_incentivadas(institu
 CREATE INDEX IF NOT EXISTS idx_linhas_status ON linhas_incentivadas(status);
 CREATE INDEX IF NOT EXISTS idx_linhas_setor ON linhas_incentivadas(setor_padronizado);
 CREATE INDEX IF NOT EXISTS idx_linhas_search_vector ON linhas_incentivadas USING GIN(search_vector);
+
+-- ============ Transacoes Salvas (favoritos de operacao + historico de busca por
+-- usuario, aba propria da SPA) ============
+-- Depende de contas reais (tabela `admin_usuarios`, criada so por
+-- webapp/admin/seed.py -- ver CLAUDE.md, secao "Painel de Admin") para saber DE QUEM
+-- e cada favorito/busca. Seguindo a MESMA segregacao ja documentada la (nenhuma
+-- tabela do dominio "operations" ganha uma FK de verdade pro dominio do painel de
+-- admin, nem o contrario -- ver tambem operations_correcoes_manuais.usuario, que e
+-- TEXT solto, sem FK), usuario_id aqui e so um INTEGER (sem REFERENCES
+-- admin_usuarios): uma FK de verdade quebraria o init_db() do pipeline semanal
+-- (GitHub Actions, src/refresh.py) em qualquer ambiente onde admin_usuarios ainda
+-- nao existe (seed.py nunca rodado). A validade do usuario_id e' garantida pelo
+-- backend -- webapp/main.py so grava/le aqui depois de confirmar uma sessao valida
+-- (ver _exigir_usuario_logado).
+CREATE TABLE IF NOT EXISTS usuario_operacoes_salvas (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    usuario_id INTEGER NOT NULL,
+    operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    nota TEXT,
+    criado_em TEXT NOT NULL,
+    UNIQUE (usuario_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usuario_operacoes_salvas_usuario ON usuario_operacoes_salvas(usuario_id, criado_em DESC);
+
+-- Historico de busca por usuario, gravado no SERVIDOR -- ate 2026-09 isso era so
+-- localStorage (nunca ia pro servidor, decisao deliberada enquanto nao havia conta
+-- de verdade, ver busca.js/CLAUDE.md). Agora que existem contas reais, todo usuario
+-- LOGADO tambem grava aqui a cada busca; localStorage continua existindo em paralelo
+-- so como fallback (ver busca.js) pra quando ninguem estiver logado. `fixada`: uma
+-- busca pode ser fixada no topo do historico (nao so re-executada) -- ver
+-- webapp/salvos.py::registrar_busca_historico (faz upsert por texto da query, entao
+-- pesquisar a MESMA query de novo so atualiza criado_em em vez de duplicar linha).
+CREATE TABLE IF NOT EXISTS usuario_busca_historico (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    usuario_id INTEGER NOT NULL,
+    query TEXT NOT NULL,
+    fixada BOOLEAN NOT NULL DEFAULT FALSE,
+    criado_em TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usuario_busca_historico_usuario ON usuario_busca_historico(usuario_id, criado_em DESC);
 """
 
 
