@@ -84,6 +84,40 @@ async function postJSON(url, body, timeoutMs) {
   }
 }
 
+// DELETE/PATCH genericos (mesmo padrao/timeout/tratamento de 401 de fetchJSON/
+// postJSON acima) -- usados pelas rotas de Transacoes Salvas (ver salvos.js).
+async function deleteJSON(url, timeoutMs) {
+  const fullUrl = _urlCompleta(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
+  try {
+    const r = await fetch(fullUrl, { method: "DELETE", credentials: "include", signal: controller.signal });
+    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function patchJSON(url, body, timeoutMs) {
+  const fullUrl = _urlCompleta(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
+  try {
+    const r = await fetch(fullUrl, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      credentials: "include",
+      signal: controller.signal,
+    });
+    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function _mostrarLoginOverlay(mensagemErro) {
   document.getElementById("login-overlay").classList.remove("hidden");
   const erro = document.getElementById("login-erro");
@@ -306,6 +340,7 @@ const _SLUG_PARA_VIEW = {
   "busca": "busca",
   "editais": "editais",
   "linhas-incentivadas": "linhas",
+  "transacoes-salvas": "salvos",
 };
 const _VIEW_PARA_SLUG = {
   consolidado: "consolidado",
@@ -313,6 +348,7 @@ const _VIEW_PARA_SLUG = {
   busca: "busca",
   editais: "editais",
   linhas: "linhas-incentivadas",
+  salvos: "transacoes-salvas",
 };
 
 function _viewInicialDaURL() {
@@ -324,7 +360,7 @@ function _ativarView(view, empilharHistorico) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   document.getElementById("filterbar").style.display =
-    view === "busca" || view === "editais" || view === "linhas" ? "none" : "flex";
+    view === "busca" || view === "editais" || view === "linhas" || view === "salvos" ? "none" : "flex";
   const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
   const mudouDeAba = window.location.pathname !== caminho;
   if (empilharHistorico) {
@@ -606,6 +642,7 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
   const body = document.getElementById("modal-body");
   const ordenarSelect = document.getElementById("modal-ordenar");
   ordenarSelect.style.display = "inline-block";
+  document.getElementById("modal-favoritar-btn").style.display = "none";
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
@@ -657,6 +694,42 @@ function fmtCampoDetalhe(campo) {
   }
 }
 
+// Botao "Salvar"/"★ Salvo" do modal de detalhe de operacao (Transacoes Salvas, ver
+// webapp/salvos.py) -- reutilizavel de qualquer lugar que abre esse mesmo modal
+// (busca, tabela de operacoes, grupo economico etc, ja que todos passam por
+// openOperacaoDetalhe). Escondido por padrao (ver #modal-favoritar-btn em
+// index.html); os outros abridores de modal (openOperacoesModal, editais.js,
+// linhas.js) escondem de novo explicitamente, ja que reusam o MESMO elemento.
+function _configurarBotaoFavoritar(opId, salva) {
+  const btn = document.getElementById("modal-favoritar-btn");
+  if (!btn) return;
+  btn.style.display = "inline-flex";
+  const atualizarEstado = (ativo) => {
+    btn.textContent = ativo ? "★ Salvo" : "☆ Salvar";
+    btn.classList.toggle("ativo", ativo);
+  };
+  atualizarEstado(!!salva);
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      if (btn.classList.contains("ativo")) {
+        await deleteJSON(`/api/salvos/operacoes/${opId}`);
+        atualizarEstado(false);
+      } else {
+        await postJSON(`/api/salvos/operacoes/${opId}`, {});
+        atualizarEstado(true);
+      }
+      // Se a aba Transacoes Salvas ja carregou nesta visita, atualiza a lista dela
+      // tambem -- funcao exposta por salvos.js, so chamada se existir.
+      if (typeof recarregarSalvos === "function") recarregarSalvos();
+    } catch (e) {
+      alert(e instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
+    } finally {
+      btn.disabled = false;
+    }
+  };
+}
+
 async function openOperacaoDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe da operação";
   document.getElementById("modal-ordenar").style.display = "none";
@@ -672,6 +745,7 @@ async function openOperacaoDetalhe(id) {
 
   const badge = `<span class="badge" style="background:var(--blue-lightest); color:var(--navy); margin-left:8px;">${data.agencia}${data.instrumento ? " · " + data.instrumento : ""}</span>`;
   document.getElementById("modal-title").innerHTML = `Detalhe da operação ${badge}`;
+  _configurarBotaoFavoritar(id, data.salva);
 
   let html = '<div class="detalhe-secoes">';
   data.secoes.forEach((secao) => {
