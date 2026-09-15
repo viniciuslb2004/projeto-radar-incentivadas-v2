@@ -243,13 +243,14 @@ listas `_XXX_MANUAL`.
 
 ## Frontend: roteamento e abas
 
-5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
-Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
-(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
-`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
-`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar)
-funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
-+ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+6 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas, Transações Salvas (esta última só faz sentido
+logado — ver seção própria mais abaixo). A URL reflete qual aba está aberta como CAMINHO
+(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`,
+`/transacoes-salvas`), via `history.pushState`/`popstate` em `common.js` (`_ativarView`/
+`_ligarBotoesDeAba`/`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 6 URLs
+(digitar/recarregar) funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro
+modo local `uvicorn`) + rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
 
 **Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
 mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
