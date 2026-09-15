@@ -154,6 +154,23 @@ busca — senão o volume de operações de qualquer UF grande dominava o rankin
 termo raro e específico. Um pequeno conjunto de palavras genéricas do domínio
 (`PALAVRAS_GENERICAS_QUERY`, ex: "empresa") é excluído do OR de texto livre pelo mesmo motivo.
 
+**Filtros estruturados da Busca** (`buscar_texto()`, sempre `AND`, nunca dentro do ranking):
+`agencia`, `valor_minimo`, `regiao`, `produto`, `porte` (ver `PORTE_NORMALIZADO_SQL` acima) e,
+desde 2026-09-15, `setor` e `uf` explícito. `uf` (dropdown, filtro explícito) tem prioridade
+sobre uma UF digitada solta no texto da busca (`uf_detectada`) se as duas vierem preenchidas —
+`uf_final = uf or uf_detectada`. `setor` combina `setor_bndes` (4 categorias amplas) e
+`subsetor_bndes` (19, mais granulares) **NA MESMA lista de opções** no frontend (pedido
+explícito do usuário — ele quer o filtro geral e o granular juntos, não dois selects
+separados), com `<optgroup>` só para separação visual; o backend testa contra as DUAS colunas
+com um `OR` simples (`setor_bndes = ? OR subsetor_bndes = ?`), então não importa se o valor
+escolhido é setor ou subsetor — funciona sem o front precisar saber qual é qual. Os dois
+vocabulários são disjuntos, exceto "AGROPECUÁRIA" (setor E o único subsetor daquele setor —
+mesma string, mas describem exatamente o MESMO conjunto de operações ali, então o `OR` não gera
+ambiguidade real). **Não existe uma categoria "inovação"** — pedido inicial do usuário citava
+esse termo como exemplo, mas não é um valor real de `setor_bndes`/`subsetor_bndes` (é um
+conceito da FINEP, não do BNDES); o filtro `agencia=FINEP` (já existente) é o proxy mais
+próximo dessa intenção.
+
 **Performance (revisado 2026-09-09)**: `operations` tem índices reais disponíveis
 (`idx_operations_search_vector` GIN em `search_vector`, `idx_operations_cliente_trgm`/
 `idx_operations_segmento_trgm` GIN trigram, além de btree em `cnpj`/`setor_bndes`/`uf`/etc
@@ -551,6 +568,21 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   (`?bust=<timestamp>`) antes de suspeitar de bug real.
 - **`webapp/static/index.html`/`common.js`/`main.py` são arquivos grandes** — ao editar, prefira
   `Grep`/`Read` com offset pontual em vez de carregar o arquivo inteiro de uma vez.
+- **Testar a webapp local (`uvicorn`) exige login de verdade** desde que o painel de admin
+  passou a proteger o site principal também (ver seção "Painel de Admin" — `admin_usuarios` já
+  tem contas reais em produção, e o local fala com o MESMO banco). `document.cookie` fica
+  bloqueado pra leitura/escrita no Claude Code Browser pane (tentativa de setar
+  `admin_session` direto via JS falha silenciosamente, `document.cookie` sempre volta vazio) —
+  não dá pra "plantar" uma sessão manualmente assim. Caminho que funciona: (1) criar uma conta
+  de teste temporária direto no banco (`webapp.admin.auth.gerar_hash_senha(...)` + INSERT em
+  `admin_usuarios`), (2) logar de verdade via `fetch('/api/login', {credentials:'include', ...})`
+  dentro do `javascript_tool` do Browser pane (isso passa pelo fluxo real de `Set-Cookie`, que o
+  navegador aceita normalmente — só a escrita DIRETA via `document.cookie` que é bloqueada), (3)
+  depois de terminar, apagar a conta de teste E a linha correspondente em `admin_sessoes`
+  (não deixar sessão/conta de teste pra trás). Alternativa mais rápida se só precisar validar
+  uma rota pontual (sem UI): mintar um token direto (`webapp.admin.auth.criar_sessao(conn,
+  usuario_id)`) e mandar via `curl -b "admin_session=<token>"` — mais simples que navegador
+  quando não precisa ver a tela renderizada.
 
 ## Painel de Admin (`/admin`)
 

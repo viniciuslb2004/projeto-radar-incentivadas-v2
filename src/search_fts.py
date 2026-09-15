@@ -149,7 +149,7 @@ def _rows_para_resultados(rows) -> list:
 
 def buscar_texto(
     query: str, limite: int = 200, agencia: str = None, valor_minimo: float = None,
-    regiao: str = None, produto: str = None, porte: str = None,
+    regiao: str = None, produto: str = None, porte: str = None, setor: str = None, uf: str = None,
 ) -> dict:
     """Busca determinística em 6 tiers (ver PRIORIDADE_MOTIVO), cada uma como sua
     propria query: tiers 1-3 (prefixo CNPJ/cliente, keyword em setor/subsetor/
@@ -163,10 +163,12 @@ def buscar_texto(
     tier mais forte em que bate. Ordenado por prioridade, depois cobertura de
     palavras (so tier 5, ver comentario mais abaixo) e por fim rank_fts.
 
-    agencia/valor_minimo/regiao/produto/porte sao FILTROS ESTRUTURADOS explicitos (vindos
-    de selects/input na UI, ver webapp/main.py e busca.js) -- mesmo padrao ja usado
-    pra UF dentro da propria query de texto livre (AND, nunca dentro do ranking de
-    texto), so que aqui vem prontos do chamador em vez de extraidos da query."""
+    agencia/valor_minimo/regiao/produto/porte/setor/uf sao FILTROS ESTRUTURADOS
+    explicitos (vindos de selects/input na UI, ver webapp/main.py e busca.js) -- mesmo
+    padrao ja usado pra UF dentro da propria query de texto livre (AND, nunca dentro
+    do ranking de texto), so que aqui vem prontos do chamador em vez de extraidos da
+    query. `uf` (dropdown explicito) tem prioridade sobre uma UF digitada solta no
+    texto da busca (`uf_detectada`, ver abaixo) se as duas vierem preenchidas."""
     query = (query or "").strip()
     if not query:
         return {"query": query, "n_resultados": 0, "resultados": []}
@@ -206,10 +208,11 @@ def buscar_texto(
     filtros_extra = []
     params_extra_principal = []
     params_extra_trigrama = []
-    if uf_detectada:
+    uf_final = uf or uf_detectada
+    if uf_final:
         filtros_extra.append("uf = ?")
-        params_extra_principal.append(uf_detectada)
-        params_extra_trigrama.append(uf_detectada)
+        params_extra_principal.append(uf_final)
+        params_extra_trigrama.append(uf_final)
     if agencia:
         filtros_extra.append("agencia = ?")
         params_extra_principal.append(agencia)
@@ -236,6 +239,16 @@ def buscar_texto(
         filtros_extra.append(f"({PORTE_NORMALIZADO_SQL}) = ?")
         params_extra_principal.append(porte)
         params_extra_trigrama.append(porte)
+    if setor:
+        # O dropdown combina setor_bndes (4 categorias amplas) e subsetor_bndes (19,
+        # mais granulares) NA MESMA lista (pedido do usuario, 2026-09-15) -- os dois
+        # vocabularios sao disjuntos, exceto "AGROPECUÁRIA" (unico subsetor daquele
+        # setor, entao as duas colunas descrevem o MESMO conjunto de operacoes ali --
+        # sem ambiguidade real). Um OR simples acha a operacao no nivel certo sem o
+        # front precisar saber de antemao se o valor escolhido e setor ou subsetor.
+        filtros_extra.append("(setor_bndes = ? OR subsetor_bndes = ?)")
+        params_extra_principal.extend([setor, setor])
+        params_extra_trigrama.extend([setor, setor])
     filtro_sql = ("AND " + " AND ".join(filtros_extra)) if filtros_extra else ""
 
     # regexp_replace(unaccent(?), ...) -- ver _normaliza_ortografia_sql(): unifica

@@ -218,6 +218,8 @@ function _filtrosBusca() {
     regiao: document.getElementById("bu-f-regiao").value,
     produto: document.getElementById("bu-f-produto").value,
     porte: document.getElementById("bu-f-porte").value,
+    setor: document.getElementById("bu-f-setor").value,
+    uf: document.getElementById("bu-f-uf").value,
   };
 }
 
@@ -233,6 +235,8 @@ function _sincronizarFiltrosBuscaNaURL(q) {
     regiao: document.getElementById("bu-f-regiao").value,
     produto: document.getElementById("bu-f-produto").value,
     porte: document.getElementById("bu-f-porte").value,
+    setor: document.getElementById("bu-f-setor").value,
+    uf: document.getElementById("bu-f-uf").value,
   });
 }
 
@@ -243,6 +247,8 @@ function _aplicarFiltrosBuscaDaURL() {
   if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
   if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
   if (params.has("porte")) document.getElementById("bu-f-porte").value = params.get("porte");
+  if (params.has("setor")) document.getElementById("bu-f-setor").value = params.get("setor");
+  if (params.has("uf")) document.getElementById("bu-f-uf").value = params.get("uf");
 
   const q = (params.get("q") || "").trim();
   if (q) {
@@ -263,6 +269,21 @@ async function _popularFiltrosBusca() {
     fill("bu-f-agencia", filtros.agencias);
     fill("bu-f-produto", filtros.produtos);
     fill("bu-f-porte", filtros.portes);
+    fill("bu-f-uf", filtros.ufs);
+
+    // Setor: combina setor_bndes (4 categorias amplas) e subsetor_bndes (19, mais
+    // granulares) NA MESMA lista (pedido do usuario) -- agrupados por <optgroup> so
+    // pra ficar visualmente claro qual e qual, mas os dois viram o MESMO parametro
+    // `setor` na busca (o backend testa contra as duas colunas, ver search_fts.py).
+    const selSetor = document.getElementById("bu-f-setor");
+    const grupoSetor = document.createElement("optgroup");
+    grupoSetor.label = "Setor";
+    filtros.setores.filter(Boolean).forEach((v) => grupoSetor.appendChild(new Option(v, v)));
+    const grupoSubsetor = document.createElement("optgroup");
+    grupoSubsetor.label = "Subsetor";
+    filtros.subsetores.filter(Boolean).forEach((v) => grupoSubsetor.appendChild(new Option(v, v)));
+    selSetor.appendChild(grupoSetor);
+    selSetor.appendChild(grupoSubsetor);
   } catch (e) {
     // filtros da busca sao um extra -- se /api/filtros falhar aqui, a busca livre
     // (sem filtro nenhum) continua funcionando normalmente.
@@ -357,7 +378,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Mudar um filtro re-roda a busca atual (se ja tiver uma) -- filtro sem busca
   // nenhuma feita ainda nao faz nada sozinho, precisa de uma query pra filtrar.
-  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto", "bu-f-porte"].forEach((id) => {
+  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto", "bu-f-porte", "bu-f-setor", "bu-f-uf"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       if (input.value.trim().length >= 3) runBusca(input.value.trim());
       else _sincronizarFiltrosBuscaNaURL(input.value.trim());
