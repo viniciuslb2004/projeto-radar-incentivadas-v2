@@ -3,7 +3,7 @@ diferente de `editais_raw`, que sao CHAMADAS PUBLICAS com prazo) a partir de fon
 LOCAIS/OFICIAIS -- o site hospedado so consulta esta tabela, nunca acessa os sites das
 instituicoes em tempo real (ver item 6 do pedido de melhorias).
 
-Quatro fontes hoje:
+Sete fontes hoje:
 1. FINEP: reaproveita `editais_raw` (ja coletado de https://www.finep.gov.br/oportunidades
    via API oficial, ver finep_editais.py) -- uma chamada publica tambem e uma forma de
    linha incentivada (fluxo='edital', por oposicao a fluxo continuo).
@@ -26,11 +26,58 @@ Quatro fontes hoje:
    pagina publica para "FNE Exportacao" nem para uma linha isolada de "FNE Mulher
    Negocios" (o beneficio a empresas controladas por mulheres e uma clausula
    transversal dentro de cada linha, nao um produto proprio).
+5. BASA (Banco da Amazonia): curadoria manual verificada, adicionada em 2026-09-15 --
+   9 linhas: 8 sub-linhas do FNO (Fundo Constitucional de Financiamento do Norte --
+   Amazonia Rural, Amazonia Empresarial, Amazonia Empresarial Verde, Amazonia
+   Infraestrutura, Amazonia Infraestrutura Verde, Ciencia/Tecnologia e Inovacao,
+   Biodiversidade, Energia Verde) capturadas navegando bancoamazonia.com.br/
+   linhas-de-fomento/fno/<produto> (paginas estaticas, sem acordeao JS) + 1 linha
+   do FDA (Fundo de Desenvolvimento da Amazonia, gerido pela SUDAM, BASA como
+   agente operador -- mesmo padrao do FDNE/BNB). A pagina de listagem do BASA
+   tambem lista FMM, PRONAF, FUNGETUR e produtos BNDES (Finame/Automatico) como
+   "linhas de fomento" -- deliberadamente NAO curados aqui pra nao duplicar
+   produtos que ja pertencem a outra instituicao neste catalogo (BNDES) ou que
+   sao geridos por outros ministerios/fundos sem pagina propria detalhada no site
+   do BASA.
+6. BB (Banco do Brasil): curadoria manual verificada, adicionada em 2026-09-15 --
+   9 linhas de credito rural/fomento (Pronamp Investimento, Pronamp Custeio, Pronaf
+   Grupo B, Pronaf Custeio A/C, Custeio Agropecuario, Funcafe Custeio, Programa
+   Nacional de Credito Fundiario, RenovAgro e FCO Rural -- Investimento
+   Agropecuario), capturadas em bb.com.br/site/agronegocios/. Deliberadamente
+   restrito a linhas de fomento/credito rural incentivado (Pronaf/Pronamp/fundos
+   constitucionais/programas do MCR com taxa fixada por normativo do CMN) --
+   excluidos de proposito produtos bancarios comuns do mesmo portal (cartao Ourocard,
+   consorcio, seguros, BB Giro Agro generico) e outras dezenas de linhas do MCR
+   listadas no hub /investimentos/ (Inovagro, Moderfrota, Proirriga, etc. -- ja
+   existem em quantidade suficiente via BB pra nao inflar o catalogo repetindo
+   praticamente o mesmo programa nacional sob nomes ligeiramente diferentes).
+   Achado tecnico: varias paginas do BB renderizam a resposta do FAQ (accordion)
+   via Angular mas ja trazem o texto completo (pergunta+resposta) embutido no DOM
+   num bloco JSON-LD FAQPage (`.elementor-widget-bb-dls-faq`) mesmo com o item
+   still colapsado na tela -- extraido via `textContent` em vez de clicar item por
+   item (mais confiavel que a simulacao de clique, que em alguns casos reordena o
+   accordion entre cliques).
+7. CEF (Caixa Economica Federal): curadoria manual verificada, adicionada em
+   2026-09-15 -- 6 linhas (Financiamento ESG Ecoeficiencia para a Rede de Atacado,
+   BCD Ecoeficiencia PJ, BCD Franquias, FDA -- Fundo de Desenvolvimento da Amazonia
+   (a Caixa tambem e agente financeiro/operador do FDA, com pagina propria mais
+   detalhada que a do BASA para o mesmo fundo -- nao e duplicidade, sao dois
+   agentes financeiros distintos do mesmo fundo gerido pela SUDAM), Programa
+   Sustentabilidade e Programa Armazenagem -- estes dois ultimos dentro do hub
+   Agro CAIXA). Cobertura deliberadamente menor que BNDES/BB/BASA -- confirmado ao
+   vivo que a Caixa e mais forte em habitacao/saneamento/setor publico do que em
+   credito empresarial/rural incentivado; dezenas de outras linhas do hub Agro
+   CAIXA (Pronaf, Pronamp, Inovagro, Moderfrota, Proirriga etc.) sao os MESMOS
+   programas nacionais do MCR ja curados via BB, entao nao foram re-curadas aqui
+   (seria o mesmo programa sob outro agente financeiro, sem trazer produto novo).
+   Achado tecnico: `caixa.gov.br` devolve 403/loop de redirecionamento para
+   WebFetch simples (bloqueio de user-agent) -- precisou do Browser pane (render
+   completo, inclusive cookies) pra funcionar.
 
-Nenhuma das 4 fontes usa scraping automatizado continuo (so a FINEP tem uma API
-oficial estruturada ja consumida por outro modulo) -- BNDES/Desenvolve SP/BNB sao
-atualizados manualmente, sob demanda, ate que scrapers dedicados sejam construidos
-e verificados against a estrutura real (e razoavelmente estavel) de cada site.
+Nenhuma das 7 fontes usa scraping automatizado continuo (so a FINEP tem uma API
+oficial estruturada ja consumida por outro modulo) -- as demais sao atualizadas
+manualmente, sob demanda, ate que scrapers dedicados sejam construidos e
+verificados against a estrutura real (e razoavelmente estavel) de cada site.
 """
 import datetime
 import json
@@ -3318,6 +3365,1482 @@ def seed_bnb_manual(conn) -> int:
     )
 
 
+# BASA (Banco da Amazonia): curadoria manual verificada, capturada ao vivo em
+# 2026-09-15 navegando bancoamazonia.com.br/linhas-de-fomento/fno (pagina de listagem)
+# e as 8 paginas de produto FNO + a pagina do FDA. Paginas estaticas, sem acordeao JS
+# (diferente do BNDES) -- texto extraido direto do HTML renderizado.
+def _linha_fno(
+    nome_oficial, descricao_resumida, descricao_completa, setores_elegiveis,
+    itens_financiaveis, taxa_completa, prazo_total, url_slug, trecho_fonte,
+    *, sigla="FNO", porte_elegivel=NAO_INFORMADO, valor_minimo=None, valor_maximo=None,
+    percentual_financiavel=NAO_INFORMADO, contrapartida=NAO_INFORMADO, indexador=NAO_INFORMADO,
+    spread=NAO_INFORMADO, carencia=NAO_INFORMADO, amortizacao=NAO_INFORMADO,
+    garantias=NAO_INFORMADO, restricoes=NAO_INFORMADO,
+    criterios_elegibilidade=NAO_INFORMADO,
+    documentos_necessarios=NAO_INFORMADO, prazo_inscricao=NAO_INFORMADO, data_vigencia=NAO_INFORMADO,
+    setor_padronizado=NAO_INFORMADO, subsetor_padronizado=None, porte_padronizado=None,
+    destinacao_padronizada=None, temas_inovacao=None, temas_sustentabilidade=None,
+    sinonimos_termos=None, itens_nao_financiaveis=NAO_INFORMADO, setores_nao_elegiveis=NAO_INFORMADO,
+    faixa_receita=NAO_INFORMADO, tipo_apoio="Financiamento", modalidade="Direta",
+    regiao_elegivel="Região Norte (área de atuação da SUDAM/FNO)",
+    agente_financeiro="Banco da Amazônia (Fundo Constitucional de Financiamento do Norte - FNO)",
+    canal_contratacao="Gerente de relacionamento / agências do Banco da Amazônia",
+    fluxo="continuo",
+):
+    """Helper pra reduzir repeticao das 8 sub-linhas do FNO -- cada pagina de produto
+    em bancoamazonia.com.br/linhas-de-fomento/fno/<produto> segue estrutura parecida
+    (objetivo, publico-alvo, itens financiaveis, taxa, prazo/carencia), mas nem toda
+    pagina documenta TODOS os campos (ex: garantias so aparece explicita em Energia
+    Verde) -- campo nao documentado fica NAO_INFORMADO, nunca inferido."""
+    return {
+        "instituicao": "BASA",
+        "nome_oficial": nome_oficial,
+        "nome_simplificado": nome_oficial,
+        "sigla": sigla,
+        "status": "aberta",
+        "descricao_resumida": descricao_resumida,
+        "descricao_completa": descricao_completa,
+        "modalidade": modalidade,
+        "tipo_apoio": tipo_apoio,
+        "setores_elegiveis": setores_elegiveis,
+        "setores_nao_elegiveis": setores_nao_elegiveis,
+        "porte_elegivel": porte_elegivel,
+        "faixa_receita": faixa_receita,
+        "regiao_elegivel": regiao_elegivel,
+        "destinacao": descricao_resumida,
+        "itens_financiaveis": itens_financiaveis,
+        "itens_nao_financiaveis": itens_nao_financiaveis,
+        "valor_minimo": valor_minimo,
+        "valor_maximo": valor_maximo,
+        "percentual_financiavel": percentual_financiavel,
+        "contrapartida": contrapartida,
+        "taxa_completa": taxa_completa,
+        "indexador": indexador,
+        "spread": spread,
+        "prazo_total": prazo_total,
+        "carencia": carencia,
+        "amortizacao": amortizacao,
+        "garantias": garantias,
+        "restricoes": restricoes,
+        "criterios_elegibilidade": criterios_elegibilidade,
+        "agente_financeiro": agente_financeiro,
+        "canal_contratacao": canal_contratacao,
+        "prazo_inscricao": prazo_inscricao,
+        "fluxo": fluxo,
+        "documentos_necessarios": documentos_necessarios,
+        "url_oficial": url_slug,
+        "data_vigencia": data_vigencia,
+        "trecho_fonte": trecho_fonte,
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": setor_padronizado,
+        "subsetor_padronizado": subsetor_padronizado,
+        "cnaes_relacionados": None,
+        "porte_padronizado": porte_padronizado or porte_elegivel,
+        "destinacao_padronizada": destinacao_padronizada,
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": temas_inovacao,
+        "temas_sustentabilidade": temas_sustentabilidade,
+        "sinonimos_termos": sinonimos_termos,
+    }
+
+
+_BASA_MANUAL = [
+    _linha_fno(
+        "FNO Amazônia Rural",
+        "Financiamento destinado à ampliação, modernização, reforma ou custeio de atividades "
+        "agropastoris, de pesca e de agroindústria regional.",
+        "Crédito para pequenos, médios e grandes produtores, destinado à ampliação, "
+        "modernização, reforma ou custeio de atividades agropastoris, de pesca e de "
+        "agroindústria regional. Contempla pesca artesanal, aquicultura, silvicultura, "
+        "extrativismo artesanal, desenvolvimento da agropecuária irrigada e atividades de "
+        "comunidades tradicionais.",
+        "Agricultura; Pecuária; Aquicultura; Pesca e Agroindústria de produtos agropecuários",
+        "Pesca Artesanal, Aquicultura, Silvicultura, Extrativismo Artesanal, desenvolvimento da "
+        "agropecuária irrigada e atividades de comunidades tradicionais",
+        "Diferenciada por setor, porte e finalidade.",
+        "Até 12 anos, incluída a carência de até 6 anos (investimento fixo/misto); até 10 anos, "
+        "incluída a carência de até 6 anos (investimento semifixo); até 2 anos (custeio "
+        "agrícola/comercialização); de 12 a 24 meses, dependendo da finalidade (custeio "
+        "pecuário).",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/amazonia-rural",
+        '"Financiamento destinado à ampliação, modernização, reforma ou custeio de atividades '
+        'agropastoris, de pesca e de agroindústria regional." / "Crédito para pequenos, médios '
+        'e grandes produtores." (capturado ao vivo da página oficial em 2026-09-15)',
+        porte_elegivel="Pequenos, médios e grandes produtores",
+        criterios_elegibilidade="Produtor rural (pequeno, médio ou grande porte) na área de atuação do FNO",
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        destinacao_padronizada="Agropecuária e agroindústria regional",
+        sinonimos_termos="fno amazonia rural credito rural norte agropecuaria pesca aquicultura silvicultura",
+    ),
+    _linha_fno(
+        "FNO Amazônia Empresarial",
+        "Financiamento destinado a empreendimentos do setor empresarial de comércio, serviços e "
+        "indústrias.",
+        "Linha de financiamento para implantação, ampliação, modernização, relocalização e "
+        "adequação de empreendimentos dos setores de indústria, turismo, comércio e prestação "
+        "de serviços. Atende a todos os portes de empresa, inclusive o Microempreendedor "
+        "Individual (MEI).",
+        "Indústria; Turismo; Comércio e prestação de serviços; Empresas de assistência técnica "
+        "privada; Atividades agroindustriais voltadas à exportação",
+        NAO_INFORMADO,
+        "Baseadas na Taxa de Juros dos Fundos Constitucionais (TFC); variando de acordo com o "
+        "setor, porte e finalidade.",
+        "Até 17 anos (com carência de até 6 anos) para projetos de atividade turística relativos "
+        "a meios de hospedagem; para Capital de Giro isolado de todos os portes (inclusive MEI), "
+        "o prazo é de até 36 meses, com carência de até 5 meses.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/amazonia-empresarial",
+        '"Linha de financiamento para implantação, ampliação, modernização, relocalização e '
+        'adequação de empreendimentos" / "Atende a todos os portes de empresa, inclusive o '
+        'Microempreendedor Individual (MEI)" (capturado ao vivo da página oficial em 2026-09-15)',
+        porte_elegivel="Todos os portes, inclusive Microempreendedor Individual (MEI)",
+        setor_padronizado="COMERCIO/SERVICOS",
+        destinacao_padronizada="Indústria, turismo, comércio e serviços",
+        sinonimos_termos="fno amazonia empresarial credito empresarial norte industria turismo comercio servicos",
+    ),
+    _linha_fno(
+        "FNO Amazônia Empresarial Verde",
+        "Financiamento para segmento empresarial e de prestação de serviços em bases "
+        "sustentáveis.",
+        "Linha de financiamento destinada a empreendimentos dos setores empresarial e de "
+        "prestação de serviços com projetos voltados à adoção de práticas ambientais, incluindo "
+        "agroindústria, indústria, turismo, cultura, comércio, saúde e educação.",
+        "Agroindústria; Indústria; Turismo; Cultura; Comércio; Prestação de serviço; Atividades "
+        "agroindustriais e industriais voltadas à exportação; Saúde e educação",
+        NAO_INFORMADO,
+        "Taxa de Juros dos Fundos Constitucionais (TFC), que varia de acordo com setor, porte e "
+        "finalidade.",
+        "Prazo para capital de giro de todos os portes, inclusive MEI: até 36 meses, com "
+        "carência de até 5 meses.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/amazonia-empresarial-verde",
+        '"Linha de financiamento destinada a empreendimentos dos setores empresarial e de '
+        'prestação de serviços com projetos voltados à adoção de práticas ambientais" '
+        '(capturado ao vivo da página oficial em 2026-09-15)',
+        setor_padronizado="COMERCIO/SERVICOS",
+        destinacao_padronizada="Empreendimentos empresariais e de serviços em bases sustentáveis",
+        temas_sustentabilidade="Práticas ambientais em empreendimentos empresariais",
+        sinonimos_termos="fno amazonia empresarial verde sustentabilidade praticas ambientais norte",
+    ),
+    _linha_fno(
+        "FNO Amazônia Infraestrutura",
+        "Financiamento destinado a projetos de infraestrutura.",
+        "Crédito de grande porte estruturado para financiar projetos de infraestrutura "
+        "econômica essenciais, voltados a empresas de todos os portes que atuem no "
+        "desenvolvimento logístico e estrutural da região, exceto Microempreendedores "
+        "Individuais (MEI).",
+        "Infraestrutura de transporte e logística; instalação de gasoduto; produção e "
+        "distribuição de gás canalizado",
+        "Projetos voltados à infraestrutura de transporte e logística; instalação de gasoduto; "
+        "produção de gás e distribuição de gás canalizado",
+        "Taxa de Juros dos Fundos Constitucionais (TFC), que varia de acordo com setor, porte e "
+        "finalidade.",
+        "Prazo total de até 34 anos, com carência de até 8 anos (ativos fixos); capital de giro "
+        "associado até 36 meses, com carência de até 5 meses.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/amazonia-infraestrutura",
+        '"Crédito de grande porte estruturado para financiar projetos de infraestrutura '
+        'econômica essenciais." / "Empresas de todos os portes que atuem no desenvolvimento '
+        'logístico e estrutural da região, exceto Microempreendedores Individuais (MEI)" '
+        '(capturado ao vivo da página oficial em 2026-09-15)',
+        porte_elegivel="Todos os portes, exceto Microempreendedor Individual (MEI)",
+        setor_padronizado="INFRAESTRUTURA",
+        destinacao_padronizada="Infraestrutura econômica (transporte, logística, gás)",
+        sinonimos_termos="fno amazonia infraestrutura transporte logistica gasoduto norte",
+    ),
+    _linha_fno(
+        "FNO Amazônia Infraestrutura Verde",
+        "Linha de financiamento para infraestrutura com responsabilidade ambiental.",
+        "Linha de financiamento para infraestrutura com responsabilidade ambiental, incluindo "
+        "água e esgoto, geração de energia renovável, tratamento de resíduos, portos e "
+        "aeroportos sustentáveis e telecomunicações em comunidades.",
+        NAO_INFORMADO,
+        "Infraestrutura para água e esgoto; geração de energia elétrica de fontes renováveis; "
+        "usinas de compostagem e/ou aterro sanitário sustentável; portos e aeroportos "
+        "sustentáveis; transmissão e distribuição de energia; sistema de telefonia fixa ou "
+        "móvel e banda larga em comunidades; demais obras estruturantes ecológicas e "
+        "sustentáveis; pacotes de serviços",
+        "Taxa de Juros dos Fundos Constitucionais (TFC), diferenciada por setor, porte e "
+        "finalidade.",
+        "Até 34 anos, com carência de até 8 anos.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/amazonia-infraestrutura-verde",
+        '"Linha de financiamento para infraestrutura com responsabilidade ambiental." '
+        '(capturado ao vivo da página oficial em 2026-09-15)',
+        setor_padronizado="INFRAESTRUTURA",
+        destinacao_padronizada="Infraestrutura sustentável (água/esgoto, energia renovável, resíduos)",
+        temas_sustentabilidade="Infraestrutura ecológica e sustentável",
+        sinonimos_termos="fno amazonia infraestrutura verde energia renovavel agua esgoto sustentavel norte",
+    ),
+    _linha_fno(
+        "FNO Ciência, Tecnologia e Inovação",
+        "Financiamento para empreendimentos com base tecnológica voltados a ramos empresariais "
+        "não rurais.",
+        "Financiamento para empreendimentos com base tecnológica, incluindo projetos "
+        "desenvolvidos por agentes do ecossistema de inovação: empresas não-rurais e "
+        "instituições de pesquisa, nos ramos de indústria, agroindústria, turismo, comércio e "
+        "serviços.",
+        "Empresas de todos os portes do setor não rural",
+        "Projetos de base tecnológica voltados a ramos empresariais não rurais (indústria, "
+        "agroindústria, turismo, comércio e serviços)",
+        "Taxa de Juros dos Fundos Constitucionais (TFC), diferenciada por setor, porte e "
+        "finalidade.",
+        "Até 20 anos para investimentos fixos ou mistos (empresas em geral), com carência de até "
+        "5 anos; até 36 meses para investimentos de MEI, com carência de 2 meses.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/ciencia-tecnologia-e-inovacao",
+        '"Financiamento para empreendimentos com base tecnológica, incluindo projetos '
+        'desenvolvidos por agentes do ecossistema de inovação: empresas não-rurais e '
+        'instituições de pesquisa." (capturado ao vivo da página oficial em 2026-09-15)',
+        porte_elegivel="Todos os portes do setor não rural",
+        percentual_financiavel="Até 100% do projeto, conforme enquadramento do empreendimento",
+        setor_padronizado="INDUSTRIA",
+        destinacao_padronizada="Inovação e base tecnológica em setores não rurais",
+        temas_inovacao="Base tecnológica, ecossistema de inovação",
+        sinonimos_termos="fno ciencia tecnologia inovacao base tecnologica pesquisa desenvolvimento norte",
+    ),
+    _linha_fno(
+        "FNO Biodiversidade",
+        "Linha de financiamento destinada a projetos rurais de impacto positivo focados no "
+        "aproveitamento consciente dos recursos da Região Norte.",
+        "Linha de financiamento destinada a projetos rurais de impacto positivo focados no "
+        "aproveitamento consciente dos recursos da Região Norte, para produtores rurais, "
+        "populações tradicionais da Amazônia (povos indígenas, comunidades quilombolas, "
+        "ribeirinhos, extrativistas e pescadores artesanais) e pessoas jurídicas do setor rural.",
+        "Pessoas físicas produtoras rurais; populações tradicionais da Amazônia (povos "
+        "indígenas, comunidades quilombolas, ribeirinhos, extrativistas e pescadores "
+        "artesanais); pessoas jurídicas do setor rural",
+        "Manejo florestal sustentável, serviços ambientais, fauna silvestre, cultivo de plantas "
+        "medicinais e aromáticas, proteção e recuperação de mananciais, sistemas de tratamento "
+        "de dejetos e resíduos oriundos da produção animal para geração de energia e "
+        "compostagem, além de reflorestamento com espécies nativas",
+        NAO_INFORMADO,
+        "Até 20 anos para investimentos fixos (carência de até 12 anos); até 10 anos para "
+        "investimentos semifixos (carência de até 6 anos); até 2 anos para custeio isolado.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/fno-biodiversidade",
+        '"Linha de financiamento destinada a projetos rurais de impacto positivo focados no '
+        'aproveitamento consciente dos recursos da Região Norte." (capturado ao vivo da página '
+        'oficial em 2026-09-15)',
+        setor_padronizado="AGROPECUÁRIA", subsetor_padronizado="AGROPECUÁRIA",
+        destinacao_padronizada="Manejo sustentável de biodiversidade e recursos naturais",
+        temas_sustentabilidade="Manejo florestal sustentável, serviços ambientais, reflorestamento nativo",
+        sinonimos_termos="fno biodiversidade manejo florestal sustentavel populacoes tradicionais norte",
+    ),
+    _linha_fno(
+        "FNO Energia Verde",
+        "Projetos de geração e utilização de fontes renováveis de energia no meio rural.",
+        "Financia projetos de geração e utilização de fontes renováveis de energia no meio "
+        "rural, fomentando a produção de energias renováveis para consumo próprio, apoiando "
+        "atividades do segmento agropecuário em bases sustentáveis, e financiando a compra de "
+        "veículos verdes, elétricos, híbridos ou que utilizem energia renovável.",
+        NAO_INFORMADO,
+        "Implantação de sistemas de geração de energia renovável, aquisição de equipamentos, "
+        "veículos elétricos ou híbridos",
+        "Taxas de Juros Rurais dos Fundos Constitucionais de Financiamento (TRFC), que varia em "
+        "função do porte e finalidade.",
+        "Até 12 anos para pagar, incluída a carência de até 6 anos.",
+        "https://www.bancoamazonia.com.br/linhas-de-fomento/fno/energia-verde",
+        '"Projetos de geração e utilização de fontes renováveis de energia no meio rural." / '
+        '"Garantias usuais do Banco da Amazônia" (capturado ao vivo da página oficial em '
+        '2026-09-15)',
+        valor_maximo=None,
+        garantias="Garantias usuais do Banco da Amazônia",
+        setor_padronizado="AGROPECUÁRIA",
+        destinacao_padronizada="Energia renovável no meio rural",
+        temas_sustentabilidade="Geração de energia renovável, veículos elétricos/híbridos",
+        sinonimos_termos="fno energia verde renovavel veiculos eletricos hibridos rural norte",
+    ),
+]
+
+
+_BASA_FDA = [
+    {
+        "instituicao": "BASA",
+        "nome_oficial": "FDA - Fundo de Desenvolvimento da Amazônia",
+        "nome_simplificado": "FDA",
+        "sigla": "FDA",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento de grandes projetos de infraestrutura e produção "
+            "com alto potencial de gerar emprego, renda e transformação regional.",
+        "descricao_completa": "Financiamento de grandes projetos de infraestrutura e produção "
+            "com alto potencial de gerar emprego, renda e transformação regional, destinado a "
+            "residentes da área de atuação da Superintendência de Desenvolvimento da Amazônia "
+            "(SUDAM). O Banco da Amazônia atua como agente operador do Fundo -- ver também a "
+            "linha equivalente operada pela Caixa Econômica Federal (instituicao=\"CEF\"), com "
+            "detalhamento de prazo/garantias mais completo para o mesmo fundo.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Área de atuação da Superintendência de Desenvolvimento da Amazônia "
+            "(SUDAM): Acre, Amapá, Amazonas, Mato Grosso, Pará, Rondônia, Roraima, Tocantins e "
+            "parte do Maranhão",
+        "destinacao": "Grandes projetos de infraestrutura e produção na Amazônia Legal",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Residentes/empreendimentos na área de atuação da SUDAM",
+        "agente_financeiro": "Banco da Amazônia (Fundo de Desenvolvimento da Amazônia - FDA, "
+            "gerido pela SUDAM)",
+        "canal_contratacao": "Gerente de relacionamento / agências do Banco da Amazônia",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bancoamazonia.com.br/linhas-de-fomento/fda",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Financiamento de grandes projetos de infraestrutura e produção com '
+            'alto potencial de gerar emprego, renda e transformação regional." / "Residentes da '
+            'Superintendência de Desenvolvimento da Amazônia (SUDAM), que corresponde aos '
+            'estados do Acre, Amapá, Amazonas, Mato Grosso, Pará, Rondônia, Roraima e Tocantins '
+            'e parcialmente o estado do Maranhão." (capturado ao vivo da página oficial em '
+            '2026-09-15; a página de listagem do BASA não detalha taxa/prazo/garantias -- ver a '
+            'pagina da Caixa, mais detalhada, para o mesmo fundo)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Infraestrutura e produção regional (Amazônia Legal)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "fda fundo de desenvolvimento da amazonia sudam infraestrutura grandes projetos",
+    },
+]
+
+
+def seed_basa_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _BASA_MANUAL] + [dict(linha) for linha in _BASA_FDA])
+
+
+# BB (Banco do Brasil): curadoria manual verificada, capturada ao vivo em 2026-09-15
+# navegando bb.com.br/site/agronegocios/ (paginas estaticas de custeio + hub de
+# investimentos). Restrito a linhas de credito rural/fomento (Pronaf/Pronamp/fundos
+# constitucionais/programas do MCR com taxa fixada por normativo do CMN) -- exclui
+# produtos bancarios comuns do mesmo portal.
+_BB_MANUAL = [
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Pronamp Investimento",
+        "nome_simplificado": "Pronamp Investimento",
+        "sigla": "Pronamp",
+        "status": "aberta",
+        "descricao_resumida": "Crédito feito especialmente para o médio produtor promover a "
+            "desenvolvimento das atividades rurais.",
+        "descricao_completa": "O Pronamp é um crédito feito especialmente para o médio produtor "
+            "promover o desenvolvimento das atividades rurais. Com esta linha, é possível "
+            "financiar máquinas agrícolas, estruturas, equipamentos e o que for necessário para "
+            "desenvolver o próprio agronegócio.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária (médio produtor rural)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Médio produtor rural (renda bruta anual de até R$ 3,5 milhões)",
+        "faixa_receita": "Até R$ 3,5 milhões (soma das atividades agropecuárias e não "
+            "agropecuárias)",
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Investimento em máquinas, estruturas e equipamentos para o agronegócio",
+        "itens_financiaveis": "Construções, reformas ou benfeitorias de instalações "
+            "permanentes; obras de irrigação, açudes ou drenagem; reflorestamento ou destoca; "
+            "formação de lavouras permanentes; formação ou recuperação de pastagens; "
+            "eletrificação e telefonia rural; equipamentos e máquinas agrícolas; recuperação ou "
+            "reforma de máquinas agrícolas; proteção, correção e recuperação do solo.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 600000.0,
+        "percentual_financiavel": "Até 100% do valor do investimento, com teto de R$ 600 mil "
+            "por beneficiário a cada ano agrícola.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxa de juros de 10% ao ano. Tarifa de contratação: 0,5% sobre o "
+            "valor do financiamento.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 8 anos, com 2 anos de carência.",
+        "carencia": "2 anos.",
+        "amortizacao": "Parcelas semestrais ou anuais.",
+        "garantias": "Bens oferecidos em garantia devem obrigatoriamente estar protegidos por "
+            "seguro (contratável no BB).",
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Proprietários, posseiros, arrendatários, parceiros ou "
+            "comodatários produtores rurais com renda bruta anual de até R$ 3,5 milhões, "
+            "considerando a soma das atividades agropecuárias e não agropecuárias.",
+        "agente_financeiro": "Banco do Brasil",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/pronamp/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"O Pronamp é um crédito feito especialmente para o médio produtor '
+            'promover o desenvolvimento das atividades rurais." / "Sim. A taxa de juros é de '
+            '10% ao ano." / "O prazo para pagamento é de até 8 anos, com 2 anos de carência." / '
+            '"O Pronamp permite um financiamento de até 100% do valor do investimento, com um '
+            'teto de financiamento de R$ 600 mil por beneficiário a cada ano agrícola." '
+            '(extraído do JSON-LD FAQPage embutido no DOM da página oficial, capturado ao vivo '
+            'em 2026-09-15)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Médio produtor rural",
+        "destinacao_padronizada": "Investimento rural (médio produtor)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "pronamp investimento credito rural medio produtor banco do brasil "
+            "maquinas agricolas",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Crédito Rural Pronamp Custeio",
+        "nome_simplificado": "Pronamp Custeio",
+        "sigla": "Pronamp",
+        "status": "aberta",
+        "descricao_resumida": "Crédito destinado a apoiar o médio produtor rural, financiando "
+            "despesas do custeio da produção agrícola e pecuária.",
+        "descricao_completa": "O Pronamp Custeio oferece crédito destinado a apoiar o médio "
+            "produtor rural de forma a promover o desenvolvimento de suas atividades rurais. "
+            "Com ele é possível financiar as despesas do custeio da produção agrícola e "
+            "pecuária, proporcionando o aumento da renda e a geração de empregos no campo.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária (médio produtor rural)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtor rural com Renda Bruta Anual (RBA) de até R$ 3,5 milhões, "
+            "com renda rural de no mínimo 80%",
+        "faixa_receita": "Até R$ 3,5 milhões",
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Custeio da produção agrícola e pecuária",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 1500000.0,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "9% a.a. Tarifa de estudo de operações rurais: 0,5% sobre o valor "
+            "financiado. Alongamento de operações de custeio: 0,5% sobre o saldo devedor a "
+            "alongar.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 24 meses.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Produtor rural com Renda Bruta Anual (RBA) de até R$ 3,5 "
+            "milhões, com renda rural de, no mínimo, 80%, entre outras condições.",
+        "agente_financeiro": "Banco do Brasil",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/custeio/credito-rural-pronamp-custeio/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"O Pronamp Custeio oferece crédito destinado a apoiar o médio produtor '
+            'rural de forma a promover o desenvolvimento de suas atividades rurais." / "Cada '
+            'produtor rural pode financiar até R$ 1,5 milhão por ano agrícola (de julho a junho '
+            'subsequente)." / "Taxa de juros: 9% a.a." / "Prazo: Até 24 meses" (capturado ao '
+            "vivo da página oficial em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Médio produtor rural",
+        "destinacao_padronizada": "Custeio rural (médio produtor)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "pronamp custeio credito rural medio produtor banco do brasil",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Pronaf Grupo B",
+        "nome_simplificado": "Pronaf Grupo B",
+        "sigla": "Pronaf",
+        "status": "aberta",
+        "descricao_resumida": "Crédito para investir na implantação, ampliação e modernização "
+            "da infraestrutura de produção e serviços no estabelecimento rural ou em áreas "
+            "comunitárias rurais próximas.",
+        "descricao_completa": "Com o Pronaf Investimento Grupo B, é possível obter crédito para "
+            "investir na implantação, ampliação e modernização da infraestrutura de produção e "
+            "serviços, no estabelecimento rural ou em áreas comunitárias rurais próximas. "
+            "Utiliza a metodologia do Programa Nacional de Microcrédito Produtivo Orientado "
+            "(PNMPO), com acompanhamento e orientação educativo-financeira aos agricultores.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento (microcrédito produtivo orientado)",
+        "setores_elegiveis": "Agricultura familiar",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtores familiares com CAF válido enquadrado no Grupo B, renda "
+            "bruta familiar anual de até R$ 60 mil",
+        "faixa_receita": "Até R$ 60 mil (renda bruta familiar anual)",
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Investimento em infraestrutura de produção e serviços (agricultura "
+            "familiar)",
+        "itens_financiaveis": "Sistemas de produção de base agroecológica ou em transição para "
+            "base agroecológica; sistemas orgânicos de produção; quintais produtivos para "
+            "mulheres rurais; construção ou reforma de moradias e instalações sanitárias (UFPA).",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 20000.0,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "0,5% a.a. (taxa de juros disponível para a nova Safra 2026/2027, a "
+            "partir de 01/07/2026).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 5 anos.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": "Bônus de adimplência de 25% proporcional sobre cada parcela paga até o "
+            "vencimento (40% quando enquadrado no PNMPO em área de abrangência da Sudene ou "
+            "Sudam).",
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Limite financiável por ano-safra: até R$ 20 mil (UFPA com metodologia "
+            "PNMPO para produção de base agroecológica/orgânica ou quintais produtivos para "
+            "mulheres rurais); até R$ 16 mil (jovens de 16 a 29 anos, metodologia PNMPO); até "
+            "R$ 15 mil (beneficiárias do Grupo B, metodologia PNMPO); até R$ 12 mil (UFPA "
+            "enquadrada no PNMPO); até R$ 10 mil (UFPA, construção/reforma de moradias e "
+            "instalações sanitárias); até R$ 4 mil (demais projetos não enquadrados no PNMPO).",
+        "criterios_elegibilidade": "Produtores familiares que portem CAF válido enquadrado no "
+            "Grupo B, com renda bruta familiar anual de até R$ 60 mil.",
+        "agente_financeiro": "Banco do Brasil (Programa Nacional de Fortalecimento da "
+            "Agricultura Familiar - Pronaf)",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/investimentos/pronaf-grupo-b/",
+        "data_vigencia": "Safra 2026/2027 (taxa vigente a partir de 01/07/2026)",
+        "trecho_fonte": '"Com o Pronaf Investimento Grupo B, é possível obter crédito para '
+            'investir na implantação, ampliação e modernização da infraestrutura de produção e '
+            'serviços." / "Beneficiários: Produtores familiares que portem CAF válido '
+            'enquadrado no Grupo B, com renda bruta familiar anual de até R$ 60 mil." / "Taxa '
+            'de juros: 0,5% a.a." / "Prazo: Até 5 anos." (capturado ao vivo da página oficial '
+            'em 2026-09-15)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Agricultura familiar",
+        "destinacao_padronizada": "Investimento em agricultura familiar",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "pronaf grupo b agricultura familiar microcredito pnmpo banco do "
+            "brasil",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Pronaf Custeio A/C",
+        "nome_simplificado": "Pronaf Custeio A/C",
+        "sigla": "Pronaf",
+        "status": "aberta",
+        "descricao_resumida": "Crédito para custeio da produção agrícola ou pecuária de "
+            "agricultores familiares enquadrados no grupo A/C, povos indígenas e comunidades "
+            "quilombolas.",
+        "descricao_completa": "Com o Pronaf Custeio A/C é possível adquirir sementes, "
+            "fertilizantes, defensivos, vacinas, ração e outros itens necessários para o dia a "
+            "dia da produção, seja agrícola ou pecuária.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agricultura familiar",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Agricultores familiares com CAF válido, grupo A/C, povos indígenas e "
+            "comunidades quilombolas; cooperativas da agricultura familiar (ROB anual de até "
+            "R$ 10 milhões)",
+        "faixa_receita": "Cooperativas: ROB anual de até R$ 10 milhões",
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Custeio agrícola, pecuário e agroindustrial (agricultura familiar)",
+        "itens_financiaveis": "Sementes, fertilizantes, defensivos, vacinas, ração e outros "
+            "itens necessários à produção agrícola ou pecuária.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 22000.0,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "1,5% a.a. (produtor); 3,0% a.a. (cooperativas). Taxa disponível para "
+            "a nova Safra 2026/2027, a partir de 01/07/2026.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Custeio agrícola: até 3 anos, conforme o ciclo da atividade financiada; "
+            "custeio pecuário: até 20 meses; custeio para agroindústria: até 12 meses.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Agricultores familiares com CAF válido enquadrados no grupo "
+            "A/C, povos indígenas e comunidades quilombolas; cooperativas da agricultura "
+            "familiar com ROB anual de até R$ 10 milhões, no mínimo 75% de associados com CAF "
+            "válido enquadrado no PRONAF, e 90% dos associados beneficiados com CAF grupo A/A-C, "
+            "participando do Programa Mais Gestão ou Coopera Mais Brasil.",
+        "agente_financeiro": "Banco do Brasil (Programa Nacional de Fortalecimento da "
+            "Agricultura Familiar - Pronaf)",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/custeio/pronaf-custeio-a-c",
+        "data_vigencia": "Safra 2026/2027 (taxa vigente a partir de 01/07/2026)",
+        "trecho_fonte": '"Com o Pronaf Custeio A/C você pode adquirir sementes, fertilizantes, '
+            'defensivos, vacinas, ração e outros itens necessários para o dia a dia da sua '
+            'produção." / "Cada produtor pode financiar até R$ 22 mil por ano agrícola." / '
+            '"Taxa de juros de 1,5% a.a. Taxa de juros de 3,0% a.a. para Cooperativas." '
+            '(capturado ao vivo da página oficial em 2026-09-15)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Agricultura familiar",
+        "destinacao_padronizada": "Custeio de agricultura familiar",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "pronaf custeio a/c agricultura familiar indigenas quilombolas "
+            "banco do brasil",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Custeio Agropecuário",
+        "nome_simplificado": "Custeio Agropecuário",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento das despesas de produção agropecuária, para "
+            "lavoura ou animais, incluindo atividades aquícolas.",
+        "descricao_completa": "Com o Custeio Agropecuário do BB, é possível financiar diferentes "
+            "despesas da produção agropecuária, seja para a lavoura ou para os animais, até "
+            "mesmo em atividades aquícolas, com financiamento de até 100% do orçamento.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária, aquicultura e pesca",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtor rural PF e PJ, cooperativas agropecuárias, aquicultores e "
+            "pescadores",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Custeio da produção agropecuária e aquícola",
+        "itens_financiaveis": NAO_INFORMADO,
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 3000000.0,
+        "percentual_financiavel": "Até 100% do orçamento (recursos controlados: teto de R$ 3 "
+            "milhões por ano agrícola; recursos não controlados: sem teto de valor).",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Recursos controlados (até R$ 3 milhões): 12,5% a.a.; recursos não "
+            "controlados (sem teto): taxa prefixada. Tarifa de estudo de operações rurais: 0,5% "
+            "sobre o valor financiado. Alongamento de operações de custeio: 0,5% sobre o saldo "
+            "devedor a alongar.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 24 meses.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Produtor rural PF e PJ, cooperativas agropecuárias, "
+            "aquicultores e pescadores.",
+        "agente_financeiro": "Banco do Brasil",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/pbb/pagina-inicial/agronegocios/agronegocio---produtos-e-servicos/credito/credito-para-custeio/custeio-agropecuario#/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Com o Custeio Agropecuário do BB, você pode realizar o financiamento '
+            'de diferentes despesas da sua produção agropecuária, seja para a lavoura ou para '
+            'os seus animais, até mesmo em atividades aquícolas." / "Recursos controlados: R$ 3 '
+            'milhões por ano agrícola... Recursos não controlados: não há teto." / "Recursos '
+            'controlados: R$ 3 milhões - 12,5% a.a. Recursos não controlados: Não há Teto - '
+            'Taxa Prefixada." (capturado ao vivo da página oficial em 2026-09-15)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Custeio agropecuário e aquícola",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "custeio agropecuario credito rural banco do brasil aquicultura "
+            "pesca",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Funcafé Custeio",
+        "nome_simplificado": "Funcafé Custeio",
+        "sigla": "Funcafé",
+        "status": "aberta",
+        "descricao_resumida": "Crédito para as despesas de produção das lavouras de café "
+            "(custeio).",
+        "descricao_completa": "Financiamento das despesas normais de custeio de café, com "
+            "recursos do Funcafé (Fundo de Defesa da Economia Cafeeira), destinado a "
+            "cafeicultores e suas cooperativas de produção agropecuária.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Cafeicultura",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Cafeicultores e suas cooperativas de produção agropecuária",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Custeio da produção de lavouras de café",
+        "itens_financiaveis": "Despesas normais de custeio de café.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 3000000.0,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "11,5% a.a. Tarifa de estudo de operações rurais: 0,5% sobre o valor "
+            "financiado.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 20 meses.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Limite financiável: cafeicultor, até R$ 3 milhões; cooperativas de "
+            "produção, até R$ 50 milhões.",
+        "criterios_elegibilidade": "Cafeicultores e suas cooperativas de produção "
+            "agropecuária.",
+        "agente_financeiro": "Banco do Brasil (Funcafé - Fundo de Defesa da Economia Cafeeira)",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/custeio/funcafe-custeio/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Financiamento das despesas normais de custeio de café." / '
+            '"Beneficiários: Cafeicultores e suas cooperativas de produção agropecuária." / '
+            '"Limite financiável: Cafeicultor: R$ 3 milhões. Cooperativas de Produção: R$ 50 '
+            'milhões." / "Taxa de juros: 11,5% a.a." / "Prazo: Até 20 meses." (capturado ao '
+            "vivo da página oficial em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Custeio de cafeicultura",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "funcafe custeio cafe cafeicultura financiamento fundo defesa "
+            "economia cafeeira banco do brasil",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "Programa Nacional de Crédito Fundiário",
+        "nome_simplificado": "Crédito Fundiário",
+        "sigla": "PNCF",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento para aquisição de imóveis rurais e benfeitorias "
+            "existentes, despesas com georreferenciamento, topografia e registro cartorário.",
+        "descricao_completa": "Com o Programa Nacional de Crédito Fundiário é possível "
+            "financiar a aquisição de imóveis rurais e benfeitorias existentes, despesas com "
+            "georreferenciamento, topografia e registro cartorário.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agricultura familiar / reforma agrária",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Trabalhadores rurais sem terra, posseiros, pequenos produtores "
+            "rurais arrendatários, parceiros, proprietários de minifúndios e meeiros agregados",
+        "faixa_receita": "Varia por modalidade: até R$ 60.719,26 (PNCF Mais/Jovem), até R$ "
+            "30.359,63 (PNCF Social) ou até R$ 327.785,79 (PNCF Empreendedor), renda bruta "
+            "familiar anual",
+        "regiao_elegivel": "Brasil (PNCF Social restrito a famílias da região Norte e área de "
+            "abrangência da Sudene)",
+        "destinacao": "Aquisição de imóveis rurais e estruturação da propriedade",
+        "itens_financiaveis": "Aquisição de imóveis rurais e benfeitorias existentes; despesas "
+            "com georreferenciamento, topografia e registro cartorário.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 327785.79,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "PNCF Mais: 2,5% a.a. (renda bruta familiar anual até R$ 60.719,26 e "
+            "patrimônio até R$ 140.000,00); PNCF Social: 0,5% a.a. (renda até R$ 30.359,63, "
+            "patrimônio até R$ 70.000,00, famílias da região Norte e área de abrangência da "
+            "Sudene, inscritas no Cadastro Único); PNCF Jovem: 0,5% a.a. (menores de 30 anos, "
+            "renda até R$ 60.719,26, patrimônio até R$ 140.000,00); PNCF Empreendedor: 4% a.a. "
+            "(renda até R$ 327.785,79, patrimônio até R$ 500.000,00). Bônus de antecipação: 20% "
+            "(PNCF Mais) ou 40% (PNCF Social) sobre o valor do capital e dos juros pagos até o "
+            "vencimento.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Disponibilização sujeita à análise prévia e aprovação da Unidade "
+            "Técnica Estadual (UTE), após envio da proposta pela Assistência Técnica.",
+        "criterios_elegibilidade": "Trabalhadores rurais sem terra, posseiros, pequenos "
+            "produtores rurais arrendatários, parceiros, proprietários de minifúndios e "
+            "meeiros agregados.",
+        "agente_financeiro": "Banco do Brasil (Programa Nacional de Crédito Fundiário)",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/pronaf-credito-fundiario/#/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Com o Programa Nacional de Crédito Fundiário é possível financiar a '
+            'aquisição de imóveis rurais e benfeitorias existentes, despesas com '
+            'georreferenciamento, topografia e registro cartorário." / "PNCF MAIS: 2,5% a.a." / '
+            '"Teto: R$ 327.785,79... por beneficiário." (capturado ao vivo da página oficial em '
+            "2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Agricultura familiar / reforma agrária",
+        "destinacao_padronizada": "Aquisição de terras (crédito fundiário)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "credito fundiario pncf aquisicao terras reforma agraria banco do "
+            "brasil",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "RenovAgro",
+        "nome_simplificado": "RenovAgro",
+        "sigla": "RenovAgro",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento de projetos de investimento destinados a práticas "
+            "que reduzam a emissão de gases de efeito estufa nas atividades agropecuárias.",
+        "descricao_completa": "Programa de Financiamento a Sistemas de Produção Agropecuária "
+            "Sustentáveis (RenovAgro): permite financiar projetos de investimento destinados às "
+            "práticas que contribuam para a redução da emissão dos gases de efeito estufa "
+            "oriundos das atividades agropecuárias, incluindo recuperação de pastagens "
+            "degradadas, sistemas orgânicos de produção, plantio direto na palha, integração "
+            "lavoura-pecuária-floresta e sistemas agroflorestais, manejo de florestas "
+            "comerciais, adequação/regularização ambiental, manejo de resíduos da produção "
+            "animal, florestas de palmáceas para uso energético, bioinsumos/biofertilizantes e "
+            "manejo dos solos.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtor rural PF e PJ, e Cooperativas",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Sistemas de produção agropecuária sustentáveis, com redução de emissão "
+            "de gases de efeito estufa",
+        "itens_financiaveis": "Recuperação de pastagens degradadas (RenovAgro + Recuperação); "
+            "sistemas orgânicos de produção (RenovAgro + Orgânico); plantio direto na palha "
+            "(RenovAgro + Plantio Direto); integração lavoura-pecuária, lavoura-floresta, "
+            "pecuária-floresta ou lavoura-pecuária-floresta e sistemas agroflorestais "
+            "(RenovAgro + Integração); manejo de florestas comerciais, inclusive uso industrial "
+            "ou produção de carvão vegetal (RenovAgro + Florestas); adequação/regularização "
+            "ambiental, inclusive recuperação de reserva legal e áreas de preservação "
+            "permanente (RenovAgro + Ambiental); manejo de resíduos da produção animal para "
+            "geração de energia e compostagem (RenovAgro + Manejo de Resíduos); florestas de "
+            "palmáceas para uso energético (RenovAgro + Palmáceas); fixação biológica de "
+            "nitrogênio, bioinsumos e biofertilizantes (RenovAgro + Bioinsumos); práticas "
+            "conservacionistas de manejo do solo (RenovAgro + Manejo dos Solos).",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": 5000000.0,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "RenovAgro Ambiental: 8,5% a.a.; RenovAgro Recuperação e Conversão: "
+            "8,5% a.a.; demais finalidades: 9,5% a.a. Tarifa de contratação: 0,5% sobre o valor "
+            "do financiamento.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "a) Aquisição de bovinos, bubalinos, ovinos, caprinos para reprodução, "
+            "recria e terminação, e sêmen/óvulos/embriões: até 5 anos, 1ª parcela em até 12 "
+            "meses; b) implantação e manutenção de florestas comerciais/carvão vegetal, "
+            "florestas de dendezeiro/açaí/cacau/oliveiras/nogueiras e recomposição de "
+            "APP/reserva legal: até 12 anos, com carência de até 96 meses; c) demais situações: "
+            "até 10 anos, incluídos até 60 meses de carência.",
+        "carencia": "Até 96 meses (florestas/recomposição ambiental) ou até 60 meses (demais "
+            "situações), conforme finalidade.",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Seguro obrigatório para os bens oferecidos em garantia da operação.",
+        "restricoes": "Limite máximo financiável: R$ 5 milhões (empreendimentos individuais); "
+            "R$ 20 milhões (empreendimentos coletivos).",
+        "criterios_elegibilidade": "Produtor rural PF e PJ, e Cooperativas.",
+        "agente_financeiro": "Banco do Brasil",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/investimentos/renovagro/#/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"O RenovAgro permite a você, produtor rural, financiar projetos de '
+            'investimento destinados às práticas que contribuam para a redução da emissão dos '
+            'gases de efeito estufa oriundos das atividades agropecuárias." / "RenovAgro '
+            'Ambiental: juros de 8.5% a.a. ... Demais finalidades: juros de 9,5% a.a." / '
+            '"Empreendimentos individuais: R$ 5 milhões. Empreendimentos coletivos: R$ 20 '
+            'milhões." (extraído do JSON-LD FAQPage embutido no DOM da página oficial, '
+            "capturado ao vivo em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Sistemas de produção agropecuária sustentáveis",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Redução de emissão de gases de efeito estufa na agropecuária "
+            "(sucessor do Programa ABC/ABC+)",
+        "sinonimos_termos": "renovagro abc+ agricultura baixo carbono sustentabilidade banco do "
+            "brasil emissao gases efeito estufa",
+    },
+    {
+        "instituicao": "BB",
+        "nome_oficial": "FCO Rural - Investimento Agropecuário",
+        "nome_simplificado": "FCO Rural",
+        "sigla": "FCO",
+        "status": "aberta",
+        "descricao_resumida": "Crédito destinado a investimentos fixos e semifixos na região "
+            "Centro-Oeste.",
+        "descricao_completa": "FCO Rural Investimento Agropecuário é o crédito destinado a "
+            "investimentos fixos e semifixos na região Centro-Oeste, para implantar, "
+            "desenvolver ou ampliar atividades agropecuárias e agroindustriais.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária e agroindústria (região Centro-Oeste)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Região Centro-Oeste (área de atuação do Fundo Constitucional de "
+            "Financiamento do Centro-Oeste - FCO)",
+        "destinacao": "Implantação, desenvolvimento ou ampliação de atividades agropecuárias e "
+            "agroindustriais",
+        "itens_financiaveis": "Aquisição de materiais e equipamentos de uso destinados a "
+            "armazenagem, barragens, obras civis, máquinas, implementos, energia, irrigação, "
+            "entre outras atividades.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": NAO_INFORMADO,
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": NAO_INFORMADO,
+        "agente_financeiro": "Banco do Brasil (Fundo Constitucional de Financiamento do "
+            "Centro-Oeste - FCO)",
+        "canal_contratacao": "Agência BB",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/site/agronegocios/investimentos/fco-rural-investimento-agropecuario/#/",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"FCO Rural Investimento Agropecuário é o crédito destinado a '
+            'investimentos fixos e semifixos na região Centro-Oeste." / "Informações em '
+            'atualização. Estamos atualizando as condições deste produto em função das novas '
+            'diretrizes e normativos vigentes." (capturado ao vivo da página oficial em '
+            "2026-09-15 -- a própria página confirma que a linha existe e é operada pelo BB, "
+            "mas não documenta taxa/prazo/valor no momento da captura, daí os campos "
+            "NAO_INFORMADO)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Investimento agropecuário regional (Centro-Oeste)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "fco rural investimento agropecuario centro-oeste fundo "
+            "constitucional banco do brasil",
+    },
+]
+
+
+def seed_bb_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _BB_MANUAL])
+
+
+# CEF (Caixa Economica Federal): curadoria manual verificada, capturada ao vivo em
+# 2026-09-15 navegando caixa.gov.br via Browser pane (WebFetch simples devolveu
+# 403/loop de redirecionamento pra esse dominio). Cobertura deliberadamente menor
+# que BNDES/BB/BASA -- Caixa e mais forte em habitacao/saneamento/setor publico do
+# que em credito empresarial/rural incentivado; linhas do MCR (Pronaf/Pronamp/
+# Inovagro/Moderfrota/Proirriga etc.) tambem oferecidas pela Caixa nao foram
+# re-curadas aqui por serem os MESMOS programas nacionais ja curados via BB.
+_CEF_MANUAL = [
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "Financiamento ESG Ecoeficiência",
+        "nome_simplificado": "ESG Ecoeficiência",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento para aquisição de bens que promovam a eficiência "
+            "energética e a redução de impactos ambientais das atividades da empresa.",
+        "descricao_completa": "A CAIXA incentiva a adoção de práticas empresariais "
+            "ecoeficientes, por meio do financiamento para aquisição de bens que promovam a "
+            "eficiência energética e a redução de impactos ambientais das atividades da "
+            "empresa. Destina-se a pequenas, médias e grandes empresas atendidas pela Rede de "
+            "Atacado CAIXA que desejem investir em ações de sustentabilidade, promovendo o uso "
+            "de energias renováveis e a redução de insumos, resíduos e emissão de gases "
+            "causadores do efeito estufa.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Todos os setores (empresas clientes da Rede de Atacado CAIXA)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Pequenas, médias e grandes empresas atendidas pela Rede de Atacado "
+            "CAIXA",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Aquisição de máquinas/equipamentos/veículos ecoeficientes",
+        "itens_financiaveis": "Sistemas de micro e minigeração de energia por fontes "
+            "renováveis; sistema de aquecimento solar de água; controle ou filtragem de gases "
+            "ou partículas; tratamento de resíduos sólidos; tratamento de efluentes líquidos; "
+            "reciclagem de resíduos; tratamento e reutilização de águas residuais; redução de "
+            "desperdício de insumos e/ou recursos naturais; eficiência energética; controle de "
+            "poluição da água; remediação de área contaminada; máquinas/equipamentos/sistemas "
+            "ecoeficientes novos que gerem ao menos 20% de economia energética; veículos "
+            "elétricos ou híbridos.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Até 100% do valor do investimento.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxa reduzida, com carência e prazo diferenciados (valor exato não "
+            "documentado publicamente -- consultar gerente).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 120 meses, com carência de até 12 meses; máquinas/equipamentos/"
+            "veículos financiados isoladamente: até 72 meses, incluídos até 12 meses de "
+            "carência.",
+        "carencia": "Até 12 meses.",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Possibilidade de financiamento de máquinas e equipamentos importados, "
+            "desde que já internalizados no Brasil.",
+        "criterios_elegibilidade": "Ser cliente da Rede de Atacado CAIXA; ter capacidade de "
+            "pagamento compatível com o financiamento solicitado.",
+        "agente_financeiro": "Caixa Econômica Federal",
+        "canal_contratacao": "Gerente de Agência Empresarial CAIXA",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.caixa.gov.br/empresa/credito-financiamento/financiamentos/esg-ecoeficiencia/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"A CAIXA incentiva a adoção de práticas empresariais ecoeficientes, '
+            'por meio do financiamento para aquisição de bens que promovam a eficiência '
+            'energética e a redução de impactos ambientais das atividades da sua empresa. Pode '
+            'ser financiado até 100% do valor do projeto." / "O pagamento pode ser feito em até '
+            '120 meses. Carência de até 12 meses." (capturado ao vivo da página oficial via '
+            "Browser pane em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Eficiência energética e sustentabilidade empresarial",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Eficiência energética, energias renováveis, redução de "
+            "resíduos e emissões",
+        "sinonimos_termos": "esg ecoeficiencia caixa sustentabilidade energia renovavel "
+            "eficiencia energetica rede de atacado",
+    },
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "Bens de Consumo Duráveis - BCD Ecoeficiência PJ",
+        "nome_simplificado": "BCD Ecoeficiência PJ",
+        "sigla": "BCD",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento de máquinas e equipamentos com atributos "
+            "ecoeficientes para pequenas, médias e grandes empresas.",
+        "descricao_completa": "Produto de crédito destinado ao atendimento de pequenas, médias "
+            "e grandes empresas que buscam a melhoria dos seus processos produtivos, "
+            "financiando a aquisição de máquinas, equipamentos ou sistemas que apresentem "
+            "atributos para reduzir o impacto ambiental e o uso de recursos naturais "
+            "decorrentes das atividades da empresa.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Todos os setores (pessoa jurídica)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Pequenas, médias e grandes empresas",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Aquisição de máquinas/equipamentos ecoeficientes",
+        "itens_financiaveis": "Sistemas de micro e minigeração de energia por fontes "
+            "renováveis; sistema de aquecimento solar de água; controle ou filtragem de gases "
+            "ou partículas; tratamento de resíduos sólidos; tratamento de efluentes líquidos; "
+            "reciclagem de resíduos; tratamento e reutilização de águas residuais; redução de "
+            "desperdício de insumos e/ou recursos naturais; eficiência energética; controle de "
+            "poluição da água; remediação de área contaminada (máquinas/equipamentos novos).",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Até 100% do valor do bem.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxas de juros atrativas, a depender do porte e relacionamento da "
+            "empresa com a CAIXA (valor exato não documentado publicamente).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 60 meses, incluído o período de carência de até 6 meses.",
+        "carencia": "Até 6 meses.",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Possibilidade de financiamento de máquinas e equipamentos importados, "
+            "desde que já internalizados no Brasil.",
+        "criterios_elegibilidade": "Ser cliente CAIXA; ter capacidade de pagamento.",
+        "agente_financeiro": "Caixa Econômica Federal",
+        "canal_contratacao": "Agência CAIXA",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "http://www.caixa.gov.br/empresa/credito-financiamento/financiamentos/bens-de-consumo-duraveis/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Este produto de crédito destina-se ao atendimento de pequenas, '
+            'médias e grandes empresas, que buscam a melhoria dos seus processos produtivos, '
+            'financiando a aquisição de máquinas, equipamentos, ou mesmo sistemas, que '
+            'apresentem atributos para reduzir o impacto ambiental." / "Financiamento de até '
+            '100% do valor do bem. O pagamento pode ser feito em até 60 meses, incluído o '
+            'período de carência de até 6 meses." (capturado ao vivo da página oficial via '
+            "Browser pane em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Eficiência energética e sustentabilidade empresarial",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Redução de impacto ambiental e uso de recursos naturais",
+        "sinonimos_termos": "bcd ecoeficiencia pj caixa maquinas equipamentos sustentavel",
+    },
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "Bens de Consumo Duráveis - BCD Franquias",
+        "nome_simplificado": "BCD Franquias",
+        "sigla": "BCD",
+        "status": "aberta",
+        "descricao_resumida": "Financiamento para abertura, ampliação, modernização e repasse "
+            "de franquias, destinado a empresas participantes do Programa CAIXA Mais "
+            "Franquias.",
+        "descricao_completa": "Se você deseja abrir, ampliar, modernizar ou adquirir uma "
+            "unidade franqueada, o BCD Franquias é a solução para impulsionar o crescimento do "
+            "negócio. Destinada às empresas participantes do Programa CAIXA Mais Franquias, a "
+            "linha de crédito oferece condições para financiar projetos de implantação, "
+            "expansão, modernização e repasse de franquias.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Franquias (marcas habilitadas no Programa CAIXA Mais Franquias)",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Implantação, expansão, modernização e repasse de unidades franqueadas",
+        "itens_financiaveis": "Abertura de novas unidades franqueadas; ampliação ou "
+            "modernização do negócio franqueado; repasse de franquias.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Entre 20% e 80% do investimento total, conforme a "
+            "classificação da marca franqueada e as condições do Programa CAIXA Mais "
+            "Franquias.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Condições de contratação personalizadas, conforme análise do perfil "
+            "da empresa e garantias apresentadas (valor exato não documentado publicamente).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Amortização em até 60 meses; vencimento das prestações escolhido no "
+            "momento da contratação.",
+        "carencia": NAO_INFORMADO,
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": "Consulte o franqueador para verificar se está habilitado junto à CAIXA "
+            "(Programa CAIXA Mais Franquias).",
+        "criterios_elegibilidade": "Empresas participantes de marca franqueada habilitada no "
+            "Programa CAIXA Mais Franquias.",
+        "agente_financeiro": "Caixa Econômica Federal (Programa CAIXA Mais Franquias)",
+        "canal_contratacao": "Agência CAIXA",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "http://www.caixa.gov.br/empresa/credito-financiamento/financiamentos/bens-de-consumo-duraveis/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Se você deseja abrir, ampliar, modernizar ou adquirir uma unidade '
+            'franqueada, o BCD Franquias é a solução ideal para impulsionar o crescimento do '
+            'seu negócio." / "O limite de financiamento poderá variar entre 20% e 80% do '
+            'investimento total, conforme a classificação da marca franqueada." / "O prazo de '
+            'amortização pode chegar a até 60 meses." (capturado ao vivo da página oficial via '
+            "Browser pane em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "COMERCIO/SERVICOS",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Investimento em franquias",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "bcd franquias caixa mais franquias implantacao expansao repasse",
+    },
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "FDA - Fundo de Desenvolvimento da Amazônia",
+        "nome_simplificado": "FDA",
+        "sigla": "FDA",
+        "status": "aberta",
+        "descricao_resumida": "Linha de crédito com recursos do Fundo de Desenvolvimento da "
+            "Amazônia (FDA), destinada a projetos de empresas privadas com empreendimentos na "
+            "Amazônia Legal.",
+        "descricao_completa": "É uma linha de crédito com recursos do Fundo de Desenvolvimento "
+            "da Amazônia (FDA), destinada a projetos de empresas privadas com empreendimentos "
+            "na Amazônia Legal, por meio da avaliação de viabilidade técnica, econômica e "
+            "administrativa dos projetos encaminhados à Caixa pela Superintendência de "
+            "Desenvolvimento da Amazônia (Sudam). O financiamento é destinado à implantação, "
+            "ampliação, diversificação ou modernização de empreendimentos. A Caixa atua como "
+            "agente operador do Fundo -- ver também a linha equivalente operada pelo Banco da "
+            "Amazônia (instituicao=\"BASA\"), mesmo fundo gerido pela SUDAM.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": NAO_INFORMADO,
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": NAO_INFORMADO,
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Área de atuação da Superintendência de Desenvolvimento da Amazônia "
+            "(SUDAM) -- Amazônia Legal",
+        "destinacao": "Implantação, ampliação, diversificação ou modernização de "
+            "empreendimentos na Amazônia Legal",
+        "itens_financiaveis": "Obras civis; equipamentos de infraestrutura (incluindo "
+            "montagem); infraestrutura; máquinas e equipamentos novos; aparelhos; veículos "
+            "utilitários novos; móveis e utensílios novos.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": NAO_INFORMADO,
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": NAO_INFORMADO,
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 12 anos, incluindo a carência, podendo ser estendido para até 20 "
+            "anos após justificativa da Caixa e análise da Sudam.",
+        "carencia": "Incluída no prazo total de até 12 anos (ou até 20 anos, se estendido).",
+        "amortizacao": "Desembolso conforme evolução física das obras/serviços/estudos/"
+            "projetos e do trabalho socioambiental, comprovada por engenheiro e/ou técnico "
+            "social da Caixa, respeitando o cronograma de desembolso contratualmente "
+            "estabelecido.",
+        "garantias": "Seguros de conclusão de obra e de performance; hipoteca de bens próprios "
+            "ou de terceiros; penhor de direitos creditórios; cessão de direitos emergentes de "
+            "concessão; penhor de recebíveis; aval ou fiança dos acionistas controladores; "
+            "fundos de liquidez; fiança bancária; outras garantias reais (prestadas "
+            "cumulativamente ou não).",
+        "restricoes": "Emissão de debêntures a cada liberação de recursos do FDA, podendo ser "
+            "dividida em séries; o valor total das emissões não pode ultrapassar o capital "
+            "social da companhia, podendo alcançar até 80% do valor dos bens gravados (garantia "
+            "real) ou 70% do valor contábil do ativo líquido de dívidas garantidas por direitos "
+            "reais (garantia flutuante).",
+        "criterios_elegibilidade": "Projetos de empresas privadas com empreendimentos na área "
+            "de atuação da SUDAM, avaliados quanto à viabilidade técnica, econômica e "
+            "administrativa.",
+        "agente_financeiro": "Caixa Econômica Federal (Fundo de Desenvolvimento da Amazônia - "
+            "FDA, gerido pela SUDAM)",
+        "canal_contratacao": "Carta Consulta à SUDAM, indicando a Caixa como Agente Operador/"
+            "Financeiro",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": "Carta Consulta à Sudam conforme modelo da Resolução 06/08 "
+            "da SUDAM.",
+        "url_oficial": "http://www.caixa.gov.br/empresa/credito-financiamento/financiamentos/fundo-desenvolvimento-amazonia/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"É uma linha de crédito com recursos do Fundo de Desenvolvimento da '
+            'Amazônia (FDA), destinada a projetos de empresas privadas com empreendimentos na '
+            'Amazônia Legal." / "O prazo total máximo da operação é de até 12 anos, incluindo o '
+            'período de carência, podendo ser estendido para até 20 anos após justificativa da '
+            'Caixa e análise da Sudam." (capturado ao vivo da página oficial via Browser pane '
+            "em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": NAO_INFORMADO,
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Infraestrutura e produção regional (Amazônia Legal)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "fda fundo de desenvolvimento da amazonia sudam caixa infraestrutura "
+            "grandes projetos",
+    },
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "Programa Sustentabilidade",
+        "nome_simplificado": "Programa Sustentabilidade",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento de projetos que tenham como objetivo a redução na "
+            "emissão de gases de efeito estufa nas atividades agropecuárias.",
+        "descricao_completa": "Financiamento de projetos de implantação e melhoramento de "
+            "sistemas de Integração Lavoura e Pecuária, plantio direto na palha, tratamento de "
+            "dejetos, recuperação de áreas degradadas e projetos similares que tenham como "
+            "objetivo a redução na emissão de gases de efeito estufa, não incluindo o "
+            "financiamento para aquisição de equipamento de forma isolada.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtores Rurais Pessoa Física, Produtores Rurais Pessoa Jurídica, "
+            "Cooperativas de Produção Agropecuária",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Sistemas de produção agropecuária sustentáveis, com redução de emissão "
+            "de gases de efeito estufa",
+        "itens_financiaveis": "Investimento fixo: proteção/correção/recuperação de solos "
+            "(corretivos agrícolas, terraços, adubação verde); adubação intensiva do solo; "
+            "plantio de florestas comerciais (integração Lavoura-Pecuária-Floresta); aquisição/"
+            "construção/reforma de cercas, bebedouros e cochos; formação/recuperação/"
+            "reconversão de pastagens; construção/reforma/modernização de instalações para "
+            "criação e manejo animal, e de benfeitorias para guarda de máquinas e insumos; "
+            "aquisição de máquinas e equipamentos novos; aquisição e implantação de sistemas de "
+            "irrigação; estrutura para tratamento de resíduos e produção de energia renovável; "
+            "eletrificação (inclusive geração/distribuição de energia renovável para consumo "
+            "próprio). Investimento semifixo: aquisição de animais para reprodução e cria "
+            "(exceto Pronamp); implementos/máquinas/equipamentos novos com duração útil não "
+            "superior a 5 anos; certificação da produção agropecuária.",
+        "itens_nao_financiaveis": "Aquisição de equipamento de forma isolada (sem projeto de "
+            "implantação/melhoramento associado).",
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Recursos não controlados; limite de acordo com avaliação de "
+            "risco e projeto técnico ou plano simples apresentado pelo cliente.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxas prefixadas ou pós-fixadas, definidas conforme avaliação de "
+            "risco e histórico de relacionamento com a CAIXA (valor exato não documentado "
+            "publicamente -- consultar agência).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 8 anos, com carência de até 36 meses, de acordo com a finalidade e "
+            "fonte de recurso da operação.",
+        "carencia": "Até 36 meses.",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Produtores Rurais Pessoa Física, Produtores Rurais Pessoa "
+            "Jurídica, Cooperativas de Produção Agropecuária.",
+        "agente_financeiro": "Caixa Econômica Federal",
+        "canal_contratacao": "Agência CAIXA",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": "Projeto técnico ou plano simples.",
+        "url_oficial": "https://www.caixa.gov.br/agro/investimento/programa-sustentabilidade/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Financiamento de projetos de implantação e melhoramento de sistemas '
+            'de Integração Lavoura e Pecuária, plantio direto na palha, tratamento de dejetos, '
+            'recuperação de áreas degradadas e projetos similares que tenham como objetivo a '
+            'redução na emissão de gases de efeito estufa." / "Até 08 anos com carência de até '
+            '36 meses." (capturado ao vivo da página oficial via Browser pane em 2026-09-15)',
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Sistemas de produção agropecuária sustentáveis",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": "Redução de emissão de gases de efeito estufa na agropecuária",
+        "sinonimos_termos": "programa sustentabilidade caixa agropecuaria integracao lavoura "
+            "pecuaria emissao gases efeito estufa",
+    },
+    {
+        "instituicao": "CEF",
+        "nome_oficial": "Programa Armazenagem",
+        "nome_simplificado": "Programa Armazenagem",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento de aquisição e implantação de estrutura para "
+            "armazenamento de grãos e produtos agrícolas.",
+        "descricao_completa": "Linha para o financiamento de aquisição e implantação de "
+            "estrutura para armazenamento de grãos e produtos agrícolas, incluindo câmaras "
+            "frias, silos, armazéns, elevadores, secadores e demais componentes do sistema de "
+            "armazenagem.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Agropecuária",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Produtores Rurais Pessoa Física, Produtores Rurais Pessoa Jurídica, "
+            "Cooperativas de Produção Agropecuária",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Estrutura de armazenamento de grãos e produtos agrícolas",
+        "itens_financiaveis": "Aquisição e implantação de estrutura para armazenamento de "
+            "grãos e produtos agrícolas, incluindo câmaras frias, silos, armazéns, elevadores, "
+            "secadores e demais componentes do sistema de armazenagem.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Recursos não controlados; limite de acordo com avaliação de "
+            "risco e projeto técnico ou plano simples apresentado pelo cliente.",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxas prefixadas ou pós-fixadas, definidas conforme avaliação de "
+            "risco e histórico de relacionamento com a CAIXA (valor exato não documentado "
+            "publicamente -- consultar agência).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 8 anos, com carência de 24 meses, de acordo com a finalidade e "
+            "fonte de recurso da operação.",
+        "carencia": "24 meses.",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": NAO_INFORMADO,
+        "restricoes": NAO_INFORMADO,
+        "criterios_elegibilidade": "Produtores Rurais Pessoa Física, Produtores Rurais Pessoa "
+            "Jurídica, Cooperativas de Produção Agropecuária.",
+        "agente_financeiro": "Caixa Econômica Federal",
+        "canal_contratacao": "Agência CAIXA",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": "Projeto técnico ou plano simples.",
+        "url_oficial": "https://www.caixa.gov.br/agro/investimento/armazenagem/Paginas/default.aspx",
+        "data_vigencia": NAO_INFORMADO,
+        "trecho_fonte": '"Linha para o financiamento de aquisição e implantação de estrutura '
+            'para armazenamento de grãos e produtos agrícolas incluindo câmaras frias, silos, '
+            'armazéns, elevadores, secadores e demais componentes do sistema de armazenagem." '
+            '/ "Até 08 anos com carência de 24 meses." (capturado ao vivo da página oficial '
+            "via Browser pane em 2026-09-15)",
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "AGROPECUÁRIA",
+        "subsetor_padronizado": "AGROPECUÁRIA",
+        "cnaes_relacionados": None,
+        "porte_padronizado": None,
+        "destinacao_padronizada": "Armazenagem de produtos agrícolas",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "programa armazenagem caixa silos armazens graos produtos "
+            "agricolas",
+    },
+]
+
+
+def seed_cef_manual(conn) -> int:
+    return _upsert_many(conn, [dict(linha) for linha in _CEF_MANUAL])
+
+
 def build_linhas_incentivadas():
     conn = get_connection()
     try:
@@ -3325,12 +4848,16 @@ def build_linhas_incentivadas():
         n_bndes = seed_bndes_manual(conn)
         n_desenvolve_sp = seed_desenvolve_sp_manual(conn)
         n_bnb = seed_bnb_manual(conn)
+        n_basa = seed_basa_manual(conn)
+        n_bb = seed_bb_manual(conn)
+        n_cef = seed_cef_manual(conn)
         total = conn.execute("SELECT COUNT(*) FROM linhas_incentivadas").fetchone()[0]
     finally:
         conn.close()
     print(
-        f"linhas_incentivadas: {n_finep} da FINEP (curadoria manual verificada) + {n_bndes} do BNDES + "
-        f"{n_desenvolve_sp} da Desenvolve SP + {n_bnb} do BNB (curadoria manual verificada) "
+        f"linhas_incentivadas: {n_finep} da FINEP + {n_bndes} do BNDES + "
+        f"{n_desenvolve_sp} da Desenvolve SP + {n_bnb} do BNB + {n_basa} do BASA + "
+        f"{n_bb} do BB + {n_cef} da CEF (todas curadoria manual verificada) "
         f"processadas -- {total} linhas no total."
     )
 
