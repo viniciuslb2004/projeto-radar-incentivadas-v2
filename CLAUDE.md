@@ -394,6 +394,16 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   `plainto_tsquery` por palavra, também dentro do CASE) chegou a ser testada e
   mediu uma query de 8 palavras subindo de ~9s pra **55s** só por causa disso,
   contra o Aiven — meça antes de assumir que "mais uma condição" é barato.
+- **"grupo"/"grupos" faltando em `PALAVRAS_GENERICAS_QUERY`** (`src/search_fts.py`):
+  mesmo problema que "empresa" (ver `_periodo_anterior`/hospital-vs-SP acima), só
+  descoberto depois — "grupo" é uma palavra de estrutura societária tão comum quanto
+  "empresa" (qualquer "Grupo X" da base), então diluía o OR de texto livre (tier 5) do
+  mesmo jeito. Confirmado ao vivo (2026-09-11): buscar "Grupo Belterra" achava a
+  empresa real (`AGROFLORESTAL BELTERRA AMAZONIA SPE SA`) só na posição 37/200, e
+  "grupo mombak" (`MOMBAK ANGICO-BRANCO FLORESTAL S.A.`) na posição 23/200 — nos dois
+  casos, buscar só pelo nome próprio (sem "grupo") já achava a empresa em 1º lugar,
+  confirmando que não era dado faltando, só a palavra genérica competindo no ranking.
+  Corrigido adicionando `"grupo"/"grupos"` ao mesmo set.
 - **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
   larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
@@ -619,6 +629,28 @@ sessão dele na hora (`exigir_admin`/`verificar_acesso_principal` conferem `ativ
 requisição) — testado ao vivo: desativar o próprio usuário logado derruba a sessão
 imediatamente, sem esperar o cookie expirar.
 
+**BUG REAL encontrado e corrigido em 2026-09-10, ANTES de ir pra produção**: o cookie de
+sessão migrou de `path="/admin"` (versão inicial deste painel) pra `path="/"` (quando o
+site principal passou a compartilhar a sessão). Contas que já tinham logado no painel
+`/admin` ANTES dessa migração de path continuam com o cookie antigo (`path=/admin`)
+guardado no navegador; um login novo grava um SEGUNDO cookie de mesmo nome
+(`admin_session`) com `path="/"` — o navegador manda os DOIS num request que bate os dois
+paths (qualquer rota `/admin/*`), e o parser de cookie do Starlette (`cookie_parser` em
+`starlette/requests.py`) é só um `dict` preenchido em ORDEM DE ITERAÇÃO da string
+`Cookie:` recebida — **last-write-wins, sem nenhuma lógica de especificidade de path**
+(confirmado lendo o código-fonte e reproduzido ao vivo: mandar
+`Cookie: admin_session=<valido>; admin_session=<invalido>` num request cru derruba a
+sessão mesmo com o token válido presente, só porque veio primeiro na string). Como a
+ordem que o navegador decide mandar cookies duplicados não é algo que o backend controla,
+isso derrubava a sessão de forma imprevisível logo depois de um login bem-sucedido.
+**Corrigido** em `definir_cookie_sessao`/`limpar_cookie_sessao`
+(`webapp/admin/auth.py`): toda vez que uma sessão é criada OU encerrada, o cookie no path
+antigo (`/admin`) é explicitamente expirado (`Max-Age=0`) na MESMA resposta — depois do
+primeiro login/logout no esquema novo, o navegador nunca mais tem os dois ao mesmo tempo.
+**Lição pra qualquer migração futura de `path`/`domain` de cookie**: nunca só trocar o
+path do `set_cookie` — sempre expirar explicitamente o cookie no path antigo também,
+senão qualquer sessão já ativa antes da mudança fica com as duas versões coexistindo.
+
 **Gestão de usuários (CRUD)**: `POST /admin/api/usuarios` cria conta nova (hash gerado na
 hora via `gerar_hash_senha`, senha em texto puro nunca persistida/logada/devolvida);
 `POST /admin/api/usuarios/{id}/ativo` ativa/desativa (soft); `DELETE /admin/api/usuarios/{id}`
@@ -681,7 +713,13 @@ depois do acoplamento do login): o texto "N operações · atualizado em ..." qu
 superior direito da topbar principal migrou pra uma faixa fina própria (`.status-strip`) logo
 abaixo — o espaço que abriu no canto da topbar virou usuário logado + botão "Sair" (mesmo
 padrão visual do painel de admin), alimentado por um novo `GET /api/me` (site, não confundir
-com `GET /admin/api/me`, do painel).
+com `GET /admin/api/me`, do painel). **Essa faixa (`.status-strip`) foi removida depois
+(2026-09-11)** — pedido do usuário: o texto (`#status-pill`) passou a viver DENTRO da
+`.filterbar` (barra branca de filtros), empurrado pro canto direito via `margin-left:auto`,
+em vez de numa faixa escura própria. Como `.filterbar` só é exibida (`display:flex`, ver
+`_ativarView` em `common.js`) nas abas Consolidado/Tendências, esse texto agora só aparece
+nessas duas — nas outras 3 (Busca/Editais/Linhas, que nunca mostraram essa barra) ele
+simplesmente não aparece, consequência direta e esperada de tê-lo colocado dentro dela.
 
 **Como remover o painel inteiro** (ver também o comentário no topo de
 `webapp/admin/routes.py`): 1) reverter o acoplamento do login do site principal (ver acima)

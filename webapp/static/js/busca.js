@@ -7,12 +7,24 @@ let ultimosResultados = [];
 // Historico de buscas: pessoal e temporario (so no navegador da propria pessoa,
 // via localStorage -- nunca vai pro servidor). Substitui os chips de exemplo
 // fixos que existiam antes (pedido do usuario).
-const BUSCA_HISTORICO_KEY = "radar_busca_historico";
+// Chave escopada por usuario logado (obterUsuarioAtual(), ver common.js): sem
+// isso, duas contas diferentes logando no MESMO navegador enxergavam o mesmo
+// historico (localStorage e por origem, nao por sessao/conta) -- bug real
+// reportado pelo usuario em 2026-09-11. Sem login individual configurado
+// (usuario null), cai na chave antiga sem sufixo, preservando o comportamento
+// de antes da conta.
+const BUSCA_HISTORICO_KEY_BASE = "radar_busca_historico";
 const BUSCA_HISTORICO_MAX = 8;
 
-function carregarHistoricoBusca() {
+async function _chaveHistoricoBusca() {
+  const usuario = await obterUsuarioAtual();
+  return usuario ? `${BUSCA_HISTORICO_KEY_BASE}:${usuario}` : BUSCA_HISTORICO_KEY_BASE;
+}
+
+async function carregarHistoricoBusca() {
   try {
-    const bruto = localStorage.getItem(BUSCA_HISTORICO_KEY);
+    const chave = await _chaveHistoricoBusca();
+    const bruto = localStorage.getItem(chave);
     const lista = bruto ? JSON.parse(bruto) : [];
     return Array.isArray(lista) ? lista : [];
   } catch (e) {
@@ -20,21 +32,22 @@ function carregarHistoricoBusca() {
   }
 }
 
-function registrarHistoricoBusca(q) {
+async function registrarHistoricoBusca(q) {
   try {
-    const atual = carregarHistoricoBusca().filter((item) => item.toLowerCase() !== q.toLowerCase());
+    const chave = await _chaveHistoricoBusca();
+    const atual = (await carregarHistoricoBusca()).filter((item) => item.toLowerCase() !== q.toLowerCase());
     atual.unshift(q);
-    localStorage.setItem(BUSCA_HISTORICO_KEY, JSON.stringify(atual.slice(0, BUSCA_HISTORICO_MAX)));
+    localStorage.setItem(chave, JSON.stringify(atual.slice(0, BUSCA_HISTORICO_MAX)));
   } catch (e) {
     // localStorage indisponivel (aba privada, storage bloqueado) -- historico so nao aparece.
   }
-  renderHistoricoBusca();
+  await renderHistoricoBusca();
 }
 
-function renderHistoricoBusca() {
+async function renderHistoricoBusca() {
   const container = document.getElementById("busca-historico");
   const input = document.getElementById("busca-input");
-  const historico = carregarHistoricoBusca();
+  const historico = await carregarHistoricoBusca();
 
   if (!historico.length) {
     container.style.display = "none";
@@ -55,9 +68,9 @@ function renderHistoricoBusca() {
   });
   const limpar = document.getElementById("busca-historico-limpar");
   if (limpar) {
-    limpar.addEventListener("click", () => {
+    limpar.addEventListener("click", async () => {
       try {
-        localStorage.removeItem(BUSCA_HISTORICO_KEY);
+        localStorage.removeItem(await _chaveHistoricoBusca());
       } catch (e) {
         // ignora
       }
@@ -257,7 +270,7 @@ async function _popularFiltrosBusca() {
 }
 
 async function runBusca(q) {
-  registrarHistoricoBusca(q);
+  await registrarHistoricoBusca(q);
   _sincronizarFiltrosBuscaNaURL(q);
   const container = document.getElementById("busca-resultado");
   container.innerHTML = '<p class="empty-state">Buscando operações parecidas...</p>';
@@ -333,7 +346,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // usuario para de digitar (debounce), mesmo sem uma busca nova ser executada.
   input.addEventListener("input", debounce(() => _sincronizarFiltrosBuscaNaURL(input.value.trim()), 400));
 
-  renderHistoricoBusca();
+  await renderHistoricoBusca();
   await _popularFiltrosBusca();
 
   // Link compartilhado/F5: aplica os filtros (e dispara a busca, se tinha query)
