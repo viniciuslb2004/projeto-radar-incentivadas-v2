@@ -18,12 +18,15 @@ COMO REMOVER ESTE PAINEL INTEIRO (se um dia for descontinuado):
 Fora essa excecao documentada, nada neste painel toca em `operations`,
 `linhas_incentivadas`, `editais_raw` nem em qualquer outra tabela do dado de negocio.
 """
+import logging
 import os
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db import get_connection
+
+logger = logging.getLogger("radar")
 
 from .auth import (
     SESSION_COOKIE,
@@ -245,6 +248,44 @@ def listar_acessos(limit: int = 100, usuario: dict = Depends(exigir_admin)):
     }
 
 
+@router.get("/api/usuarios/{usuario_id}/acessos")
+def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reaproveita
+    admin_acessos_log, so filtra por usuario_id -- NAO e a V2 de analytics (sem
+    tracking de navegacao/clique dentro da pagina, so login/logout, ver CLAUDE.md)."""
+    conn = get_connection(pooled=True)
+    try:
+        alvo = conn.execute("SELECT username FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        if alvo is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        rows = conn.execute(
+            "SELECT origem, evento, ip, criado_em FROM admin_acessos_log "
+            "WHERE usuario_id = ? ORDER BY id DESC LIMIT 200",
+            (usuario_id,),
+        ).fetchall()
+        total_logins = conn.execute(
+            "SELECT COUNT(*) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        primeiro = conn.execute(
+            "SELECT MIN(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        ultimo = conn.execute(
+            "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        "username": alvo[0],
+        "total_logins": total_logins,
+        "primeiro_acesso": primeiro,
+        "ultimo_acesso": ultimo,
+        "eventos": [{"origem": r[0], "evento": r[1], "ip": r[2], "criado_em": r[3]} for r in rows],
+    }
+
+
 def _disparar_workflow_github(arquivo_workflow: str) -> None:
     if not GITHUB_ACTIONS_TOKEN:
         raise HTTPException(
@@ -339,9 +380,23 @@ def enriquecer_pendentes_lote(payload: dict = None, usuario: dict = Depends(exig
             ).fetchone()[0]
             return {"ok": True, "processados": 0, "resolvidos_cnpj_cnae": 0, "operacoes_reclassificadas": 0, "restantes": restantes}
 
-        divisao_map = build_divisao_map(conn)
-        resolvidos = enrich_cnae.enrich_pendentes_via_api(conn, set(cnpjs), divisao_map)
-        reclassificados = unify.reclassificar_pendentes(conn)
+        # BUG REAL em producao (2026-09-10): esta chamada (via unify.reclassificar_
+        # pendentes -> _load_cnae_lookup -> db.get_engine()) so funciona se sqlalchemy
+        # estiver instalado no runtime -- ver comentario em api/requirements.txt. Sem
+        # isso, quebrava com 500 cru (ModuleNotFoundError) em vez de uma mensagem
+        # clara. O try/except aqui e defesa em profundidade (cobre TAMBEM falhas de
+        # rede da BrasilAPI, timeout, etc) -- a causa raiz especifica ja foi corrigida
+        # adicionando sqlalchemy a api/requirements.txt.
+        try:
+            divisao_map = build_divisao_map(conn)
+            resolvidos = enrich_cnae.enrich_pendentes_via_api(conn, set(cnpjs), divisao_map)
+            reclassificados = unify.reclassificar_pendentes(conn)
+        except Exception as e:
+            logger.exception("enriquecer-pendentes falhou processando o lote")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Nao foi possivel processar este lote agora ({e}). Tente novamente em instantes.",
+            )
         restantes = conn.execute(
             "SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'"
         ).fetchone()[0]

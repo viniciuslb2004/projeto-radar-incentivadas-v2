@@ -660,7 +660,38 @@ e reaproveita `unify.py::registrar_correcao_manual` (a MESMA função que
 `webapp/main.py::enriquecimento_corrigir` já usava) pra aplicar e gravar o histórico.
 "Desativar" só marca `ativa=FALSE` (nunca `DELETE` — é histórico) e não reverte o valor já
 aplicado em `operations`; isso só muda o que o próximo refresh semanal vai (deixar de)
-reforçar (`unify.py::_reaplicar_correcoes_manuais`).
+reforçar (`unify.py::_reaplicar_correcoes_manuais`). **UX ajustada 2026-09-10** (feedback real
+do usuário testando em produção): a lista de resultados da busca fica ABERTA/VISÍVEL o tempo
+todo (não fecha ao selecionar uma operação, pra corrigir várias em sequência), e cada
+resultado tem um ícone de caneta (✏️) que abre o formulário JÁ PREENCHIDO com o valor ATUAL
+do campo escolhido (troca de campo no select atualiza o valor mostrado) — o usuário edita em
+cima em vez de digitar do zero. **Decisão explícita**: nenhum mecanismo de "sugestão
+automática" de correção foi construído (o usuário pediu pra clarificar antes de inventar uma
+heurística — confirmado via pergunta direta: sem sugestão automática por enquanto, só
+busca+edição manual).
+
+**BUG REAL em produção corrigido em 2026-09-10 (500 no "enriquecer pendentes")**: a rota
+`POST /admin/api/enriquecer-pendentes` funcionava local mas quebrava com 500 no deploy
+hospedado. Causa: ela chama `unify.py::reclassificar_pendentes()`, que usa
+`db.get_engine()` (SQLAlchemy, via `pd.read_sql`) — mas `api/requirements.txt` excluía
+`sqlalchemy` de propósito, com um comentário explícito dizendo "webapp/main.py nunca chama
+get_engine()". Essa suposição deixou de ser verdadeira quando este botão do painel de admin
+passou a chamar esse código de dentro da function serverless. **Corrigido** adicionando
+`sqlalchemy` a `api/requirements.txt` (comentário atualizado explicando a exceção) + a rota
+agora captura qualquer exceção do processamento do lote e devolve uma mensagem clara em vez
+de deixar o 500 cru vazar (defesa em profundidade, cobre também falha de rede da BrasilAPI
+etc). **Lição**: ao adicionar uma rota nova em `webapp/admin/routes.py` que importa algo de
+`src/` (mesmo que via outro módulo, ex: `unify.py` → `db.get_engine()`), sempre reconferir
+`api/requirements.txt` — o comentário no topo daquele arquivo documenta o grafo de imports
+assumido, e uma rota nova pode quebrar essa suposição silenciosamente (só falha no ambiente
+hospedado, nunca em dev local com o `requirements.txt` completo).
+
+**Drill-down por usuário** (`GET /admin/api/usuarios/{id}/acessos`, aprovado 2026-09-10):
+clicar no username na tabela "Usuários do painel" abre um modal com o histórico de
+login/logout DAQUELA pessoa — total de logins, primeiro/último acesso, lista de eventos.
+Reaproveita `admin_acessos_log` (só filtra por `usuario_id`), nenhuma tabela nova nem
+tracking novo — explicitamente MENOR que uma V2 de analytics (que continua fora do escopo,
+ver acima).
 
 **Usuário logado + Sair no site principal** (`webapp/static/index.html`/`common.js`, natural
 depois do acoplamento do login): o texto "N operações · atualizado em ..." que morava no canto

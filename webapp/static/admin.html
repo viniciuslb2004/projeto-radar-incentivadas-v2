@@ -187,6 +187,29 @@
   </main>
 </div>
 
+<div id="admin-usuario-modal" class="admin-modal-overlay hidden">
+  <div class="admin-modal">
+    <div class="admin-modal-header">
+      <h3 id="admin-usuario-modal-titulo">Usuário</h3>
+      <button id="admin-usuario-modal-fechar" class="admin-btn-secundario">Fechar</button>
+    </div>
+    <div id="admin-usuario-modal-resumo" class="admin-cards"></div>
+    <table class="admin-tabela">
+      <thead>
+        <tr>
+          <th>Origem</th>
+          <th>Evento</th>
+          <th>IP</th>
+          <th>Quando</th>
+        </tr>
+      </thead>
+      <tbody id="admin-usuario-modal-tbody">
+        <tr><td colspan="4">Carregando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <script src="/js/admin.js"></script>
 </body>
 </html>

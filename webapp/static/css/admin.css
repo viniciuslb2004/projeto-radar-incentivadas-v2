@@ -180,17 +180,66 @@
   overflow-y: auto;
 }
 .admin-correcao-resultado-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   text-align: left;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 12px;
-  cursor: pointer;
 }
-.admin-correcao-resultado-item:hover { background: var(--blue-lightest); }
+.admin-correcao-resultado-item.selecionada { border-color: var(--blue-mid); background: var(--blue-lightest); }
+.admin-correcao-editar-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.admin-correcao-editar-btn:hover { background: var(--blue-lightest); }
 .admin-correcao-selecionada { font-size: 12px; color: var(--text-muted); }
 .admin-correcao-campos { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.admin-usuario-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--navy);
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+}
+.admin-usuario-link:hover { color: var(--steel); }
+
+.admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(21, 37, 52, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.admin-modal {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  padding: 20px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.admin-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.admin-modal-header h3 { margin: 0; color: var(--navy); }
+.admin-modal-header .admin-btn-secundario { color: var(--navy); border-color: var(--border); }
+.admin-modal-header .admin-btn-secundario:hover { background: var(--bg); }
 
 .admin-refresh-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
 .admin-refresh-card {
