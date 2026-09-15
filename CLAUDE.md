@@ -596,6 +596,27 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   Scripts de pipeline (`refresh.py`, `enrich_cnae.py` etc., só via GitHub Actions)
   continuam chamando `get_connection()` sem argumento (conexão direta, sem pool) — sessões
   longas com poucas conexões são o caso de uso oposto ao que o pool resolve.
+  **Incidente real (2026-09-15)**: o teto de 20 conexões do Aiven free tier foi batido de
+  verdade — `psycopg.OperationalError: FATAL: remaining connection slots are reserved for
+  roles with the SUPERUSER attribute`, confirmado por DUAS sessões de IA diferentes tentando
+  conectar ao mesmo tempo (nenhuma das duas conseguia, não era problema isolado de uma
+  sessão). Diagnosticado via `pg_stat_activity` assim que uma conexão finalmente vagou: a
+  maioria das conexões eram `usename='avnadmin'`, `state='idle'`, vindas de MUITOS
+  `client_addr` diferentes (faixas de IP da AWS) — sinal de que eram instâncias serverless da
+  Vercel (não scripts locais: `Get-CimInstance Win32_Process` na máquina não achou nenhum
+  `uvicorn`/servidor local esquecido rodando). Aliviado terminando (`pg_terminate_backend`)
+  só as conexões `avnadmin`/`idle` ociosas há MAIS de 3 minutos (nunca conexões ativas, em
+  transação, ou de sistema como `pg_cron scheduler`/`pg_failover_slots worker`/
+  `TimescaleDB Background Worker`/`management-agent`) — não é algo que aconteça sozinho, foi
+  uma ação manual pontual, não virou rotina automática. **Causa mais provável**: um dia de
+  atividade concentrada (múltiplas sessões de IA fazendo deploy + teste ao vivo em paralelo,
+  vários pushes pra `master` cada um disparando um redeploy novo na Vercel) empurrou o número
+  de instâncias serverless concorrentes acima da margem seguro de ~10 que o `max_size=2`
+  do pool assume (ver acima) — não uma mudança de código quebrando algo. **Fica como item
+  pra próxima revisão de performance/custo**: se esse padrão se repetir, vale considerar (a)
+  reduzir `max_size` pra 1 (aperta ainda mais a margem de segurança, mas nunca houve evidência
+  de ganho de latência com 2), ou (b) avaliar se o plano gratuito do Aiven ainda é suficiente
+  pro volume de uso atual — nenhuma das duas foi decidida/aplicada, só registrada aqui.
 - **Sessões/agentes de IA concorrentes podem compartilhar este mesmo working directory** (já
   aconteceu nesta sessão) — antes de `git add <arquivo> && git commit`, prefira conferir
   `git diff <arquivo>` primeiro se houver qualquer suspeita de edição concorrente, pra não
@@ -847,6 +868,19 @@ qualquer visitante pedir uma conta nova, sem precisar de um admin criar na mão.
   normal (`GET /admin/api/usuarios`) agora filtra `status != 'pendente'` — contas pendentes
   só aparecem na seção de aprovação, nunca na lista normal (evita confundir "editar uma conta
   existente" com "decidir sobre um pedido novo").
+
+**BUG REAL encontrado e corrigido no merge (2026-09-15)**: `#login-card`/`#registrar-card`
+nunca tinham uma regra `.hidden { display: none }` própria em `style.css` — só
+`#login-overlay.hidden` existia. Resultado: `_mostrarRegistrarOverlay()`/`_voltarParaLogin()`
+trocavam a classe certinho, mas SEM efeito visual nenhum — os dois formulários ficavam
+sempre visíveis lado a lado, sobrepostos (confirmado ao vivo, capturado em screenshot antes
+do fix). Corrigido adicionando `#login-card.hidden, #registrar-card.hidden { display: none; }`
+junto de `#login-overlay.hidden` no topo do bloco de estilos do login. **Lição**: toda vez que
+um elemento novo usa `class="hidden"` pra alternar visibilidade, confirmar que existe uma
+regra CSS `#id.hidden`/`.classe.hidden { display: none }` correspondente — este projeto não
+tem uma regra `.hidden` genérica (cada uso é escopado ao próprio seletor, ver os outros usos
+de `.hidden` espalhados por `style.css`), então um elemento novo SEMPRE precisa da sua própria
+regra, nunca herda de outro.
 
 **Usuário logado + Sair no site principal** (`webapp/static/index.html`/`common.js`, natural
 depois do acoplamento do login): o texto "N operações · atualizado em ..." que morava no canto
