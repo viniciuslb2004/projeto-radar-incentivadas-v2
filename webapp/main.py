@@ -307,6 +307,7 @@ def filtros():
         return {
             "agencias": col_values("agencia"),
             "setores": col_values("setor_bndes"),
+            "subsetores": col_values("subsetor_bndes"),
             "ufs": col_values("uf"),
             "instrumentos": col_values("instrumento"),
             "produtos": col_values("produto"),
@@ -789,12 +790,12 @@ if not MOTOR_BUSCA_IA:
     @app.get("/api/busca")
     def busca(
         q: str = Query(..., min_length=3), agencia: str = None, valor_minimo: float = None,
-        regiao: str = None, produto: str = None, porte: str = None,
+        regiao: str = None, produto: str = None, porte: str = None, setor: str = None, uf: str = None,
     ):
         try:
             return buscar_texto(
                 q, agencia=agencia or None, valor_minimo=valor_minimo, regiao=regiao or None,
-                produto=produto or None, porte=porte or None,
+                produto=produto or None, porte=porte or None, setor=setor or None, uf=uf or None,
             )
         except Exception as e:
             logger.exception("motor de busca indisponivel")
