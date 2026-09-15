@@ -15,6 +15,7 @@
   const logoutBtn = document.getElementById("admin-logout-btn");
   const buscaInput = document.getElementById("admin-busca-usuario");
   const usuariosTbody = document.getElementById("admin-usuarios-tbody");
+  const pendentesTbody = document.getElementById("admin-pendentes-tbody");
   const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
   const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
@@ -34,6 +35,11 @@
   const correcaoSalvarBtn = document.getElementById("admin-correcao-salvar-btn");
   const correcaoErroEl = document.getElementById("admin-correcao-erro");
   const correcoesTbody = document.getElementById("admin-correcoes-tbody");
+  const usuarioModal = document.getElementById("admin-usuario-modal");
+  const usuarioModalTitulo = document.getElementById("admin-usuario-modal-titulo");
+  const usuarioModalResumo = document.getElementById("admin-usuario-modal-resumo");
+  const usuarioModalTbody = document.getElementById("admin-usuario-modal-tbody");
+  const usuarioModalFechar = document.getElementById("admin-usuario-modal-fechar");
   let operacaoSelecionada = null;
 
   async function apiFetch(path, options) {
@@ -130,7 +136,7 @@
         const acaoTexto = u.ativo ? "Desativar" : "Ativar";
         const roleTexto = u.role === "admin" ? "Admin" : "Usuário";
         return `<tr>
-          <td>${u.username}</td>
+          <td><button type="button" class="admin-usuario-link" data-id="${u.id}">${u.username}</button></td>
           <td><span class="admin-pill admin-role">${roleTexto}</span></td>
           <td><span class="admin-pill ${pillClasse}">${pillTexto}</span></td>
           <td>${formatarData(u.criado_em)}</td>
@@ -148,6 +154,43 @@
     const dado = await resp.json();
     renderUsuarios(dado.usuarios);
   }
+
+  function renderPendentes(pendentes) {
+    if (!pendentes.length) {
+      pendentesTbody.innerHTML = '<tr><td colspan="3">Nenhuma solicitação pendente.</td></tr>';
+      return;
+    }
+    pendentesTbody.innerHTML = pendentes
+      .map(
+        (p) => `<tr>
+          <td>${p.username}</td>
+          <td>${formatarData(p.criado_em)}</td>
+          <td>
+            <button class="admin-toggle-btn" data-acao="aprovar" data-id="${p.id}">Aprovar</button>
+            <button class="admin-toggle-btn" data-acao="rejeitar" data-id="${p.id}">Rejeitar</button>
+          </td>
+        </tr>`
+      )
+      .join("");
+  }
+
+  async function carregarPendentes() {
+    const resp = await apiFetch("/usuarios/pendentes");
+    const dado = await resp.json();
+    renderPendentes(dado.pendentes);
+  }
+
+  pendentesTbody.addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".admin-toggle-btn[data-acao]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await apiFetch(`/usuarios/${btn.dataset.id}/${btn.dataset.acao}`, { method: "POST" });
+      await Promise.all([carregarPendentes(), carregarUsuarios(buscaInput.value)]);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   function renderAcessos(acessos) {
     if (!acessos.length) {
@@ -201,6 +244,47 @@
     } finally {
       btn.disabled = false;
     }
+  });
+
+  // Drill-down por usuario (pedido do usuario): clicar no nome abre um modal com o
+  // historico de login/logout DAQUELA pessoa (reaproveita admin_acessos_log, so
+  // filtra por usuario_id -- NAO e tracking de navegacao/clique, so login/logout).
+  usuariosTbody.addEventListener("click", async function (ev) {
+    const link = ev.target.closest(".admin-usuario-link[data-id]");
+    if (!link) return;
+    usuarioModalTitulo.textContent = "Carregando...";
+    usuarioModalResumo.innerHTML = "";
+    usuarioModalTbody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+    usuarioModal.classList.remove("hidden");
+    const resp = await apiFetch(`/usuarios/${link.dataset.id}/acessos`);
+    const dado = await resp.json();
+    usuarioModalTitulo.textContent = dado.username;
+    usuarioModalResumo.innerHTML = `
+      <div class="admin-card"><div class="valor">${dado.total_logins}</div><div class="rotulo">Total de logins</div></div>
+      <div class="admin-card"><div class="valor">${formatarData(dado.primeiro_acesso)}</div><div class="rotulo">Primeiro acesso</div></div>
+      <div class="admin-card"><div class="valor">${formatarData(dado.ultimo_acesso)}</div><div class="rotulo">Último acesso</div></div>
+    `;
+    if (!dado.eventos.length) {
+      usuarioModalTbody.innerHTML = '<tr><td colspan="4">Nenhum acesso registrado ainda.</td></tr>';
+    } else {
+      usuarioModalTbody.innerHTML = dado.eventos
+        .map(
+          (e) => `<tr>
+            <td>${e.origem === "admin" ? "Painel admin" : "Site principal"}</td>
+            <td>${e.evento === "login" ? "Login" : "Logout"}</td>
+            <td>${e.ip || "--"}</td>
+            <td>${formatarData(e.criado_em)}</td>
+          </tr>`
+        )
+        .join("");
+    }
+  });
+
+  usuarioModalFechar.addEventListener("click", function () {
+    usuarioModal.classList.add("hidden");
+  });
+  usuarioModal.addEventListener("click", function (ev) {
+    if (ev.target === usuarioModal) usuarioModal.classList.add("hidden");
   });
 
   novoUsuarioBtn.addEventListener("click", function () {
@@ -335,11 +419,17 @@
 
   // ============ Correcoes manuais ============
   let buscaCorrecaoTimeout = null;
+  // A lista de resultados fica ABERTA/VISIVEL o tempo todo que houver um termo de
+  // busca (pedido do usuario) -- selecionar uma operacao pra editar nao fecha a
+  // lista, pra poder corrigir varias operacoes da mesma busca em sequencia. Cada
+  // resultado tem um icone de caneta que abre o formulario JA PREENCHIDO com o
+  // valor atual do campo escolhido (setor_bndes por padrao).
   correcaoBuscaInput.addEventListener("input", function () {
     clearTimeout(buscaCorrecaoTimeout);
     const termo = correcaoBuscaInput.value.trim();
     if (!termo) {
       correcaoResultadosEl.classList.add("hidden");
+      correcaoResultadosEl.innerHTML = "";
       return;
     }
     buscaCorrecaoTimeout = setTimeout(async function () {
@@ -349,11 +439,14 @@
         correcaoResultadosEl.innerHTML = '<div class="admin-correcao-resultado-item">Nenhuma operação encontrada.</div>';
       } else {
         correcaoResultadosEl.innerHTML = dado.operacoes
-          .map(
-            (o) =>
-              `<button type="button" class="admin-correcao-resultado-item" data-op='${JSON.stringify(o).replace(/'/g, "&#39;")}'>` +
-              `#${o.id} — ${o.cliente || "(sem nome)"} — setor: ${o.setor_bndes || "--"} / ${o.subsetor_bndes || "--"} / ${o.segmento || "--"}</button>`
-          )
+          .map((o) => {
+            const opJson = JSON.stringify(o).replace(/'/g, "&#39;");
+            const selecionada = operacaoSelecionada && operacaoSelecionada.id === o.id;
+            return `<div class="admin-correcao-resultado-item${selecionada ? " selecionada" : ""}">
+              <span>#${o.id} — ${o.cliente || "(sem nome)"} — setor: ${o.setor_bndes || "--"} / ${o.subsetor_bndes || "--"} / ${o.segmento || "--"}</span>
+              <button type="button" class="admin-correcao-editar-btn" title="Editar esta operação" data-op='${opJson}'>✏️</button>
+            </div>`;
+          })
           .join("");
       }
       correcaoResultadosEl.classList.remove("hidden");
@@ -361,14 +454,21 @@
   });
 
   correcaoResultadosEl.addEventListener("click", function (ev) {
-    const item = ev.target.closest(".admin-correcao-resultado-item[data-op]");
-    if (!item) return;
-    operacaoSelecionada = JSON.parse(item.dataset.op);
-    correcaoSelecionadaEl.textContent = `Operação selecionada: #${operacaoSelecionada.id} — ${operacaoSelecionada.cliente || "(sem nome)"}`;
+    const btn = ev.target.closest(".admin-correcao-editar-btn[data-op]");
+    if (!btn) return;
+    operacaoSelecionada = JSON.parse(btn.dataset.op);
+    correcaoSelecionadaEl.textContent = `Editando: #${operacaoSelecionada.id} — ${operacaoSelecionada.cliente || "(sem nome)"}`;
     correcaoSelecionadaEl.classList.remove("hidden");
     correcaoCamposWrap.classList.remove("hidden");
-    correcaoResultadosEl.classList.add("hidden");
-    correcaoBuscaInput.value = "";
+    // Ja preenchido com o valor ATUAL do campo (padrao setor_bndes) -- o usuario
+    // edita em cima em vez de comecar do zero.
+    correcaoCampoSelect.value = "setor_bndes";
+    correcaoValorInput.value = operacaoSelecionada.setor_bndes || "";
+  });
+
+  correcaoCampoSelect.addEventListener("change", function () {
+    if (!operacaoSelecionada) return;
+    correcaoValorInput.value = operacaoSelecionada[correcaoCampoSelect.value] || "";
   });
 
   correcaoSalvarBtn.addEventListener("click", async function () {
@@ -452,6 +552,7 @@
     await Promise.all([
       carregarDashboard(),
       carregarUsuarios(""),
+      carregarPendentes(),
       carregarAcessos(),
       carregarSaudeBanco(),
       carregarCorrecoes(),

@@ -16,9 +16,15 @@
 #                         psycopg_pool (import lazy dentro de _get_pool(), so usado
 #                         pelo caminho get_connection(pooled=True) -- e o que
 #                         webapp/main.py chama em toda rota, entao entra aqui)
-#                         (sqlalchemy so e importado dentro de get_engine(), usado
-#                         apenas pelos scripts de pipeline -- webapp/main.py nunca
-#                         chama get_engine())
+#   webapp/admin/routes.py -> unify (import LAZY, so dentro da rota
+#                         POST /admin/api/enriquecer-pendentes) -> unify.py chama
+#                         db.get_engine() (via _load_cnae_lookup/pd.read_sql), que
+#                         importa sqlalchemy. ATE 2026-09-10 essa suposicao ("webapp/
+#                         main.py nunca chama get_engine()") era verdade -- QUEBROU
+#                         em producao (500 real, ModuleNotFoundError) assim que o
+#                         botao "enriquecer pendentes" do painel de admin passou a
+#                         chamar unify.reclassificar_pendentes() de dentro da
+#                         function serverless. sqlalchemy readicionado aqui por isso.
 #   src/search.py       -> numpy, pandas, db, embeddings, empresa_lookup
 #   src/embeddings.py   -> numpy, pandas, db (sentence_transformers so dentro de
 #                         get_model(), nunca chamado no modo hospedado -- ver
@@ -47,3 +53,4 @@ numpy
 pandas
 openpyxl
 python-dotenv
+sqlalchemy

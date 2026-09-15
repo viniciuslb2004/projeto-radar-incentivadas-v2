@@ -783,7 +783,70 @@ e reaproveita `unify.py::registrar_correcao_manual` (a MESMA função que
 `webapp/main.py::enriquecimento_corrigir` já usava) pra aplicar e gravar o histórico.
 "Desativar" só marca `ativa=FALSE` (nunca `DELETE` — é histórico) e não reverte o valor já
 aplicado em `operations`; isso só muda o que o próximo refresh semanal vai (deixar de)
-reforçar (`unify.py::_reaplicar_correcoes_manuais`).
+reforçar (`unify.py::_reaplicar_correcoes_manuais`). **UX ajustada 2026-09-10** (feedback real
+do usuário testando em produção): a lista de resultados da busca fica ABERTA/VISÍVEL o tempo
+todo (não fecha ao selecionar uma operação, pra corrigir várias em sequência), e cada
+resultado tem um ícone de caneta (✏️) que abre o formulário JÁ PREENCHIDO com o valor ATUAL
+do campo escolhido (troca de campo no select atualiza o valor mostrado) — o usuário edita em
+cima em vez de digitar do zero. **Decisão explícita**: nenhum mecanismo de "sugestão
+automática" de correção foi construído (o usuário pediu pra clarificar antes de inventar uma
+heurística — confirmado via pergunta direta: sem sugestão automática por enquanto, só
+busca+edição manual).
+
+**BUG REAL em produção corrigido em 2026-09-10 (500 no "enriquecer pendentes")**: a rota
+`POST /admin/api/enriquecer-pendentes` funcionava local mas quebrava com 500 no deploy
+hospedado. Causa: ela chama `unify.py::reclassificar_pendentes()`, que usa
+`db.get_engine()` (SQLAlchemy, via `pd.read_sql`) — mas `api/requirements.txt` excluía
+`sqlalchemy` de propósito, com um comentário explícito dizendo "webapp/main.py nunca chama
+get_engine()". Essa suposição deixou de ser verdadeira quando este botão do painel de admin
+passou a chamar esse código de dentro da function serverless. **Corrigido** adicionando
+`sqlalchemy` a `api/requirements.txt` (comentário atualizado explicando a exceção) + a rota
+agora captura qualquer exceção do processamento do lote e devolve uma mensagem clara em vez
+de deixar o 500 cru vazar (defesa em profundidade, cobre também falha de rede da BrasilAPI
+etc). **Lição**: ao adicionar uma rota nova em `webapp/admin/routes.py` que importa algo de
+`src/` (mesmo que via outro módulo, ex: `unify.py` → `db.get_engine()`), sempre reconferir
+`api/requirements.txt` — o comentário no topo daquele arquivo documenta o grafo de imports
+assumido, e uma rota nova pode quebrar essa suposição silenciosamente (só falha no ambiente
+hospedado, nunca em dev local com o `requirements.txt` completo).
+
+**Drill-down por usuário** (`GET /admin/api/usuarios/{id}/acessos`, aprovado 2026-09-10):
+clicar no username na tabela "Usuários do painel" abre um modal com o histórico de
+login/logout DAQUELA pessoa — total de logins, primeiro/último acesso, lista de eventos.
+Reaproveita `admin_acessos_log` (só filtra por `usuario_id`), nenhuma tabela nova nem
+tracking novo — explicitamente MENOR que uma V2 de analytics (que continua fora do escopo,
+ver acima).
+
+**Cadastro público com aprovação** (`POST /api/registrar` + `/admin/api/usuarios/pendentes`
++ `/{id}/aprovar`/`/{id}/rejeitar`, aprovado 2026-09-15): a tela de login do SITE PRINCIPAL
+(`#login-overlay` em `index.html`) ganhou um segundo formulário (`#registrar-card`, alternado
+via botão "Criar conta" — `common.js::_mostrarRegistrarOverlay`/`_voltarParaLogin`) pra
+qualquer visitante pedir uma conta nova, sem precisar de um admin criar na mão.
+- **Schema**: nova coluna `admin_usuarios.status` (`'pendente'` | `'aprovado'` |
+  `'rejeitado'`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... DEFAULT 'aprovado'` — MESMO
+  padrão de `role`, ver `seed.py`) — default `'aprovado'` garante que toda conta que já
+  existia antes desta migração (seed + criadas pelo CRUD do painel) continua logando
+  normalmente sem aprovação retroativa nenhuma. Nenhuma tabela nova.
+- **`POST /api/registrar`** (rota pública, adicionada a `_ROTAS_PUBLICAS_API` em
+  `webapp/main.py`): valida username único + senha ≥8 caracteres, gera o hash na hora
+  (`gerar_hash_senha`, MESMA função usada pelo CRUD do painel — senha em texto puro nunca
+  persistida/logada), insere com `role='usuario'` **sempre** (nunca `'admin'` — promover a
+  admin continua sendo uma ação manual separada, via CRUD) e `status='pendente'`.
+- **Login com conta não aprovada**: `autenticar_credenciais` (`webapp/admin/auth.py`) devolve
+  o usuário mesmo com `status` diferente de `'aprovado'` (não filtra na query) — quem chama
+  (login do site em `webapp/main.py::site_login` E login do painel em
+  `webapp/admin/routes.py::login`) checa `mensagem_status_bloqueado(status)` DEPOIS de
+  validar a senha, e devolve uma mensagem especifica ("Sua conta ainda não foi aprovada por
+  um administrador." / "Sua solicitação de conta foi rejeitada.") em vez do genérico "usuário
+  ou senha incorretos" — dá pra saber a diferença entre "esqueci minha senha" e "minha conta
+  está pendente" sem vazar se o USERNAME existe (a mensagem só aparece depois da senha bater).
+  `_tentarLogin` (`common.js`) foi ajustado pra devolver `{ok, mensagem}` em vez de só um
+  booleano, propagando a mensagem real do backend pro usuário.
+- **Aprovação/rejeição**: nova seção "Contas pendentes de aprovação" no painel (própria,
+  separada do CRUD normal — `GET /admin/api/usuarios/pendentes`), com botões Aprovar/Rejeitar
+  (`POST .../aprovar` ou `.../rejeitar`, só mudam `status`, nunca `role`/`ativo`). O CRUD
+  normal (`GET /admin/api/usuarios`) agora filtra `status != 'pendente'` — contas pendentes
+  só aparecem na seção de aprovação, nunca na lista normal (evita confundir "editar uma conta
+  existente" com "decidir sobre um pedido novo").
 
 **Usuário logado + Sair no site principal** (`webapp/static/index.html`/`common.js`, natural
 depois do acoplamento do login): o texto "N operações · atualizado em ..." que morava no canto

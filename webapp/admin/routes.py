@@ -12,18 +12,23 @@ COMO REMOVER ESTE PAINEL INTEIRO (se um dia for descontinuado):
   6. ATENCAO -- EXCECAO a segregacao (ver CLAUDE.md, secao "Painel de Admin"): desde que
      o login do SITE PRINCIPAL passou a usar `admin_usuarios` (substituindo o antigo
      SITE_PASSWORD), remover so os itens 1-5 acima QUEBRA o login do site inteiro. Reverta
-     primeiro `_verificar_acesso`/`/api/login`/`/api/logout` em `webapp/main.py` para algum
+     primeiro `_verificar_acesso`/`/api/login`/`/api/logout`/`/api/registrar` em
+     `webapp/main.py` (o cadastro publico tambem depende de `admin_usuarios`) para algum
      mecanismo de auth do site principal (o antigo SITE_PASSWORD ou outro) ANTES de apagar
-     as tabelas/pacote.
+     as tabelas/pacote. Reverter tambem exige tirar o botao "Criar conta"/formulario de
+     cadastro de `webapp/static/index.html`/`common.js`.
 Fora essa excecao documentada, nada neste painel toca em `operations`,
 `linhas_incentivadas`, `editais_raw` nem em qualquer outra tabela do dado de negocio.
 """
+import logging
 import os
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db import get_connection
+
+logger = logging.getLogger("radar")
 
 from .auth import (
     SESSION_COOKIE,
@@ -34,6 +39,7 @@ from .auth import (
     exigir_admin,
     gerar_hash_senha,
     limpar_cookie_sessao,
+    mensagem_status_bloqueado,
     registrar_acesso,
 )
 
@@ -56,6 +62,9 @@ def login(payload: dict, request: Request, response: Response):
         usuario = autenticar_credenciais(conn, username, senha)
         if usuario is None:
             raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
+        mensagem_bloqueio = mensagem_status_bloqueado(usuario["status"])
+        if mensagem_bloqueio:
+            raise HTTPException(status_code=401, detail=mensagem_bloqueio)
         if usuario["role"] != "admin":
             raise HTTPException(status_code=403, detail="Esta conta nao tem acesso ao painel de admin")
         token = criar_sessao(conn, usuario["id"])
@@ -131,12 +140,14 @@ def dashboard(usuario: dict = Depends(exigir_admin)):
 
 @router.get("/api/usuarios")
 def listar_usuarios(q: str = "", usuario: dict = Depends(exigir_admin)):
+    # So contas ja decididas (aprovado/rejeitado) -- pendentes tem secao propria
+    # (GET /api/usuarios/pendentes) pra nao misturar aprovacao com o CRUD normal.
     conn = get_connection(pooled=True)
     try:
         termo = f"%{q.strip()}%" if q.strip() else "%"
         rows = conn.execute(
             "SELECT id, username, role, ativo, criado_em FROM admin_usuarios "
-            "WHERE username ILIKE ? ORDER BY username",
+            "WHERE username ILIKE ? AND status != 'pendente' ORDER BY username",
             (termo,),
         ).fetchall()
     finally:
@@ -146,6 +157,52 @@ def listar_usuarios(q: str = "", usuario: dict = Depends(exigir_admin)):
             {"id": r[0], "username": r[1], "role": r[2], "ativo": r[3], "criado_em": r[4]} for r in rows
         ]
     }
+
+
+@router.get("/api/usuarios/pendentes")
+def listar_pendentes(usuario: dict = Depends(exigir_admin)):
+    """Contas criadas via cadastro publico (POST /api/registrar) esperando
+    aprovacao/rejeicao de um admin -- ver CLAUDE.md, secao 'Painel de Admin'."""
+    conn = get_connection(pooled=True)
+    try:
+        rows = conn.execute(
+            "SELECT id, username, criado_em FROM admin_usuarios WHERE status = 'pendente' ORDER BY criado_em"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"pendentes": [{"id": r[0], "username": r[1], "criado_em": r[2]} for r in rows]}
+
+
+@router.post("/api/usuarios/{usuario_id}/aprovar")
+def aprovar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    conn = get_connection(pooled=True)
+    try:
+        row = conn.execute(
+            "SELECT status FROM admin_usuarios WHERE id = ?", (usuario_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        conn.execute("UPDATE admin_usuarios SET status = 'aprovado' WHERE id = ?", (usuario_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@router.post("/api/usuarios/{usuario_id}/rejeitar")
+def rejeitar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    conn = get_connection(pooled=True)
+    try:
+        row = conn.execute(
+            "SELECT status FROM admin_usuarios WHERE id = ?", (usuario_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        conn.execute("UPDATE admin_usuarios SET status = 'rejeitado' WHERE id = ?", (usuario_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 def _contar_admins_ativos(conn, excluir_id: int = None) -> int:
@@ -245,6 +302,44 @@ def listar_acessos(limit: int = 100, usuario: dict = Depends(exigir_admin)):
     }
 
 
+@router.get("/api/usuarios/{usuario_id}/acessos")
+def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reaproveita
+    admin_acessos_log, so filtra por usuario_id -- NAO e a V2 de analytics (sem
+    tracking de navegacao/clique dentro da pagina, so login/logout, ver CLAUDE.md)."""
+    conn = get_connection(pooled=True)
+    try:
+        alvo = conn.execute("SELECT username FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        if alvo is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        rows = conn.execute(
+            "SELECT origem, evento, ip, criado_em FROM admin_acessos_log "
+            "WHERE usuario_id = ? ORDER BY id DESC LIMIT 200",
+            (usuario_id,),
+        ).fetchall()
+        total_logins = conn.execute(
+            "SELECT COUNT(*) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        primeiro = conn.execute(
+            "SELECT MIN(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        ultimo = conn.execute(
+            "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        "username": alvo[0],
+        "total_logins": total_logins,
+        "primeiro_acesso": primeiro,
+        "ultimo_acesso": ultimo,
+        "eventos": [{"origem": r[0], "evento": r[1], "ip": r[2], "criado_em": r[3]} for r in rows],
+    }
+
+
 def _disparar_workflow_github(arquivo_workflow: str) -> None:
     if not GITHUB_ACTIONS_TOKEN:
         raise HTTPException(
@@ -339,9 +434,23 @@ def enriquecer_pendentes_lote(payload: dict = None, usuario: dict = Depends(exig
             ).fetchone()[0]
             return {"ok": True, "processados": 0, "resolvidos_cnpj_cnae": 0, "operacoes_reclassificadas": 0, "restantes": restantes}
 
-        divisao_map = build_divisao_map(conn)
-        resolvidos = enrich_cnae.enrich_pendentes_via_api(conn, set(cnpjs), divisao_map)
-        reclassificados = unify.reclassificar_pendentes(conn)
+        # BUG REAL em producao (2026-09-10): esta chamada (via unify.reclassificar_
+        # pendentes -> _load_cnae_lookup -> db.get_engine()) so funciona se sqlalchemy
+        # estiver instalado no runtime -- ver comentario em api/requirements.txt. Sem
+        # isso, quebrava com 500 cru (ModuleNotFoundError) em vez de uma mensagem
+        # clara. O try/except aqui e defesa em profundidade (cobre TAMBEM falhas de
+        # rede da BrasilAPI, timeout, etc) -- a causa raiz especifica ja foi corrigida
+        # adicionando sqlalchemy a api/requirements.txt.
+        try:
+            divisao_map = build_divisao_map(conn)
+            resolvidos = enrich_cnae.enrich_pendentes_via_api(conn, set(cnpjs), divisao_map)
+            reclassificados = unify.reclassificar_pendentes(conn)
+        except Exception as e:
+            logger.exception("enriquecer-pendentes falhou processando o lote")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Nao foi possivel processar este lote agora ({e}). Tente novamente em instantes.",
+            )
         restantes = conn.execute(
             "SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'"
         ).fetchone()[0]
