@@ -41,6 +41,21 @@ function _urlCompleta(url) {
 // explicitamente, entao nao sao afetadas.
 const TIMEOUT_PADRAO_MS = 45000;
 
+// Usuario logado (username de /api/me, ou null se login individual nao estiver
+// configurado). Cacheado numa Promise unica -- varios lugares da SPA (topbar,
+// historico pessoal de busca) precisam saber "quem esta logado" e nao devem
+// disparar um /api/me por chamador.
+let _usuarioAtualPromise = null;
+function obterUsuarioAtual() {
+  if (!_usuarioAtualPromise) {
+    _usuarioAtualPromise = fetch(_urlCompleta("/api/me"), { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { username: null }))
+      .then((dado) => dado.username || null)
+      .catch(() => null);
+  }
+  return _usuarioAtualPromise;
+}
+
 // ============ Login (tela custom, ver #login-overlay em index.html) ============
 // Ate 2026-09: HTTP Basic + header guardado em sessionStorage. Substituido por
 // sessao de cookie (conta individual, tabela `admin_usuarios`, EXCECAO documentada
@@ -141,14 +156,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // login por conta individual estiver configurado E alguem estiver logado --
   // ver /api/me em webapp/main.py). Sem login configurado (dev local sem nenhuma
   // conta ainda), a rota devolve username=null e este bloco fica escondido.
-  fetch(_urlCompleta("/api/me"), { credentials: "include" })
-    .then((r) => (r.ok ? r.json() : { username: null }))
-    .then((dado) => {
-      if (!dado.username) return;
-      document.getElementById("topbar-usuario-nome").textContent = dado.username;
-      document.getElementById("topbar-usuario").classList.remove("hidden");
-    })
-    .catch(() => {});
+  obterUsuarioAtual().then((usuario) => {
+    if (!usuario) return;
+    document.getElementById("topbar-usuario-nome").textContent = usuario;
+    document.getElementById("topbar-usuario").classList.remove("hidden");
+  });
 
   document.getElementById("topbar-logout-btn").addEventListener("click", async () => {
     try {
@@ -249,12 +261,39 @@ function paramsDaURL() {
   return new URLSearchParams(window.location.search);
 }
 
+// Cada aba lembra seu PROPRIO ultimo conjunto de filtros (nao herda de outra
+// aba) -- mas Consolidado e Tendencias compartilham o mesmo #filterbar (mesmos
+// elementos DOM fisicos, so escondido via display:none), entao sao tratados
+// como um unico "grupo" (`painel`) pra esse fim: alternar entre os dois nunca
+// deve limpar nada, ja que o filtro de um E o do outro (mesmo input). Busca,
+// Editais e Linhas Incentivadas sao cada um o proprio grupo (filtros/conceitos
+// de UI incompativeis entre si -- ex: Busca usa "regiao", Consolidado usa "uf").
+// `_ultimaQueryPorGrupo` e um cache em memoria (nao sobrevive a um F5 de
+// proposito -- um F5/link direto usa a query string ja presente na URL, ver
+// `_aplicarFiltros*DaURL` de cada aba) que guarda, por grupo, a ultima query
+// string sincronizada -- consultado por `_ativarView` (secao de roteamento
+// abaixo) na hora de montar a URL de destino de um clique real numa aba. So
+// precisa mexer na URL: os CAMPOS de filtro de cada aba ja preservam seu valor
+// sozinhos ao trocar de aba (nenhum codigo os reseta quando a aba fica
+// escondida), so a URL que ficava dessincronizada da tela.
+const _ultimaQueryPorGrupo = {};
+function _grupoDaView(view) {
+  if (view === "consolidado" || view === "tendencias") return "painel";
+  return view;
+}
+
+// Guarda qual aba esta ativa AGORA -- usado so pra `sincronizarFiltrosNaURL`
+// saber em qual grupo gravar o cache acima (nao dá pra inferir isso so pelos
+// `params` recebidos, que variam de aba pra aba).
+let _viewAtivaAgora = null;
+
 function sincronizarFiltrosNaURL(params) {
   const query = qs(params);
   const destino = window.location.pathname + (query ? "?" + query : "");
   if (destino !== window.location.pathname + window.location.search) {
     window.history.replaceState(window.history.state, "", destino);
   }
+  if (_viewAtivaAgora) _ultimaQueryPorGrupo[_grupoDaView(_viewAtivaAgora)] = query;
 }
 
 // Debounce generico -- usado pelos campos de texto livre (query da Busca, texto da
@@ -302,17 +341,33 @@ function _ativarView(view, empilharHistorico) {
   const mudouDeAba = window.location.pathname !== caminho;
   if (empilharHistorico) {
     // Clique numa aba: so cria uma entrada de historico nova se REALMENTE mudou
-    // de aba (clicar na aba ja ativa nao deve limpar filtro nenhum) -- e, ao
-    // mudar de verdade, LIMPA a query string de propósito: filtros sao por aba
-    // (ver "Filtros na URL" acima), entao abrir uma aba do zero via clique nunca
-    // deve herdar filtros que estavam na query string de outra aba.
-    if (mudouDeAba) window.history.pushState({ view }, "", caminho);
+    // de aba (clicar na aba ja ativa nao deve limpar filtro nenhum). Ao mudar de
+    // verdade, restaura o ULTIMO conjunto de filtros que o GRUPO da aba de
+    // destino teve nesta mesma visita a pagina (`_ultimaQueryPorGrupo`) -- nunca
+    // herda o da aba de ORIGEM, que pode ser de um grupo diferente (ver
+    // `_grupoDaView`). Os campos de filtro em si nao precisam de nada aqui: ja
+    // preservam seu valor sozinhos (nenhum reset ao trocar de aba), so a URL
+    // que precisava voltar a bater com o que ja esta na tela.
+    if (mudouDeAba) {
+      const query = _ultimaQueryPorGrupo[_grupoDaView(view)] || "";
+      window.history.pushState({ view }, "", caminho + (query ? "?" + query : ""));
+    }
   } else if (mudouDeAba) {
     // Estado inicial (carregamento direto/F5) ou popstate (voltar/avancar):
     // preserva a query string como estava -- pode ser um link compartilhado com
     // filtros, ou uma entrada de historico anterior que ja tinha os seus.
     window.history.replaceState({ view }, "", caminho + window.location.search);
   }
+  // Semeia o cache pro grupo desta aba a partir da URL atual, se ainda nao
+  // tiver nada gravado -- cobre o caso de carregar a pagina direto (F5/link
+  // compartilhado) numa aba com filtro na URL: sem isso, o cache so passaria a
+  // existir depois da PRIMEIRA mudanca de filtro feita pelo usuario, entao
+  // sair e voltar pra essa aba antes disso perderia a query que ja estava la.
+  const grupo = _grupoDaView(view);
+  if (_ultimaQueryPorGrupo[grupo] === undefined) {
+    _ultimaQueryPorGrupo[grupo] = window.location.search.replace(/^\?/, "");
+  }
+  _viewAtivaAgora = view;
 }
 
 // Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
@@ -355,12 +410,33 @@ function validarIntervaloDatas(campoAlterado) {
   }
 }
 
+// Liga/desliga os degrades de borda de `.tabs-wrap` (ver style.css) conforme
+// da pra rolar `.tabs` pra esquerda/direita NAQUELE momento -- a barra de
+// scroll nativa foi escondida de proposito (feia em larguras de desktop
+// intermediarias), entao esse e o unico aviso visual de que ha mais abas fora
+// da tela. Chamada no carregamento, ao redimensionar a janela e a cada scroll
+// dentro de `.tabs` (arrastar/roda do mouse muda quanto da pra rolar em cada
+// direcao).
+function _atualizarSombraAbas() {
+  const wrap = document.getElementById("tabs-wrap");
+  const tabs = document.getElementById("tabs");
+  if (!wrap || !tabs) return;
+  const folgaDireita = tabs.scrollWidth - tabs.clientWidth - tabs.scrollLeft;
+  wrap.classList.toggle("tem-mais-a-esquerda", tabs.scrollLeft > 2);
+  wrap.classList.toggle("tem-mais-a-direita", folgaDireita > 2);
+}
+
 function _ligarBotoesDeAba() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => _ativarView(btn.dataset.view, true));
   });
   window.addEventListener("popstate", () => _ativarView(_viewInicialDaURL(), false));
   _ativarView(_viewInicialDaURL(), false);
+
+  const tabsEl = document.getElementById("tabs");
+  if (tabsEl) tabsEl.addEventListener("scroll", _atualizarSombraAbas);
+  window.addEventListener("resize", _atualizarSombraAbas);
+  _atualizarSombraAbas();
 }
 
 // Esconde a tela de carregamento inicial -- chamada em TODO caminho de saida de
@@ -414,12 +490,10 @@ async function _initFiltersAndTabsImpl() {
   window.MODO_HOSPEDADO = !!status.hospedado;
   window.BUSCA_IA_ATIVA = !!status.busca_ia_ativa;
   document.dispatchEvent(new CustomEvent("modo-hospedado-conhecido"));
-  if (status.ultimo_refresh && status.ultimo_refresh.finished_at) {
-    const d = new Date(status.ultimo_refresh.finished_at);
-    pill.textContent = `${fmtNum(status.n_operacoes)} operações · atualizado em ${d.toLocaleDateString("pt-BR")}`;
-  } else {
-    pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
-  }
+  // Pedido do usuario (2026-09-11): so a contagem, sem "atualizado em ..." --
+  // o dado de ultimo_refresh continua vindo de /api/status (usado em outros
+  // lugares, ex: painel de admin), so parou de aparecer aqui.
+  pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
 
   let filtros;
   try {

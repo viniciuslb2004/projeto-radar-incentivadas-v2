@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
 from db import get_connection
+from search_fts import PORTE_NORMALIZADO_SQL
 from webapp.detalhe import montar_detalhe_amigavel
 from webapp.admin.auth import (
     SESSION_COOKIE,
@@ -294,6 +295,14 @@ def filtros():
         def col_values(col):
             return [r[0] for r in cur.execute(f"SELECT DISTINCT {col} FROM operations WHERE {col} IS NOT NULL ORDER BY {col}").fetchall()]
 
+        # Portes: categorias CANONICAS (ver PORTE_NORMALIZADO_SQL), nao os 7 valores
+        # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
+        # informado" so aparece se alguma operacao realmente cair nela.
+        portes_presentes = {
+            r[0] for r in cur.execute(f"SELECT DISTINCT ({PORTE_NORMALIZADO_SQL}) FROM operations").fetchall()
+        }
+        portes = [p for p in ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "Não informado") if p in portes_presentes]
+
         min_max = cur.execute("SELECT MIN(data_contratacao), MAX(data_contratacao) FROM operations").fetchone()
         return {
             "agencias": col_values("agencia"),
@@ -301,7 +310,7 @@ def filtros():
             "ufs": col_values("uf"),
             "instrumentos": col_values("instrumento"),
             "produtos": col_values("produto"),
-            "portes": col_values("porte_cliente"),
+            "portes": portes,
             "anos": col_values("ano"),
             "data_min": min_max[0],
             "data_max": min_max[1],
@@ -479,9 +488,9 @@ def porte_breakdown(agencia: str = None, setor: str = None, uf: str = None, data
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(porte_cliente, 'Nao informado'), COUNT(*), SUM(valor_contratado)
+            SELECT ({PORTE_NORMALIZADO_SQL}) AS porte_normalizado, COUNT(*), SUM(valor_contratado)
             FROM operations {where}
-            GROUP BY porte_cliente
+            GROUP BY porte_normalizado
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
@@ -516,7 +525,17 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
     # pareceria uma alta fabricada de 100pp; nenhum dos dois e uma comparacao real,
     # entao a variacao fica None e quem consome (frontend) remove a indicacao de
     # alta/queda por completo, em vez de mostrar uma variacao enganosa.
-    comparavel = total_anterior > 0
+    # BUG REAL corrigido (2026-09-10): essa guarda so cobria o periodo anterior cair
+    # INTEIRO antes do inicio da base (total_anterior=0) -- faltava o caso dele cair
+    # SO PARCIALMENTE antes (ex: anterior=1997-2011, base comeca em 2002): ai
+    # total_anterior fica positivo (tem dado real de 2002-2011), a guarda liberava a
+    # comparacao, mas o total ficava artificialmente baixo por faltar ~5 anos que a
+    # base nunca poderia ter tido -- a variacao percentual saia enganosa (parecia
+    # queda/alta de negocio, era so cobertura temporal incompleta). Corrigido
+    # exigindo tambem que o periodo anterior INTEIRO esteja dentro da cobertura real
+    # da base (ant_inicio >= MIN(data_contratacao)), nao so que tenha algum dado.
+    min_data_base = cur.execute("SELECT MIN(data_contratacao) FROM operations").fetchone()[0]
+    comparavel = total_anterior > 0 and (not min_data_base or ant_inicio >= min_data_base)
 
     grupos = set(atual) | set(anterior)
     out = []

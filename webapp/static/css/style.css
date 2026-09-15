@@ -175,14 +175,16 @@ body {
 
 /* So em telas largas o suficiente pra brand+abas+usuario caberem numa linha sem
    espremer ninguem: forca tudo numa linha so, e quem absorve a falta de espaco e
-   o .tabs (ja tem min-width:0 + overflow-x:auto, rola horizontal em vez de forcar
-   quebra de linha no container inteiro) -- sem isso, o ultimo item da direita
-   as vezes ia sozinho pra uma segunda linha meio solta em larguras intermediarias
-   de desktop (bug real reportado pelo usuario, na epoca com o status-pill morando
-   aqui -- o status-pill migrou pra .status-strip abaixo, mas o mesmo risco existe
-   agora pro bloco usuario/Sair). Em telas mais estreitas (tablet/celular), mantem
-   o `wrap` do bloco base acima -- empilhar brand/abas/usuario em linhas separadas
-   e o comportamento certo la, ja testado e funcionando. */
+   o .tabs-wrap (ja tem min-width:0 + .tabs dentro dele com overflow-x:auto, rola
+   horizontal em vez de forcar quebra de linha no container inteiro) -- sem isso,
+   o ultimo item da direita as vezes ia sozinho pra uma segunda linha meio solta
+   em larguras intermediarias de desktop (bug real reportado pelo usuario, na
+   epoca com o status-pill morando aqui -- ele depois migrou pra uma faixa propria
+   e, mais tarde, pra dentro do .filterbar, ver comentario la; o mesmo risco de
+   quebra de linha existe agora pro bloco usuario/Sair). Em telas mais estreitas
+   (tablet/celular), mantem o `wrap` do bloco base acima -- empilhar brand/abas/
+   usuario em linhas separadas e o comportamento certo la, ja testado e
+   funcionando. */
 @media (min-width: 900px) {
   .topbar { flex-wrap: nowrap; }
   .topbar .brand, .topbar-usuario { flex-shrink: 0; white-space: nowrap; }
@@ -192,7 +194,7 @@ body {
 
 .topbar .brand {
   font-weight: 700;
-  font-size: 17px;
+  font-size: 15px;
   letter-spacing: 0.2px;
   display: flex;
   align-items: center;
@@ -207,30 +209,66 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* Envolve `.tabs` so pra hospedar os degrades de borda (`::before`/`::after`
+   abaixo) por cima da area de rolagem -- e ELE (nao mais `.tabs`) quem e o
+   item flex de `.topbar` agora, entao herda o `min-width:0`/`max-width:100%`
+   que antes viviam em `.tabs` (necessarios pro flex item realmente respeitar
+   o overflow em vez de so crescer alem do container -- gotcha classico de
+   flexbox, confirmado ao testar: sem isso, scrollWidth ficava igual a
+   clientWidth mesmo com as abas visualmente cortadas). */
+.tabs-wrap {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+.tabs-wrap::before, .tabs-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.tabs-wrap::before { left: 0; background: linear-gradient(to right, var(--navy), transparent); }
+.tabs-wrap::after { right: 0; background: linear-gradient(to left, var(--navy), transparent); }
+/* Classes ligadas por JS (`_atualizarSombraAbas` em common.js) -- so aparecem
+   quando `.tabs` realmente tem mais conteudo pra rolar NAQUELA direcao (nunca
+   um degrade decorativo fixo que apareceria mesmo com todas as abas cabendo
+   sem rolar). */
+.tabs-wrap.tem-mais-a-esquerda::before { opacity: 1; }
+.tabs-wrap.tem-mais-a-direita::after { opacity: 1; }
+
 .tabs {
   display: flex;
   gap: 4px;
-  /* Com 7 abas, nao cabe em telas estreitas (celular) -- em vez de deixar as ultimas
-     abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola horizontalmente.
-     Padrao comum de navegacao por abas em mobile, sem precisar de um menu hamburguer.
-     max-width+min-width:0 sao necessarios pro flex item realmente respeitar o
-     overflow em vez de so crescer alem do container (gotcha classico de flexbox --
-     confirmado ao testar: sem isso, scrollWidth ficava igual a clientWidth mesmo com
-     as abas visualmente cortadas). */
-  max-width: 100%;
-  min-width: 0;
+  /* Com 5 abas, pode nao caber em larguras de desktop intermediarias
+     (~950-1250px) nem em telas estreitas (celular) -- em vez de deixar as
+     ultimas abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola
+     horizontalmente. Padrao comum de navegacao por abas em mobile, sem
+     precisar de um menu hamburguer. */
   overflow-x: auto;
   flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  /* Rolagem continua funcionando por touch/wheel/arraste quando as abas nao
+     cabem -- so a BARRA em si fica escondida (feia nessas larguras,
+     reportado pelo usuario), tanto no Firefox (`scrollbar-width`) quanto em
+     Chrome/Edge/Safari (pseudo-elemento abaixo, unico jeito de esconder sem
+     tambem esconder o proprio scroll) -- os degrades de `.tabs-wrap` acima
+     sao o aviso visual de que da pra rolar, no lugar da barra nativa. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab-btn { flex-shrink: 0; }
 
 .tab-btn {
   background: transparent;
   border: none;
   color: var(--blue-lighter);
-  padding: 8px 16px;
+  padding: 8px 12px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
@@ -260,25 +298,6 @@ body {
 }
 .topbar-logout-btn:hover { background: var(--steel); }
 
-/* Faixa fina entre a topbar principal e a barra de filtros -- so o status-pill
-   (contagem total + data do ultimo refresh) mora aqui agora; o canto superior
-   direito da topbar principal, antes ocupado por ele, virou usuario logado + Sair
-   (ver .topbar-usuario acima) assim que o login por conta individual existiu. */
-.status-strip {
-  background: var(--navy-900);
-  padding: 4px 28px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.status-pill {
-  font-size: 11px;
-  color: var(--blue-lighter);
-  background: rgba(255,255,255,0.06);
-  padding: 5px 10px;
-  border-radius: 20px;
-}
-
 /* ============ Filter bar ============ */
 .filterbar {
   background: var(--card-bg);
@@ -288,6 +307,28 @@ body {
   gap: 14px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* Contagem total + data do ultimo refresh -- morava numa faixa escura propria
+   (.status-strip) entre a topbar e esta barra; o usuario pediu pra remover essa
+   faixa e trazer o texto pra dentro da barra de filtros (fundo claro, por isso
+   as cores mudaram pra combinar com o resto do .filterbar em vez do
+   translucido-sobre-escuro de antes). `margin-left:auto` empurra pro canto
+   direito quando cabe tudo numa linha só; com `flex-wrap:wrap` do .filterbar,
+   cai pra uma linha própria em telas estreitas em vez de espremer os selects.
+   Como esta barra só existe (`display:flex`, ver _ativarView em common.js) nas
+   abas Consolidado/Tendências, esse texto some junto nas outras 3 abas
+   (Busca/Editais/Linhas nunca mostraram esta barra) -- consequência direta do
+   pedido do usuário de colocar o texto DENTRO dela, não um efeito colateral
+   escondido. */
+.status-pill {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 5px 10px;
+  border-radius: 20px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .filterbar label {

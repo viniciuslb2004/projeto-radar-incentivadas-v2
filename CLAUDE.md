@@ -247,11 +247,36 @@ listas `_XXX_MANUAL`.
 Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
 (`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
 `history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
-`_viewInicialDaURL`) — nunca query string para estado de UI (ex: a granularidade do gráfico de
-Tendências fica só na página, não na URL; pedido explícito do usuário pra manter a barra de
-endereço limpa). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar) funciona
-via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`) + rewrites
-equivalentes em `vercel.json` (serve pro deploy hospedado).
+`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar)
+funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
++ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+
+**Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
+mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
+a mesma aba com os mesmos filtros aplicados (`sincronizarFiltrosNaURL`/`paramsDaURL` em
+`common.js`, um `_aplicarFiltros*DaURL()` por aba). Sempre `replaceState` (nunca `pushState`)
+pra filtro — só a troca de ABA cria uma entrada de histórico nova. Exclusão deliberada e
+conservadora: só entra o que restringe QUAL FATIA dos dados aparece (setor, UF, agência, data,
+texto de busca etc.) — o que só muda COMO os mesmos dados são exibidos (granularidade do
+gráfico de série temporal, ordenação em Editais/Linhas/Busca/modal de operações, página atual
+da paginação de Linhas) fica de fora, tratado como estado local da página.
+
+Trocar de aba por CLIQUE preserva o último conjunto de filtros que aquela aba (ou grupo de
+abas) já tinha nesta mesma visita à página — tanto na tela quanto na URL — em vez de limpar
+(comportamento antigo, corrigido em 2026-09-10 depois de reportado pelo usuário: "quando mudo
+de guia os filtros não acompanham"). Consolidado e Tendências compartilham o mesmo `#filterbar`
+(mesmos elementos DOM físicos, só escondido via `display:none` pras outras 3 abas), então são
+tratados como um único GRUPO (`_grupoDaView()` em `common.js`) — alternar entre os dois nunca
+limpa nada, já que o filtro de um É o do outro (mesmo input). Busca/Editais/Linhas são cada um
+o próprio grupo — filtros/conceitos de UI incompatíveis entre si (ex: Busca usa `regiao`,
+Consolidado usa `uf`), então NUNCA herdam filtro de um grupo diferente ao serem abertos; só
+restauram o que aquela aba especificamente já teve antes. Mecanismo: `_ultimaQueryPorGrupo`
+(cache em memória, não sobrevive a F5 de propósito — um F5/link direto usa a query já presente
+na URL) grava a última query de cada grupo toda vez que `sincronizarFiltrosNaURL` roda, e
+`_ativarView` consulta esse cache ao montar a URL de destino de um clique real numa aba. Não
+precisou mexer nos CAMPOS de filtro em si — eles já preservavam seu valor sozinhos ao trocar de
+aba (nenhum código os reseta quando a aba fica escondida), só a URL que ficava dessincronizada
+do que já estava na tela.
 
 Filtros de data (mês/ano início e fim, em várias abas) bloqueiam automaticamente um intervalo
 invertido (início > fim) — ver `validarIntervaloDatas()` em `common.js`, ajusta o lado que não
@@ -369,12 +394,33 @@ segunda, não é bug), e 2) `SELECT * FROM refresh_log ORDER BY id DESC` pra ver
   `plainto_tsquery` por palavra, também dentro do CASE) chegou a ser testada e
   mediu uma query de 8 palavras subindo de ~9s pra **55s** só por causa disso,
   contra o Aiven — meça antes de assumir que "mais uma condição" é barato.
+- **"grupo"/"grupos" faltando em `PALAVRAS_GENERICAS_QUERY`** (`src/search_fts.py`):
+  mesmo problema que "empresa" (ver `_periodo_anterior`/hospital-vs-SP acima), só
+  descoberto depois — "grupo" é uma palavra de estrutura societária tão comum quanto
+  "empresa" (qualquer "Grupo X" da base), então diluía o OR de texto livre (tier 5) do
+  mesmo jeito. Confirmado ao vivo (2026-09-11): buscar "Grupo Belterra" achava a
+  empresa real (`AGROFLORESTAL BELTERRA AMAZONIA SPE SA`) só na posição 37/200, e
+  "grupo mombak" (`MOMBAK ANGICO-BRANCO FLORESTAL S.A.`) na posição 23/200 — nos dois
+  casos, buscar só pelo nome próprio (sem "grupo") já achava a empresa em 1º lugar,
+  confirmando que não era dado faltando, só a palavra genérica competindo no ranking.
+  Corrigido adicionando `"grupo"/"grupos"` ao mesmo set.
 - **`.status-pill` (topbar) quebrando pra uma segunda linha solta** (`style.css`): em
   larguras intermediárias de desktop (~900-1300px), o pill de status ia sozinho pra uma
   segunda linha desalinhada. Corrigido: a partir de 900px, `.topbar` vira
   `flex-wrap:nowrap` e brand/pill ganham `flex-shrink:0` — quem absorve a falta de
   espaço é `.tabs` (já rola horizontal). Abaixo de 900px, mantido o empilhamento
-  original (mobile/tablet já funcionava bem assim).
+  original (mobile/tablet já funcionava bem assim). **Efeito colateral dessa
+  correção, resolvido depois (2026-09-10)**: `.tabs` rolando horizontal nessa
+  mesma faixa (~950-1250px) mostrava uma barra de scroll nativa feia. Reduzida
+  a fonte da marca (17px→15px) e o padding dos botões de aba (16px→12px) pra
+  abrir espaço de verdade (elimina o scroll a partir de ~1250px, antes só
+  ~1280px); onde ainda não cabe, a barra nativa fica escondida
+  (`scrollbar-width:none`+`::-webkit-scrollbar{display:none}`, rolagem
+  continua funcionando por touch/wheel/arraste) e um novo wrapper
+  `.tabs-wrap` ganha um degrade sutil na borda (ligado/desligado por JS,
+  `_atualizarSombraAbas()` em `common.js`) como aviso visual de que há mais
+  abas fora da tela — sem isso, a existência de "Editais"/"Linhas
+  Incentivadas" nessa faixa de largura ficaria descobrível só por acidente.
 
 ## Coisas a saber antes de mexer
 
@@ -698,7 +744,13 @@ depois do acoplamento do login): o texto "N operações · atualizado em ..." qu
 superior direito da topbar principal migrou pra uma faixa fina própria (`.status-strip`) logo
 abaixo — o espaço que abriu no canto da topbar virou usuário logado + botão "Sair" (mesmo
 padrão visual do painel de admin), alimentado por um novo `GET /api/me` (site, não confundir
-com `GET /admin/api/me`, do painel).
+com `GET /admin/api/me`, do painel). **Essa faixa (`.status-strip`) foi removida depois
+(2026-09-11)** — pedido do usuário: o texto (`#status-pill`) passou a viver DENTRO da
+`.filterbar` (barra branca de filtros), empurrado pro canto direito via `margin-left:auto`,
+em vez de numa faixa escura própria. Como `.filterbar` só é exibida (`display:flex`, ver
+`_ativarView` em `common.js`) nas abas Consolidado/Tendências, esse texto agora só aparece
+nessas duas — nas outras 3 (Busca/Editais/Linhas, que nunca mostraram essa barra) ele
+simplesmente não aparece, consequência direta e esperada de tê-lo colocado dentro dela.
 
 **Como remover o painel inteiro** (ver também o comentário no topo de
 `webapp/admin/routes.py`): 1) reverter o acoplamento do login do site principal (ver acima)
