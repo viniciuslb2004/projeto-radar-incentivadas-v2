@@ -157,13 +157,14 @@
 
   function renderPendentes(pendentes) {
     if (!pendentes.length) {
-      pendentesTbody.innerHTML = '<tr><td colspan="3">Nenhuma solicitação pendente.</td></tr>';
+      pendentesTbody.innerHTML = '<tr><td colspan="4">Nenhuma solicitação pendente.</td></tr>';
       return;
     }
     pendentesTbody.innerHTML = pendentes
       .map(
         (p) => `<tr>
           <td>${p.username}</td>
+          <td>${p.email || "--"}</td>
           <td>${formatarData(p.criado_em)}</td>
           <td>
             <button class="admin-toggle-btn" data-acao="aprovar" data-id="${p.id}">Aprovar</button>

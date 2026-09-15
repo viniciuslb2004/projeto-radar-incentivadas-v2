@@ -188,10 +188,16 @@ def site_registrar(payload: dict):
     em webapp/admin/auth.py), nunca cria sessao."""
     username = (payload.get("username") or "").strip()
     senha = payload.get("password") or ""
+    email = (payload.get("email") or "").strip()
     if not username:
         raise HTTPException(status_code=400, detail="Usuario e obrigatorio")
     if len(senha) < 8:
         raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 8 caracteres")
+    # Validacao BEM simples de proposito -- so pra pegar erro de digitacao obvio,
+    # nao verifica entrega nem manda nenhum e-mail (decisao explicita do usuario:
+    # so coletar o dado, pro admin ver na hora de aprovar/rejeitar).
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Informe um e-mail valido")
 
     password_hash = gerar_hash_senha(senha)
     conn = get_connection(pooled=True)
@@ -200,9 +206,9 @@ def site_registrar(payload: dict):
         if ja_existe:
             raise HTTPException(status_code=409, detail="Ja existe uma conta com esse nome de usuario")
         conn.execute(
-            "INSERT INTO admin_usuarios (username, password_hash, role, status, ativo, criado_em) "
-            "VALUES (?, ?, 'usuario', 'pendente', TRUE, ?)",
-            (username, password_hash, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+            "INSERT INTO admin_usuarios (username, password_hash, email, role, status, ativo, criado_em) "
+            "VALUES (?, ?, ?, 'usuario', 'pendente', TRUE, ?)",
+            (username, password_hash, email, datetime.datetime.now(datetime.timezone.utc).isoformat()),
         )
         conn.commit()
     finally:

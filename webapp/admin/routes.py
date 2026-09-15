@@ -166,11 +166,15 @@ def listar_pendentes(usuario: dict = Depends(exigir_admin)):
     conn = get_connection(pooled=True)
     try:
         rows = conn.execute(
-            "SELECT id, username, criado_em FROM admin_usuarios WHERE status = 'pendente' ORDER BY criado_em"
+            "SELECT id, username, email, criado_em FROM admin_usuarios WHERE status = 'pendente' ORDER BY criado_em"
         ).fetchall()
     finally:
         conn.close()
-    return {"pendentes": [{"id": r[0], "username": r[1], "criado_em": r[2]} for r in rows]}
+    return {
+        "pendentes": [
+            {"id": r[0], "username": r[1], "email": r[2], "criado_em": r[3]} for r in rows
+        ]
+    }
 
 
 @router.post("/api/usuarios/{usuario_id}/aprovar")

@@ -868,6 +868,15 @@ qualquer visitante pedir uma conta nova, sem precisar de um admin criar na mão.
   normal (`GET /admin/api/usuarios`) agora filtra `status != 'pendente'` — contas pendentes
   só aparecem na seção de aprovação, nunca na lista normal (evita confundir "editar uma conta
   existente" com "decidir sobre um pedido novo").
+- **E-mail no cadastro** (2026-09-15, pedido à parte): coluna `admin_usuarios.email` (`ALTER
+  TABLE ... ADD COLUMN IF NOT EXISTS email TEXT`, SEM default — contas antigas ficam com
+  `email` NULL, sem problema — e SEM constraint de unicidade, já que não há verificação de
+  posse/entrega). `POST /api/registrar` exige o campo e valida formato BEM simples (checa
+  `"@"` na string e `"."` na parte depois do `@`) — **deliberadamente não** valida entrega
+  nem envia nenhum e-mail; o usuário perguntado diretamente confirmou que só quer o dado
+  coletado e visível pro admin, nenhuma integração de envio. Mostrado como coluna própria na
+  seção "Contas pendentes de aprovação" do painel, ao lado do username, pra quem for
+  aprovar/rejeitar já ver o e-mail junto.
 
 **BUG REAL encontrado e corrigido no merge (2026-09-15)**: `#login-card`/`#registrar-card`
 nunca tinham uma regra `.hidden { display: none }` própria em `style.css` — só

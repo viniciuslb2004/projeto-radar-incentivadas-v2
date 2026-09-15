@@ -86,6 +86,12 @@ MIGRACAO_ROLE = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS role TEXT N
 # painel) devem continuar logando normalmente sem precisar de aprovacao retroativa.
 MIGRACAO_STATUS = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'aprovado'"
 
+# Coletado no cadastro publico (POST /api/registrar) so pra o admin ver junto do
+# username na hora de aprovar/rejeitar -- SEM default (contas antigas ficam com
+# email NULL, sem problema) e SEM nenhuma integracao de envio de e-mail (decisao
+# explicita do usuario: so coletar o dado, nao mandar nada).
+MIGRACAO_EMAIL = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS email TEXT"
+
 
 def main():
     from datetime import datetime, timezone
@@ -108,6 +114,10 @@ def main():
         conn.execute(MIGRACAO_STATUS)
         conn.commit()
         print("Coluna admin_usuarios.status pronta.")
+
+        conn.execute(MIGRACAO_EMAIL)
+        conn.commit()
+        print("Coluna admin_usuarios.email pronta.")
 
         for username, password_hash, role in SEED_USUARIOS:
             ja_existe = conn.execute(

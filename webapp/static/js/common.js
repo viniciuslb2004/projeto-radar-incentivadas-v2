@@ -224,6 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
     erroEl.classList.add("hidden");
     sucessoEl.classList.add("hidden");
     const usuario = document.getElementById("registrar-usuario").value.trim();
+    const email = document.getElementById("registrar-email").value.trim();
     const senha = document.getElementById("registrar-senha").value;
     btn.disabled = true;
     btn.textContent = "Enviando...";
@@ -231,12 +232,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const r = await fetch(_urlCompleta("/api/registrar"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: usuario, password: senha }),
+        body: JSON.stringify({ username: usuario, email: email, password: senha }),
         credentials: "include",
       });
       const dado = await r.json().catch(() => ({}));
       if (r.status === 200) {
         document.getElementById("registrar-usuario").value = "";
+        document.getElementById("registrar-email").value = "";
         document.getElementById("registrar-senha").value = "";
         sucessoEl.classList.remove("hidden");
       } else {
