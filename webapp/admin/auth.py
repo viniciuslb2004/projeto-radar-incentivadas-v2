@@ -210,13 +210,14 @@ def verificar_acesso_principal(request: Request):
     return usuario
 
 
-def registrar_acesso(conn, usuario_id, username: str, origem: str, evento: str, ip: str = None) -> None:
-    """V1 do log de acessos (ver CLAUDE.md) -- so login/logout, nunca navegacao
-    dentro da pagina. username_snapshot garante que o log continua legivel mesmo
-    depois de um usuario ser excluido de verdade (usuario_id vira NULL)."""
+def registrar_acesso(conn, usuario_id, username: str, origem: str, evento: str, ip: str = None, detalhe: str = None) -> None:
+    """Log de acessos (ver CLAUDE.md) -- login/logout (V1) + navegacao por aba
+    ('view_aba', V2, `detalhe` = nome da aba). username_snapshot garante que o log
+    continua legivel mesmo depois de um usuario ser excluido de verdade
+    (usuario_id vira NULL)."""
     conn.execute(
-        "INSERT INTO admin_acessos_log (usuario_id, username_snapshot, origem, evento, ip, criado_em) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (usuario_id, username, origem, evento, ip, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO admin_acessos_log (usuario_id, username_snapshot, origem, evento, ip, detalhe, criado_em) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (usuario_id, username, origem, evento, ip, detalhe, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()

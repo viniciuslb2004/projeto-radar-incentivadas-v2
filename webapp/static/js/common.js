@@ -471,6 +471,22 @@ function _ativarView(view, empilharHistorico) {
   if (_ultimaQueryPorGrupo[grupo] === undefined) {
     _ultimaQueryPorGrupo[grupo] = window.location.search.replace(/^\?/, "");
   }
+  // Log de navegacao (V2 do log de acessos, ver CLAUDE.md) -- so quando ha alguem
+  // LOGADO (obterUsuarioAtual ja cacheia isso numa Promise, nao dispara /api/me de
+  // novo) e so numa troca de aba DE VERDADE (mudouDeAba), pra nao duplicar evento
+  // reativando a mesma aba. Fire-and-forget: nunca atrasa nem trava a troca de aba
+  // (a UI ja trocou de view antes desta linha rodar), erro de rede e so ignorado.
+  if (mudouDeAba) {
+    obterUsuarioAtual().then((usuario) => {
+      if (!usuario) return;
+      fetch(_urlCompleta("/api/eventos/navegacao"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aba: view }),
+        credentials: "include",
+      }).catch(() => {});
+    });
+  }
   _viewAtivaAgora = view;
 }
 

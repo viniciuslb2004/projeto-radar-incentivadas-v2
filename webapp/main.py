@@ -156,6 +156,30 @@ def _registrar_busca_se_logado(request: Request, q: str) -> None:
         conn.close()
 
 
+@app.post("/api/eventos/navegacao")
+def registrar_navegacao(payload: dict, request: Request):
+    """V2 do log de acessos (pedido explicito do usuario, ver CLAUDE.md secao
+    'Painel de Admin') -- grava qual ABA um usuario LOGADO visitou, reaproveitando
+    admin_acessos_log (evento='view_aba', `detalhe`=nome da aba) em vez de criar
+    tabela nova. Best-effort: nunca bloqueia a navegacao (front so chama isso
+    quando ja sabe que ha alguem logado, ver common.js::_ativarView, e ignora
+    qualquer erro daqui silenciosamente)."""
+    usuario = _usuario_atual(request)
+    if usuario is None:
+        return {"ok": True}
+    aba = (payload.get("aba") or "").strip()
+    if not aba:
+        return {"ok": True}
+    conn = get_connection(pooled=True)
+    try:
+        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "view_aba", _ip_do_request(request), detalhe=aba)
+    except Exception:
+        logger.exception("falha ao gravar evento de navegacao")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @app.post("/api/login")
 def site_login(payload: dict, request: Request, response: Response):
     """Login do SITE PRINCIPAL -- mesma tabela de contas do painel de admin

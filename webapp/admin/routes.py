@@ -27,6 +27,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db import get_connection
+from webapp import salvos
 
 logger = logging.getLogger("radar")
 
@@ -267,6 +268,32 @@ def alterar_ativo(usuario_id: int, payload: dict, usuario: dict = Depends(exigir
     return {"ok": True}
 
 
+@router.post("/api/usuarios/{usuario_id}/senha")
+def alterar_senha(usuario_id: int, payload: dict, usuario: dict = Depends(exigir_admin)):
+    """Reset administrativo de senha (NAO e' fluxo de "esqueci minha senha" -- so um
+    admin pode fazer isso, por qualquer outro usuario). Mesmo esquema de hash de
+    sempre (gerar_hash_senha). Invalida TODAS as sessoes ativas do usuario-alvo na
+    hora -- sem isso, uma sessao aberta antes da troca continuaria valida com a
+    senha antiga ja sem efeito, ate expirar sozinha (24h)."""
+    senha_nova = payload.get("senha_nova") or ""
+    if len(senha_nova) < 8:
+        raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 8 caracteres")
+    conn = get_connection(pooled=True)
+    try:
+        row = conn.execute("SELECT id FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        conn.execute(
+            "UPDATE admin_usuarios SET password_hash = ? WHERE id = ?",
+            (gerar_hash_senha(senha_nova), usuario_id),
+        )
+        conn.execute("DELETE FROM admin_sessoes WHERE usuario_id = ?", (usuario_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @router.delete("/api/usuarios/{usuario_id}")
 def excluir_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
     conn = get_connection(pooled=True)
@@ -289,12 +316,16 @@ def excluir_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
 
 @router.get("/api/acessos")
 def listar_acessos(limit: int = 100, usuario: dict = Depends(exigir_admin)):
+    """So login/logout de proposito -- NAO inclui 'view_aba' (navegacao por aba),
+    que gera MUITO mais volume e afogaria o sinal de "quem entrou/saiu" que esta
+    lista existe pra mostrar. Navegacao por aba fica visivel no drill-down POR
+    PESSOA (GET .../usuarios/{id}/acessos), onde faz mais sentido olhar."""
     limit = max(1, min(limit, 500))
     conn = get_connection(pooled=True)
     try:
         rows = conn.execute(
             "SELECT username_snapshot, origem, evento, ip, criado_em FROM admin_acessos_log "
-            "ORDER BY id DESC LIMIT ?",
+            "WHERE evento IN ('login', 'logout') ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
     finally:
@@ -308,16 +339,22 @@ def listar_acessos(limit: int = 100, usuario: dict = Depends(exigir_admin)):
 
 @router.get("/api/usuarios/{usuario_id}/acessos")
 def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
-    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reaproveita
-    admin_acessos_log, so filtra por usuario_id -- NAO e a V2 de analytics (sem
-    tracking de navegacao/clique dentro da pagina, so login/logout, ver CLAUDE.md)."""
+    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reune 3
+    fontes na mesma tela: login/logout (V1) + navegacao por aba ('view_aba', V2 --
+    ambos em admin_acessos_log, so filtrando por usuario_id) e o historico de
+    busca (usuario_busca_historico, ja existia pra Transacoes Salvas, so exposto
+    aqui tambem). `eventos` fica limitado a 200 linhas mais recentes (login+logout+
+    view_aba misturados) -- navegacao por aba gera MUITO mais volume que
+    login/logout (uma linha por troca de aba, de cada usuario), entao esse teto
+    existe de proposito pra nao devolver uma resposta gigante; nao ha paginacao
+    ainda (fora de escopo por ora, ver CLAUDE.md)."""
     conn = get_connection(pooled=True)
     try:
         alvo = conn.execute("SELECT username FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
         if alvo is None:
             raise HTTPException(status_code=404, detail="Usuario nao encontrado")
         rows = conn.execute(
-            "SELECT origem, evento, ip, criado_em FROM admin_acessos_log "
+            "SELECT origem, evento, detalhe, ip, criado_em FROM admin_acessos_log "
             "WHERE usuario_id = ? ORDER BY id DESC LIMIT 200",
             (usuario_id,),
         ).fetchall()
@@ -333,6 +370,7 @@ def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
             "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
             (usuario_id,),
         ).fetchone()[0]
+        buscas = salvos.listar_busca_historico(conn, usuario_id, limite=50)
     finally:
         conn.close()
     return {
@@ -340,7 +378,10 @@ def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
         "total_logins": total_logins,
         "primeiro_acesso": primeiro,
         "ultimo_acesso": ultimo,
-        "eventos": [{"origem": r[0], "evento": r[1], "ip": r[2], "criado_em": r[3]} for r in rows],
+        "eventos": [
+            {"origem": r[0], "evento": r[1], "detalhe": r[2], "ip": r[3], "criado_em": r[4]} for r in rows
+        ],
+        "buscas": buscas,
     }
 
 
