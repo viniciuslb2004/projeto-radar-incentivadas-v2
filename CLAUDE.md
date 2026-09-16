@@ -58,6 +58,17 @@ Postgres via `DATABASE_URL`.
 - **Deploy**: Vercel. `vercel.json` define `outputDirectory: webapp/static` (front servido
   direto pela CDN) + rewrite de `/api/*` para `api/index.py` (function serverless Python que só
   faz `from webapp.main import app`). Ver `DEPLOY.md` para o passo a passo já feito.
+  **Serviço Render (`radar-credito-backend`) É LIXO/LEGADO, confirmado com o usuário
+  (2026-09-16)**: antes da Vercel, o deploy era Render (backend) + Vercel (frontend) — ver
+  `RESUME.md` (nota antiga de 2026-09-03), que já dizia "depois de confirmar o deploy da
+  Vercel, desligar o serviço da Render" como pendência, mas isso nunca foi feito. A produção
+  real é 100% Vercel há muito tempo; o Render ficou recebendo deploy automático de todo push
+  pra `master` sem ninguém acompanhar, e vem falhando (dessincronizado de meses de mudanças
+  de schema/dependências nunca testadas contra ele). **Ação combinada**: ignorar os e-mails
+  de "deploy failed" do Render — não são um incidente de produção real. Desligar de vez o
+  auto-deploy (dashboard do Render → Settings → desconectar o repo, ou pausar o serviço) é
+  uma ação que só o usuário pode fazer; se um dia isso incomodar, essa é a solução, não tentar
+  consertar o build do Render.
 - **Automação**: GitHub Actions (`.github/workflows/*.yml`), 3 workflows agendados (ver seção
   própria abaixo), todos usando o secret `DATABASE_URL`.
 - **Local dev**: `uvicorn webapp.main:app` a partir da raiz do repo; `.env` na raiz fornece
