@@ -92,6 +92,13 @@ MIGRACAO_STATUS = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS status TE
 # explicita do usuario: so coletar o dado, nao mandar nada).
 MIGRACAO_EMAIL = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS email TEXT"
 
+# Campo generico de detalhe por evento -- usado hoje pelo evento novo 'view_aba'
+# (guarda qual aba, ver webapp/main.py::registrar_navegacao) mas pensado pra ser
+# reaproveitado por qualquer evento futuro que precise de um "detalhe" livre, sem
+# precisar de mais uma migracao de coluna a cada novo tipo. NULL pra login/logout
+# (esses ja se explicam sozinhos pelo campo `evento`).
+MIGRACAO_ACESSOS_DETALHE = "ALTER TABLE admin_acessos_log ADD COLUMN IF NOT EXISTS detalhe TEXT"
+
 
 def main():
     from datetime import datetime, timezone
@@ -118,6 +125,10 @@ def main():
         conn.execute(MIGRACAO_EMAIL)
         conn.commit()
         print("Coluna admin_usuarios.email pronta.")
+
+        conn.execute(MIGRACAO_ACESSOS_DETALHE)
+        conn.commit()
+        print("Coluna admin_acessos_log.detalhe pronta.")
 
         for username, password_hash, role in SEED_USUARIOS:
             ja_existe = conn.execute(

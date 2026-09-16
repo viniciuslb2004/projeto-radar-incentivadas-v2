@@ -758,6 +758,16 @@ o painel inteiro sem ninguém pra reativar ninguém. Na prática só é alcanç�
 autoexclusão/autodesativação (quem chama a rota já precisa ser um admin ativo, então excluir/
 desativar um admin QUE NÃO seja você mesmo nunca zera a contagem).
 
+**Reset administrativo de senha** (`POST /admin/api/usuarios/{id}/senha`, aprovado
+2026-09-16): admin troca a senha de QUALQUER usuário (não é fluxo de "esqueci minha senha" —
+não exige a senha antiga). Mesmo esquema de hash de sempre (`gerar_hash_senha`), valida
+≥8 caracteres (mesmo padrão de `/api/registrar`). **Ao trocar, invalida TODAS as sessões
+ativas daquele usuário na hora** (`DELETE FROM admin_sessoes WHERE usuario_id = ?`) — testado
+ao vivo: uma sessão aberta antes da troca perde acesso imediatamente, sem esperar o cookie
+expirar (mesma lógica de segurança já usada em "desativar um usuário", ver acima). UI: botão
+"Alterar senha" na tabela de usuários (CRUD normal), usa `prompt()` nativo pra digitar a
+senha nova — sem modal dedicado, consistente com o `confirm()` nativo já usado por "Excluir".
+
 **Contas seed** (inseridas por `seed.py`, hashes já prontos — senha em texto puro nunca
 passou pelo código/commit/log): `admin` (role `admin`) e `artica` (role `usuario`).
 
@@ -835,7 +845,40 @@ clicar no username na tabela "Usuários do painel" abre um modal com o históric
 login/logout DAQUELA pessoa — total de logins, primeiro/último acesso, lista de eventos.
 Reaproveita `admin_acessos_log` (só filtra por `usuario_id`), nenhuma tabela nova nem
 tracking novo — explicitamente MENOR que uma V2 de analytics (que continua fora do escopo,
-ver acima).
+ver acima). **V2 construída depois (2026-09-16), pedido explícito do usuário confirmando o
+que antes estava marcado como fora de escopo** — ver bloco abaixo.
+
+**Log de navegação por aba + histórico de busca no drill-down (V2, aprovado 2026-09-16)**:
+o mesmo modal de drill-down por usuário passou a reunir 3 fontes:
+1. **Login/logout** (já existia, `admin_acessos_log`).
+2. **Navegação por aba** (`evento='view_aba'`) — NÃO virou tabela nova; reaproveita
+   `admin_acessos_log` com uma coluna genérica nova, `detalhe` (`ALTER TABLE ... ADD COLUMN
+   IF NOT EXISTS detalhe TEXT`, NULL pra login/logout, guarda o nome da aba pra
+   `view_aba` — pensada pra qualquer evento futuro reaproveitar, não só este). Gravado por
+   `POST /api/eventos/navegacao` (rota nova, `webapp/main.py`), chamada por
+   `common.js::_ativarView()` só quando `obterUsuarioAtual()` resolve pra um usuário real E
+   a troca de aba é de verdade (`mudouDeAba` — não duplica evento reabrindo a mesma aba já
+   ativa) — fire-and-forget (`.catch(() => {})`), nunca atrasa nem trava a troca de aba em
+   si, e o backend (`registrar_navegacao`) também nunca deixa uma falha de log virar erro
+   pro cliente (best-effort dos dois lados, mesmo espírito de
+   `_registrar_busca_se_logado`/histórico de busca).
+3. **Histórico de busca** (`usuario_busca_historico`, já existia pra Transações Salvas —
+   ver seção própria abaixo) — só exposto no mesmo endpoint/modal via
+   `salvos.listar_busca_historico`, nenhuma duplicação de lógica.
+
+**Cuidado real de volume, levantado ANTES de construir**: navegação por aba gera MUITO mais
+linhas que login/logout (uma por troca de aba, de cada usuário logado, toda visita) — bem
+diferente do volume de login/logout. Duas decisões tomadas por causa disso:
+- **`GET /admin/api/acessos`** (a lista GERAL do painel, "últimos 100 acessos" de TODOS os
+  usuários) continua filtrando `WHERE evento IN ('login', 'logout')` — `view_aba` NUNCA
+  aparece ali, só no drill-down POR PESSOA. Sem esse filtro, poucos minutos de uso normal já
+  afogariam o sinal de "quem entrou/saiu" que essa lista existe pra mostrar.
+- O drill-down por pessoa (`GET .../usuarios/{id}/acessos`) mistura os 3 tipos de evento na
+  mesma lista, mas continua limitado a 200 linhas mais recentes (mesmo teto que já existia
+  pra login/logout sozinho) — **sem paginação ainda**. Não é um problema resolvido de vez,
+  só o suficiente pro escopo pedido agora; se o volume real crescer a ponto de 200 linhas
+  cobrirem só alguns minutos de navegação de um usuário ativo, vale reconsiderar
+  paginação/retenção/agregação nessa tabela antes de crescer mais.
 
 **Cadastro público com aprovação** (`POST /api/registrar` + `/admin/api/usuarios/pendentes`
 + `/{id}/aprovar`/`/{id}/rejeitar`, aprovado 2026-09-15): a tela de login do SITE PRINCIPAL

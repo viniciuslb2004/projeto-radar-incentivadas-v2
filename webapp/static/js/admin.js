@@ -39,6 +39,7 @@
   const usuarioModalTitulo = document.getElementById("admin-usuario-modal-titulo");
   const usuarioModalResumo = document.getElementById("admin-usuario-modal-resumo");
   const usuarioModalTbody = document.getElementById("admin-usuario-modal-tbody");
+  const usuarioModalBuscasTbody = document.getElementById("admin-usuario-modal-buscas-tbody");
   const usuarioModalFechar = document.getElementById("admin-usuario-modal-fechar");
   let operacaoSelecionada = null;
 
@@ -142,6 +143,7 @@
           <td>${formatarData(u.criado_em)}</td>
           <td>
             <button class="admin-toggle-btn" data-acao="ativo" data-id="${u.id}" data-ativo="${u.ativo}">${acaoTexto}</button>
+            <button class="admin-toggle-btn" data-acao="senha" data-id="${u.id}" data-username="${u.username}">Alterar senha</button>
             <button class="admin-toggle-btn" data-acao="excluir" data-id="${u.id}" data-username="${u.username}">Excluir</button>
           </td>
         </tr>`;
@@ -230,6 +232,28 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ativo: !ativoAtual }),
         });
+      } else if (btn.dataset.acao === "senha") {
+        const senhaNova = prompt(`Nova senha para "${btn.dataset.username}" (mínimo 8 caracteres):`);
+        if (senhaNova === null) {
+          btn.disabled = false;
+          return;
+        }
+        if (senhaNova.length < 8) {
+          alert("Senha precisa ter pelo menos 8 caracteres.");
+          btn.disabled = false;
+          return;
+        }
+        const resp = await apiFetch(`/usuarios/${id}/senha`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ senha_nova: senhaNova }),
+        });
+        if (!resp.ok) {
+          const erro = await resp.json();
+          alert(erro.detail || "Não foi possível alterar a senha.");
+        } else {
+          alert(`Senha de "${btn.dataset.username}" alterada. As sessões ativas dessa conta foram encerradas.`);
+        }
       } else if (btn.dataset.acao === "excluir") {
         if (!confirm(`Excluir o usuário "${btn.dataset.username}" definitivamente? Essa ação não pode ser desfeita.`)) {
           btn.disabled = false;
@@ -247,15 +271,18 @@
     }
   });
 
-  // Drill-down por usuario (pedido do usuario): clicar no nome abre um modal com o
-  // historico de login/logout DAQUELA pessoa (reaproveita admin_acessos_log, so
-  // filtra por usuario_id -- NAO e tracking de navegacao/clique, so login/logout).
+  const EVENTO_ROTULO = { login: "Login", logout: "Logout", view_aba: "Abriu aba" };
+
+  // Drill-down por usuario (pedido do usuario): clicar no nome abre um modal
+  // reunindo 3 fontes -- login/logout, navegacao por aba (ambas em
+  // admin_acessos_log) e historico de busca (usuario_busca_historico).
   usuariosTbody.addEventListener("click", async function (ev) {
     const link = ev.target.closest(".admin-usuario-link[data-id]");
     if (!link) return;
     usuarioModalTitulo.textContent = "Carregando...";
     usuarioModalResumo.innerHTML = "";
-    usuarioModalTbody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+    usuarioModalTbody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
+    usuarioModalBuscasTbody.innerHTML = '<tr><td colspan="3">Carregando...</td></tr>';
     usuarioModal.classList.remove("hidden");
     const resp = await apiFetch(`/usuarios/${link.dataset.id}/acessos`);
     const dado = await resp.json();
@@ -266,15 +293,29 @@
       <div class="admin-card"><div class="valor">${formatarData(dado.ultimo_acesso)}</div><div class="rotulo">Último acesso</div></div>
     `;
     if (!dado.eventos.length) {
-      usuarioModalTbody.innerHTML = '<tr><td colspan="4">Nenhum acesso registrado ainda.</td></tr>';
+      usuarioModalTbody.innerHTML = '<tr><td colspan="5">Nenhum acesso registrado ainda.</td></tr>';
     } else {
       usuarioModalTbody.innerHTML = dado.eventos
         .map(
           (e) => `<tr>
             <td>${e.origem === "admin" ? "Painel admin" : "Site principal"}</td>
-            <td>${e.evento === "login" ? "Login" : "Logout"}</td>
+            <td>${EVENTO_ROTULO[e.evento] || e.evento}</td>
+            <td>${e.detalhe || "--"}</td>
             <td>${e.ip || "--"}</td>
             <td>${formatarData(e.criado_em)}</td>
+          </tr>`
+        )
+        .join("");
+    }
+    if (!dado.buscas.length) {
+      usuarioModalBuscasTbody.innerHTML = '<tr><td colspan="3">Nenhuma busca registrada ainda.</td></tr>';
+    } else {
+      usuarioModalBuscasTbody.innerHTML = dado.buscas
+        .map(
+          (b) => `<tr>
+            <td>${b.query}</td>
+            <td>${b.fixada ? "Sim" : "Não"}</td>
+            <td>${formatarData(b.criado_em)}</td>
           </tr>`
         )
         .join("");
