@@ -17,6 +17,12 @@ operações desde 2002); há também um catálogo separado de **linhas de crédi
 alguém analisando o mercado de crédito incentivado brasileiro (ex: para prospecção, benchmarking,
 inteligência de mercado) — não é uma ferramenta de originação/contratação de crédito.
 
+**Segundo "modo" em construção desde 2026-09-16: "Radar de Crédito Primário"**, cobrindo o
+mercado de capitais primário (debêntures, CRI, CRA, notas comerciais, letras financeiras, CDCA,
+CCB) via dados da CVM — ver seção própria "Radar de Crédito Primário — Pipeline CVM" mais abaixo.
+Só a CAMADA DE DADOS existe até aqui (staging + `operations_primario`); rotas de API, motor de
+busca e frontend são trabalho de sessões seguintes.
+
 100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Aiven)
 hospedados juntos na Vercel. Não existe mais "modo local" com banco separado (SQLite) — tanto
 rodando localmente (`uvicorn`, para desenvolvimento) quanto em produção, o app fala com o MESMO
@@ -97,6 +103,9 @@ Postgres via `DATABASE_URL`.
 - **`operations_correcoes_manuais`**: correções manuais pontuais em campos de `operations`,
   reaplicadas automaticamente a cada refresh (ver `unify.py::_reaplicar_correcoes_manuais`).
 - **`refresh_log`**: histórico de cada rodada do pipeline semanal (`src/refresh.py`).
+- **`cvm_oferta_distribuicao_raw`**/**`operations_primario`**/**`refresh_primario_log`**: staging
+  + tabela unificada + log do Radar de Crédito Primário (CVM) — ver seção própria "Radar de
+  Crédito Primário — Pipeline CVM" mais abaixo.
 
 ## Pipeline de dados (operações BNDES/FINEP)
 
@@ -383,6 +392,8 @@ Todos em `.github/workflows/`, usando o secret `DATABASE_URL`:
 - `refresh-operacoes.yml` — semanal, segunda 06:00 UTC, timeout 180min, roda `src/refresh.py`.
 - `refresh-editais.yml` — diário, 08:00 UTC, timeout 15min, roda `src/refresh_editais.py`.
 - `enrich-cnae.yml` — mensal, roda `src/enrich_cnae.py`.
+- `refresh-primario.yml` — diário, 09:00 UTC, timeout 30min, roda `src/refresh_primario.py`
+  (Radar de Crédito Primário/CVM — ver seção própria).
 
 Se o "refresh automático parece não estar funcionando", antes de caçar bug: confira 1) se
 `DATABASE_URL` está configurada há tempo suficiente pro cron já ter tido uma janela real pra
@@ -1092,6 +1103,249 @@ passam a existir de fato depois de rodar `python src/db.py` manualmente (ou o pr
 `refresh.py`/`refresh_editais.py` agendado) contra o `DATABASE_URL` daquele ambiente — mesmo
 padrão de qualquer mudança de schema neste projeto, nada automático no deploy da Vercel.
 
+## Radar de Crédito Primário — Pipeline CVM
+
+Segundo "modo" da plataforma, construído a partir de 2026-09-16, cobrindo o **mercado de
+capitais primário brasileiro** (debêntures, CRI, CRA, notas comerciais/promissórias, letras
+financeiras, CDCA, CCB) — complementa o crédito incentivado de fomento (BNDES/FINEP) com o
+outro grande canal de captação de dívida das empresas brasileiras. **Esta seção documenta só a
+CAMADA DE DADOS** (staging + tabela unificada `operations_primario`) — rotas `/api/primario/*`,
+motor de busca e frontend são trabalho de sessões seguintes, construído em cima deste schema.
+
+### Fonte: CVM — Portal de Dados Abertos, dataset "Ofertas Públicas de Distribuição"
+
+Licença ODbL, mantido pela SRE/CVM (órgão regulador oficial), atualizado diariamente.
+**ACHADO REAL (2026-09-16)**: a URL do dado esperada terminava em `.csv`
+(`.../DADOS/oferta_distribuicao.csv`) — devolve 404 ao vivo. O arquivo de verdade é um `.zip`
+no mesmo caminho (`oferta_distribuicao.zip`, ~5.3MB), que **contém DOIS CSVs** dentro (achado
+real #2, também só confirmado baixando de verdade): `oferta_distribuicao.csv` (o dataset
+pedido) E `oferta_resolucao_160.csv` (dataset relacionado mas diferente — RCVM 160, o rito de
+oferta que sucedeu a ICVM 400/476, fora do escopo deste pedido). `src/download_cvm.py` extrai
+por NOME do arquivo dentro do zip (nunca por posição/índice — a CVM não documenta nem garante
+ordem estável dos membros do zip). Mesmo achado (zip com 2 membros) no `.zip` do dicionário de
+dados (`meta_oferta_distribuicao.zip` → `meta_oferta_distribuicao.txt` +
+`meta_oferta_resolucao_160.txt`). Encoding **latin-1** (não utf-8), delimitador `;` — confirmado
+decodificando e reencodando uma amostra real (`"DEBÊNTURES SIMPLES"` decodifica certo com
+`encoding="latin-1"`; o mojibake que aparece em terminais/logs ao longo deste processo é só a
+própria console não sabendo renderizar utf-8, não corrupção do dado).
+
+Dataset completo: ~48,9 mil linhas (TODAS as ofertas públicas já registradas/dispensadas desde
+1989 — ações, cotas de fundo, BDR, CRI/CRA, debênture etc., republicado por inteiro a cada
+atualização, sem filtro nenhum de data). Filtrando só instrumentos de DÍVIDA (ver escopo
+abaixo): **12.239 linhas** (confirmado ao vivo, 2026-09-16), cobrindo 1989–2025.
+
+### Instrumentos em escopo (`src/parse_cvm.py::_ESCOPO_REGEX`)
+
+Filtro por regex com `\b` (word boundary) sobre `Tipo_Ativo` normalizado (sem acento,
+maiúsculo) — bate tanto o nome por extenso quanto a sigla, mas com boundary nas siglas curtas
+(CRI/CRA/CDCA/CCB) para não arriscar falso-positivo por substring cru. Contagem real por
+`Tipo_Ativo` no CSV de 2026-09-16 (13 valores distintos observados, todos em escopo):
+DEBÊNTURES SIMPLES (4.936), CERTIFICADOS DE RECEBÍVEIS IMOBILIÁRIOS - CRI (3.298), NOTAS
+PROMISSÓRIAS (1.753), CERTIFICADOS DE RECEBÍVEIS DO AGRONEGÓCIO - CRA (839), CERTIFICADO DE
+RECEBÍVEIS IMOBILIÁRIOS (710, grafia alternativa sem "S" — mesma coisa, mesmo regex bate as
+duas), DEBÊNTURES CONVERSÍVEIS (222), CERTIFICADO DE RECEBÍVEIS DO AGRONEGÓCIO (182), NOTAS
+COMERCIAIS (168), LETRAS FINANCEIRAS (115), CERTIFICADOS DE DIREITOS CREDITÓRIOS DO
+AGRONEGÓCIO - CDCA (11), TOKENS REPRESENTATIVOS DE DEBÊNTURES/SANDBOX REGULATÓRIO (3), CÉDULAS
+DE CRÉDITO BANCÁRIO - CCB (1), DEBÊNTURES PERMUTÁVEIS (1).
+
+**Deliberadamente FORA de escopo**: ações, cotas/quotas de fundos (a maioria absoluta das ~49
+mil linhas totais — FIDC/FIP/FII/fundo fechado etc., incluindo cotas SÊNIOR/SUBORDINADA de
+FIDC, que tecnicamente financiam recebíveis mas são "fundo", não um título de dívida direto),
+BDR, warrants (incl. "WARRANTS AGROPECUÁRIOS"), certificado de investimento audiovisual. As 3
+linhas com `Tipo_Ativo = "CERTIFICADOS DE RECEBÍVEIS"` (sem qualificador IMOBILIÁRIOS/
+AGRONEGÓCIO) ficam de fora de propósito — não dá para saber se é CRI ou CRA sem inventar, e a
+regra de ouro deste projeto (ver seção "Linhas Incentivadas") é nunca inferir. **CPR-F** (Cédula
+de Produto Rural Financeira) foi pedido explicitamente como fora de escopo por falta de fonte
+aberta — nem precisou de exclusão manual: CPR não é valor mobiliário registrado na CVM (é
+título de crédito rural fora da competência dela), então nunca apareceria neste dataset.
+
+### `cvm_oferta_distribuicao_raw` (staging, quase 1:1 com o CSV oficial)
+
+**Escopo de colunas deliberadamente reduzido**: o CSV oficial tem ~30 colunas adicionais de
+COMPOSIÇÃO DE INVESTIDORES (`Nr_Pessoa_Fisica`, `Qtd_Fundos_Investimento`,
+`Qtd_Investidor_Estrangeiro` etc.) que descrevem QUEM comprou o ativo, não o crédito em si —
+fora do escopo de um radar de crédito (poderiam ser adicionadas depois, sem migração nenhuma
+nos dados já gravados, se um dia isso virar requisito real — basta estender
+`parse_cvm.py::CVM_COLUMNS` e rodar de novo, o CSV de origem continua tendo tudo). Mantidas:
+identificação da oferta/processo, emissor/líder/ofertante, datas, classe/série/forma do ativo,
+quantidade/preço/valor, flags S/N (incentivo fiscal/regime fiduciário/oferta inicial),
+juros/atualização monetária (texto cru, fonte do `indexador_padronizado`).
+
+**`numero_registro_oferta` NÃO é chave natural viável** (achado real, verificado contra o CSV
+inteiro antes de desenhar o pipeline) — parecia óbvio (é literalmente "o número de registro da
+oferta"), mas **75,8% das linhas de dívida (9.277 de 12.242 candidatas) têm esse campo NULO**:
+são ofertas com DISPENSA de registro (`Modalidade_Dispensa_Registro`/`Data_Dispensa_Oferta`
+preenchidos nesses casos, nunca um número de registro — a CVM só atribui esse número a ofertas
+que de fato passam pelo rito de registro pleno). `Numero_Processo` também não serve sozinho: um
+único processo administrativo pode conter **dezenas de séries/emissões diferentes** (confirmado
+um processo com 55 séries de debênture, cada uma sua própria linha). Por isso o staging usa a
+MESMA estratégia já validada para BNDES/FINEP (ver `incremental.py`): **hash de conteúdo da
+linha inteira** (`row_hash`, sobre as colunas de negócio mantidas, não sobre as ~30 excluídas) —
+o dataset da CVM também é republicado por inteiro a cada atualização diária, não incremental na
+origem. Rodando pela primeira vez (2026-09-16): 12.239 linhas em escopo no CSV, **12.232
+inseridas** (7 descartadas por `row_hash` idêntico dentro do mesmo lote — linhas que só
+diferiam nas colunas de composição de investidores excluídas do staging, portanto
+indistinguíveis nos campos que este projeto de fato guarda).
+
+### `operations_primario` (tabela unificada, mesmo espírito de `operations`)
+
+`src/unify_primario.py::build_operations_primario()` — incremental por `raw_table`+`raw_id`
+(nunca por `numero_registro_oferta`, pelos motivos acima), mesmo padrão de
+`unify.py::build_operations()`. Diferença de design: `operations` tem 3 estados de
+`setor_origem` (nativo/enriquecido/pendente) porque o BNDES tem setor NATIVO na própria
+planilha; aqui **todo emissor depende do MESMO caminho de enriquecimento via CNPJ**, então não
+existe uma coluna `setor_origem` — o estado "pendente" é só `setor_emissor IS NULL`.
+
+- **`instrumento_padronizado`**: mapa fixo (`INSTRUMENTO_PADRONIZADO_MAP`, chave exata pós-
+  normalização, não regex — a essa altura a linha já passou pelo filtro de escopo) para
+  `'Debênture'|'CRI'|'CRA'|'Nota Comercial'|'Letra Financeira'|'CDCA'|'CCB'|'Outro'`. Nota
+  Promissória e Nota Comercial são **o MESMO instrumento sob nomes diferentes** (a Lei
+  14.195/2021 renomeou "nota promissória comercial" para "nota comercial" e trocou o registro
+  da B3 pelo da CVM/escritural — mesma natureza econômica) — unificadas sob `'Nota Comercial'`.
+- **`setor_emissor`/`subsetor_emissor`/`segmento_emissor`/`porte_emissor`/
+  `natureza_juridica_emissor`/`uf_emissor`/`municipio_emissor`/`razao_social_oficial_emissor`**:
+  via JOIN contra `cnpj_cnae` (o MESMO cache já usado para enriquecer a FINEP) por
+  `cnpj_emissor`. **Extensão feita em `cnpj_cnae` para viabilizar isso**: a tabela nunca teve
+  `uf`/`municipio` (BNDES/FINEP já trazem UF/município direto na própria planilha de origem,
+  nunca precisaram disso via CNPJ) — adicionadas via `MIGRACOES_COLUNAS` (`ALTER TABLE`,
+  nullable, sem backfill retroativo: linhas de `cnpj_cnae` já existentes de BNDES/FINEP ficam
+  com `uf`/`municipio` NULL para sempre, o que é aceitável — nada mais consome esses dois campos
+  a partir de `cnpj_cnae` hoje). Populadas via `enrich_cnae.py::enrich_pendentes_via_api`
+  (BrasilAPI) — a API já devolvia `uf`/`municipio` na mesma chamada usada para CNAE/porte/
+  natureza jurídica, só não eram gravados até esta mudança; o job MENSAL em lote
+  (`enrich()`, que escaneia `Estabelecimentos*.zip` da RFB) **não foi estendido** para isso
+  (`ESTAB_COLS` tem `uf`/`municipio` disponíveis no zip, mas `KEEP_COLS` não os inclui) — só o
+  caminho BrasilAPI (usado neste pipeline, volume pequeno o suficiente: ~1,2 mil CNPJs
+  distintos) grava esses dois campos por enquanto.
+- **`data_referencia`/`ano`/`trimestre`**: `Data_Emissao` (o campo "óbvio") está **ausente em
+  82% das linhas em escopo** (achado real — ofertas antigas/dispensadas raramente têm essa data
+  digitalizada), então `data_referencia` usa o primeiro campo preenchido nesta ordem de
+  preferência (ver `unify_primario.py::_data_referencia`, todos já normalizados para
+  `AAAA-MM-DD`): `data_emissao` → `data_registro_oferta` → `data_inicio_oferta` →
+  `data_encerramento_oferta` → `data_protocolo` → `data_abertura_processo`. NUNCA inventada — se
+  os 6 campos estiverem vazios, fica NULL. `ano`/`trimestre` derivados de `data_referencia`,
+  mesmo padrão de `operations.ano`/`operations.trimestre`.
+- **`indexador_padronizado`: MELHOR ESFORÇO, propositalmente impreciso — documentado aqui para
+  quem for consumir este campo não confiar demais nele.** `Juros`/`Atualização_Monetária` são
+  texto livre da CVM desde 1989 (771 e 98 valores distintos só no subconjunto em escopo, ex:
+  `"12% A.A."`, `"DI + 2%"`, `"TAXA ANBID"`, `"IGP-M"`, `"VARIAÇÃO CAMBIAL DÓLAR"`, `"NIHIL"`) —
+  impossível parsear com precisão total sem inventar. `_indexador_padronizado()` reconhece só os
+  4 padrões mais comuns/inequívocos por regex simples: `IPCA+` (contém IPCA/IPCR na atualização
+  monetária), `SELIC` (contém SELIC em qualquer um dos dois campos), `CDI` (atualização
+  monetária vazia/"NÃO" E juros contém "DI"/"CDI" como palavra inteira — cuidado real evitado
+  aqui: `\bC?DI\b` NÃO bate "ANBID" nem "RODI", que não têm a subsequência literal "DI" com
+  boundary), `Prefixado` (atualização monetária vazia E juros é uma taxa numérica pura, sem
+  DI/CDI/SELIC). Qualquer outro conteúdo real (IGPM, TR, TJLP, ANBID — histórica, uma taxa
+  distinta de CDI, NUNCA tratada como equivalente aqui —, variação cambial, IGP-DI, INCC etc.)
+  cai em `'Outro'` — nunca em NULL nesse caso, para não parecer "sem indexador" quando na
+  verdade só não reconhecemos qual é. NULL fica reservado para quando os dois campos de origem
+  estão genuinamente vazios. **Se um dia este campo precisar de mais precisão**: expandir os
+  padrões reconhecidos em `_indexador_padronizado()` é seguro (função pura, sem migração), mas
+  qualquer expansão deve continuar seguindo a mesma regra de ouro do resto do projeto — nunca
+  inventar/inferir um indexador que o texto de origem não afirma claramente.
+- **`taxa_valor`/`taxa_tipo` (pedido adicional do usuário, chegou no meio desta mesma sessão,
+  logo depois do `indexador_padronizado` acima já estar pronto)**: além de SABER que o
+  indexador é CDI, o usuário quer o NÚMERO da taxa/spread (ex: para "CDI + 2,50% a.a." — ver o
+  indexador `CDI` E o número `2.5`; para "12,5% a.a." — ver só o número `12.5`). MESMA filosofia
+  de melhor esforço do `indexador_padronizado` — `src/unify_primario.py::_extrair_taxa()`, regex
+  sobre `juros` (`Atualização_Monetária` carrega o NOME do índice, quase nunca um número de taxa
+  junto). `taxa_tipo` tem **3 valores possíveis** (uma extensão deliberada sobre o que foi pedido
+  — o usuário sugeriu só `spread`/`taxa_fixa`, mas os dados reais mostraram um terceiro padrão
+  genuíno demais pra forçar em uma das duas categorias sem inventar semântica):
+  - `'spread'`: aditivo (`+`/`-` explícito, ou a palavra "acrescid[ao] de", ou o número vindo
+    ANTES do indexador tipo `"0,75% a.a. + CDI"`) — funciona independente de qual indexador
+    precede/segue, então também cobre um spread sobre um indexador que caiu em `'Outro'`
+    (IGPM/TR/TJLP/LIBOR/ANBID etc.) — o índice de base continua disponível em
+    `indexador_padronizado` + `juros`/`atualizacao_monetaria` crus, nunca escondido atrás do
+    número extraído. O `"%"` é **opcional** neste padrão de propósito: `"CDI + 1,75"`/
+    `"DI + 2,85 aa"` são spreads reais sem o símbolo — convenção do mercado de crédito privado
+    brasileiro é cotar spread sobre DI/CDI/SELIC sempre em pontos percentuais a.a., mesmo quando
+    o `%` some do texto (o campo `juros` só existe pra descrever uma taxa de dívida — qualquer
+    número aqui depois de um sinal `+`/`-` é uma taxa, nunca outra coisa).
+  - `'percentual_indexador'`: **MULTIPLICATIVO, não aditivo** (ex: `"108% do CDI"`,
+    `"104% da taxa DI"`) — deliberadamente um `taxa_tipo` DIFERENTE de `'spread'`: tratar
+    `"108% do CDI"` como "spread de 108" seria uma leitura errada e enganosa (não são 108 pontos
+    percentuais SOMADOS ao CDI, é 108% do próprio CDI — quase o dobro do indexador). Só
+    reconhecido quando `indexador_padronizado` já é `'CDI'`/`'SELIC'` (evita ambiguidade com
+    outros usos de `%`).
+  - `'taxa_fixa'`: prefixado puro (`indexador_padronizado == 'Prefixado'`, número seguido de
+    `%`).
+  - **BUG REAL corrigido antes de terminar**: as primeiras versões das regex tinham os
+    conectivos (`"spread"`, `"sobretaxa"`, `"acrescida"`, `"taxa"`) escritos em minúsculo, mas
+    `juros` chega já normalizado em MAIÚSCULO (`remover_acentos(...).upper()`, mesma função
+    usada pelo filtro de escopo) — sem `re.IGNORECASE`, nenhuma delas batia contra o texto real
+    (`"SPREAD DE 1,5%"` nunca casava com o padrão em minúsculo). Corrigido adicionando
+    `re.IGNORECASE` em todas as regex de taxa.
+  - **Cobertura real medida** (contra as 12.239 linhas em escopo do CSV de 2026-09-16):
+    **515 linhas (~4,2%) com `taxa_valor` extraído** — a grande maioria das linhas tem `juros`
+    vazio/`"NAO"`/`"-"` (a mesma razão pela qual `indexador_padronizado` também é `None` em
+    10.603 linhas — dado realmente ausente na fonte, não falha de regex). Do subconjunto onde
+    `juros` tem conteúdo reconhecível, a cobertura é bem maior; o que ainda fica de fora é
+    fraseado raro demais pra valer regex novo agora (ex: `"105% das taxas médias diárias dos
+    DI"`, `"101,75 da Taxa DI"` sem `%`) — **documentado aqui, não escondido**: `taxa_valor`
+    fica `NULL` nesses casos, nunca um valor chutado.
+- **`prazo_dias`/`prazo_meses` (pedido adicional do usuário, mesma sessão)**: diferente de
+  indexador/taxa, isso é **dado EXATO, não melhor esforço** — `Data_Vencimento - Data_Emissao`,
+  duas datas reais da própria CVM (`src/unify_primario.py::_prazo_dias_e_meses`).
+  `prazo_meses` = `prazo_dias / 30,44` (média de dias por mês), arredondado a 1 casa — conversão
+  documentada, não inventada, só pra ficar comparável com `operations.prazo_amortizacao_meses`
+  (BNDES/FINEP, já em meses). **Só calculável quando AMBAS as datas existem** — confirmado
+  contra o CSV real: apenas **1.859 de 12.239 linhas em escopo (15,2%)** têm as duas datas
+  preenchidas (`Data_Emissao` sozinha já falta em 82% das linhas, ver `data_referencia` acima).
+  **Achado real de qualidade de dado NA PRÓPRIA FONTE**: das 1.903 linhas com as duas datas (nº
+  ligeiramente diferente de 1.859 porque conta antes do dedup por `row_hash`), **44 (2,3%) têm
+  `Data_Vencimento` ANTERIOR OU IGUAL a `Data_Emissao`** — inconsistência de digitação da CVM,
+  não bug deste pipeline (um caso extremo mediu -35.429 dias, quase 97 anos "ao contrário").
+  Essas 44 linhas ficam com `prazo_dias`/`prazo_meses` `NULL` de propósito — nunca um prazo
+  negativo/zero, que quebraria qualquer comparação/gráfico no frontend depois.
+- **Carência: NÃO existe nesta fonte, confirmado contra os DOIS dicionários de dados da CVM**
+  (`meta_oferta_distribuicao.txt` E `meta_oferta_resolucao_160.txt`, o segundo arquivo dentro do
+  mesmo zip — dataset relacionado mas de schema DIFERENTE, focado no rito RCVM 160/automático
+  pós-2023, fora do escopo geral deste pedido) — nenhum dos dois tem um campo equivalente a
+  `prazo_carencia_meses` do BNDES. Diferente do BNDES (que declara carência explicitamente na
+  própria planilha), carência de um título de dívida privado normalmente só consta na
+  escritura/prospecto do papel, não neste registro estruturado da CVM. **Deliberadamente não
+  extraído de texto livre** (não há um campo de referência que sirva de âncora, ao contrário de
+  indexador/taxa que pelo menos partem de `Juros`/`Atualização_Monetária` — tentar inferir
+  carência de descrição livre sem estrutura nenhuma seria risco alto de dado errado) — mesma
+  regra de ouro do resto do projeto: sem fonte estruturada, sem campo. Se `oferta_resolucao_160`
+  um dia for integrado como fonte própria (schema bem diferente, tem `Descricao_garantias`/
+  `Agente_fiduciario`/`Titulo_incentivado` — não avaliado a fundo, fora do escopo deste pedido),
+  vale reconferir se carência aparece lá antes de assumir que nunca vai existir.
+
+Rodando pela primeira vez (2026-09-16) contra produção (Aiven, mesmo `DATABASE_URL` de sempre):
+12.232 linhas inseridas em `operations_primario` (1:1 com o staging, nenhuma linha rejeitada),
+8.249 emissores ficaram pendentes de enriquecimento (1.472 linhas sem `cnpj_emissor` — nunca vão
+resolver, é dado ausente na própria oferta, não erro deste pipeline — + linhas cujo CNPJ ainda
+não estava em `cnpj_cnae`), reduzido para **1.242 CNPJs distintos** a resolver via
+`enrich_cnae.py::enrich_pendentes_via_api` (BrasilAPI, mesmo mecanismo/rate-limit já usado pela
+FINEP — ~0,6s por CNPJ).
+
+### Pipeline (`src/refresh_primario.py`)
+
+Orquestrador PRÓPRIO e SEPARADO de `refresh.py` (BNDES/FINEP) — fonte, staging e tabela final
+são completamente independentes, só compartilham o cache `cnpj_cnae` (por design, já pensado
+para múltiplas fontes). Sequência: `download_cvm.download_all()` → `parse_cvm.parse_cvm()` →
+`unify_primario.build_operations_primario()` → se sobrar emissor pendente,
+`enrich_cnae.enrich_pendentes_via_api()` (BrasilAPI, mesma função já usada pelo refresh semanal
+da FINEP, só que alvo = CNPJs de `operations_primario`) →
+`unify_primario.reclassificar_emissores_pendentes()`. Log em `refresh_primario_log` (mesmo
+formato de `refresh_log`/`refresh_editais_log`). **NÃO roda** o job pesado mensal de
+`enrich_cnae.py::enrich()`/`enrich_empresas()` (bulk RFB, vários GB) — o volume de emissores da
+CVM (milhares, não dezenas de milhares) é resolvido inteiramente pelo caminho leve via
+BrasilAPI, sem precisar do job pesado. Automação: `.github/workflows/refresh-primario.yml`,
+diário (09:00 UTC, 1h depois do refresh de editais — mesmo secret `DATABASE_URL`), com
+`workflow_dispatch` para rodar manualmente.
+
+### Escopo desta sessão (fundação — outras sessões constroem em cima)
+
+Esta sessão entregou SÓ a camada de dados (staging + `operations_primario` + schema +
+enriquecimento de emissor), deliberadamente sem tocar em: rotas `/api/primario/*` (FastAPI),
+motor de busca, frontend/abas novas. O schema de `operations_primario` já está estável o
+suficiente para outra sessão começar a codificar contra ele em paralelo, mesmo antes do
+enriquecimento de 100% dos emissores pendentes terminar (o campo `setor_emissor`/`uf_emissor`
+IS NULL é um estado normal e esperado, não um bug a esperar sumir).
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |
@@ -1103,6 +1357,7 @@ padrão de qualquer mudança de schema neste projeto, nada automático no deploy
 | Motor de busca (IA, opcional) | `src/search.py`, `src/embeddings.py` |
 | Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
+| Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/unify_primario.py`, `src/refresh_primario.py` |
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |

@@ -343,8 +343,9 @@ def enrich_pendentes_via_api(conn, cnpjs: set, divisao_map: dict) -> int:
                 cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao,
                 setor_bndes_mapeado, subsetor_bndes_mapeado,
                 razao_social_oficial, natureza_juridica, porte_empresa, capital_social,
+                uf, municipio,
                 atualizado_em
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(cnpj) DO UPDATE SET
                 razao_social=excluded.razao_social, cnae_codigo=excluded.cnae_codigo,
                 cnae_descricao=excluded.cnae_descricao, cnae_divisao=excluded.cnae_divisao,
@@ -353,6 +354,7 @@ def enrich_pendentes_via_api(conn, cnpjs: set, divisao_map: dict) -> int:
                 razao_social_oficial=excluded.razao_social_oficial,
                 natureza_juridica=excluded.natureza_juridica,
                 porte_empresa=excluded.porte_empresa, capital_social=excluded.capital_social,
+                uf=excluded.uf, municipio=excluded.municipio,
                 atualizado_em=excluded.atualizado_em
             """,
             (
@@ -361,7 +363,9 @@ def enrich_pendentes_via_api(conn, cnpjs: set, divisao_map: dict) -> int:
                 str(divisao) if divisao is not None else None,
                 setor_bndes, subsetor_bndes,
                 dados.get("razao_social"), dados.get("natureza_juridica"), porte,
-                dados.get("capital_social"), agora,
+                dados.get("capital_social"),
+                dados.get("uf"), dados.get("municipio"),
+                agora,
             ),
         )
         gravados += 1
