@@ -602,6 +602,142 @@ CREATE TABLE IF NOT EXISTS usuario_busca_historico (
     criado_em TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_usuario_busca_historico_usuario ON usuario_busca_historico(usuario_id, criado_em DESC);
+
+-- ============ Radar de Credito Primario: staging CVM "Ofertas Publicas de
+-- Distribuicao" (ver src/download_cvm.py, src/parse_cvm.py, CLAUDE.md secao propria)
+-- ============ Staging, quase 1:1 com as colunas oficiais do CSV da CVM -- so as
+-- linhas de INSTRUMENTOS DE DIVIDA (debenture/CRI/CRA/nota promissoria-comercial/
+-- letra financeira/CDCA/CCB), filtradas em parse_cvm.py. Deliberadamente SEM as
+-- ~30 colunas de composicao de investidores do CSV oficial (Nr_Pessoa_Fisica,
+-- Qtd_Fundos_Investimento etc.) -- ver comentario em parse_cvm.py::CVM_COLUMNS.
+-- row_hash: mesmo padrao de bndes_raw/finep_*_raw (ver incremental.py) -- o dataset
+-- da CVM tambem e republicado por inteiro a cada atualizacao (diaria), e
+-- numero_registro_oferta NAO serve como chave natural sozinha (75.8% das linhas de
+-- divida nao tem esse campo preenchido -- ofertas com dispensa de registro).
+CREATE TABLE IF NOT EXISTS cvm_oferta_distribuicao_raw (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    row_hash TEXT,
+    numero_processo TEXT,
+    numero_registro_oferta TEXT,
+    tipo_oferta TEXT,
+    tipo_componente_oferta_mista TEXT,
+    tipo_ativo TEXT,
+    cnpj_emissor TEXT,
+    nome_emissor TEXT,
+    cnpj_lider TEXT,
+    nome_lider TEXT,
+    nome_vendedor TEXT,
+    cnpj_ofertante TEXT,
+    nome_ofertante TEXT,
+    rito_oferta TEXT,
+    modalidade_oferta TEXT,
+    modalidade_registro TEXT,
+    modalidade_dispensa_registro TEXT,
+    data_abertura_processo TEXT,
+    data_protocolo TEXT,
+    data_dispensa_oferta TEXT,
+    data_registro_oferta TEXT,
+    data_inicio_oferta TEXT,
+    data_encerramento_oferta TEXT,
+    emissao TEXT,
+    classe_ativo TEXT,
+    serie TEXT,
+    especie_ativo TEXT,
+    forma_ativo TEXT,
+    data_emissao TEXT,
+    data_vencimento TEXT,
+    quantidade_sem_lote_suplementar REAL,
+    quantidade_no_lote_suplementar REAL,
+    quantidade_total REAL,
+    preco_unitario REAL,
+    valor_total REAL,
+    oferta_inicial TEXT,
+    oferta_incentivo_fiscal TEXT,
+    oferta_regime_fiduciario TEXT,
+    atualizacao_monetaria TEXT,
+    juros TEXT,
+    tipo_societario_emissor TEXT,
+    tipo_fundo_investimento TEXT,
+    ultimo_comunicado TEXT,
+    data_comunicado TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cvm_oferta_distribuicao_hash ON cvm_oferta_distribuicao_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_cvm_oferta_distribuicao_cnpj_emissor ON cvm_oferta_distribuicao_raw(cnpj_emissor);
+
+-- ============ Radar de Credito Primario: tabela unificada `operations_primario`
+-- ============ Mesmo espirito de `operations` (BNDES+FINEP): so insere para
+-- raw_id novos (ver src/unify_primario.py::build_operations_primario, dedup por
+-- raw_table+raw_id, nunca por numero_registro_oferta -- ver comentario em
+-- parse_cvm.py sobre por que esse campo nao serve como chave). setor_emissor/
+-- subsetor_emissor/uf_emissor/municipio_emissor vem do MESMO cache cnpj_cnae
+-- usado para enriquecer a FINEP (ver CLAUDE.md, secao propria, sobre a extensao
+-- de cnpj_cnae com uf/municipio feita para viabilizar isso).
+CREATE TABLE IF NOT EXISTS operations_primario (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    instrumento TEXT,                    -- Tipo_Ativo cru da CVM
+    instrumento_padronizado TEXT,        -- 'Debênture'|'CRI'|'CRA'|'Nota Comercial'|'Letra Financeira'|'CDCA'|'CCB'|'Outro'
+    numero_processo TEXT,
+    numero_registro_oferta TEXT,         -- INFORMATIVO -- nulo em ~76% das linhas (dispensa de registro), nunca usado como chave
+    tipo_oferta TEXT,                    -- Primaria | Secundaria
+    rito_oferta TEXT,
+    modalidade_oferta TEXT,
+    cnpj_emissor TEXT,
+    nome_emissor TEXT,
+    razao_social_oficial_emissor TEXT,   -- cnpj_cnae.razao_social_oficial (RFB)
+    setor_emissor TEXT,                  -- taxonomia BNDES (mesma de `operations`), via cnpj_cnae
+    subsetor_emissor TEXT,
+    segmento_emissor TEXT,               -- cnae_descricao (granularidade fina)
+    porte_emissor TEXT,
+    natureza_juridica_emissor TEXT,
+    uf_emissor TEXT,
+    municipio_emissor TEXT,
+    cnpj_lider TEXT,                     -- coordenador lider/underwriter da oferta
+    nome_lider TEXT,
+    emissao TEXT,
+    serie TEXT,
+    classe_ativo TEXT,
+    especie_ativo TEXT,
+    forma_ativo TEXT,
+    data_emissao TEXT,
+    data_vencimento TEXT,
+    data_registro_oferta TEXT,
+    data_encerramento_oferta TEXT,
+    data_referencia TEXT,                -- melhor data disponivel p/ ordenacao/serie temporal -- ver unify_primario.py
+    ano INTEGER,
+    trimestre INTEGER,
+    prazo_dias INTEGER,                  -- data_vencimento - data_emissao, EXATO (nao melhor-esforco -- so NULL quando falta uma das duas datas ou a subtracao da negativa/zero, ver CLAUDE.md)
+    prazo_meses REAL,                    -- prazo_dias / 30.44 (media de dias/mes), 1 casa decimal -- so p/ comparar com prazo_amortizacao_meses de `operations` (BNDES/FINEP), mesma unidade
+    valor_total REAL,
+    quantidade_total REAL,
+    preco_unitario REAL,
+    incentivada BOOLEAN,                 -- Oferta_Incentivo_Fiscal = 'S' (Lei 12.431/11)
+    regime_fiduciario BOOLEAN,           -- Oferta_Regime_Fiduciario = 'S'
+    oferta_inicial BOOLEAN,              -- sempre NULL no escopo de divida (campo e especifico de IPO de acoes) -- mantido por completude/fidelidade ao dado oficial
+    indexador_padronizado TEXT,          -- 'CDI'|'IPCA+'|'SELIC'|'Prefixado'|'Outro'|NULL -- melhor esforco, ver CLAUDE.md (NUNCA inventado)
+    taxa_valor REAL,                     -- numero extraido de juros/atualizacao_monetaria (ex: 2.5 de "CDI + 2,50% a.a.", 12.5 de "12,5% a.a.") -- melhor esforco, NULL se nao extraivel com confianca (NUNCA inventado)
+    taxa_tipo TEXT,                      -- 'spread' (aditivo, ex: "+2,5%" sobre o indexador) | 'percentual_indexador' (multiplicativo, ex: "108% do CDI") | 'taxa_fixa' (prefixado puro) | NULL
+    juros TEXT,                          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
+    atualizacao_monetaria TEXT,          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
+    raw_table TEXT NOT NULL,
+    raw_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_raw ON operations_primario(raw_table, raw_id);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_cnpj_emissor ON operations_primario(cnpj_emissor);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_setor ON operations_primario(setor_emissor);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_uf ON operations_primario(uf_emissor);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_ano ON operations_primario(ano);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_instrumento ON operations_primario(instrumento_padronizado);
+
+CREATE TABLE IF NOT EXISTS refresh_primario_log (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    started_at TEXT,
+    finished_at TEXT,
+    cvm_raw_rows INTEGER,
+    operations_primario_rows INTEGER,
+    emissores_pendentes INTEGER,
+    status TEXT,
+    detalhe TEXT
+);
 """
 
 
@@ -649,6 +785,36 @@ MIGRACOES_COLUNAS = [
     # natureza_cliente.
     ("operations", "natureza_cliente", "TEXT"),
     ("operations", "razao_social_oficial", "TEXT"),
+    # Radar de Credito Primario (CVM): emissores de debenture/CRI/CRA/etc precisam
+    # de UF/municipio para os filtros geograficos de operations_primario, mas
+    # cnpj_cnae nunca guardou esses campos ate aqui (BNDES/FINEP ja trazem UF/
+    # municipio direto na propria planilha de origem, nunca precisaram disso via
+    # CNPJ). Preenchido so por enrich_cnae.py::enrich_pendentes_via_api (BrasilAPI
+    # ja devolve "uf"/"municipio" na mesma chamada, so nao eram gravados) -- o job
+    # mensal em lote (enrich(), que escaneia Estabelecimentos*.zip da RFB) NAO foi
+    # estendido para isso (ESTAB_COLS/KEEP_COLS tem uf/municipio disponiveis no
+    # zip mas o parsing em lote so extrai o que ja usava; ver CLAUDE.md). Sem
+    # backfill retroativo: linhas de cnpj_cnae ja existentes (BNDES/FINEP) ficam
+    # com uf/municipio NULL para sempre, o que e aceitavel -- ninguem consome
+    # esses dois campos a partir de cnpj_cnae hoje exceto o unify_primario.py novo.
+    ("cnpj_cnae", "uf", "TEXT"),
+    ("cnpj_cnae", "municipio", "TEXT"),
+    # taxa_valor/taxa_tipo adicionadas a operations_primario DEPOIS da tabela ja
+    # ter sido criada em producao pela primeira rodada do pipeline CVM (pedido do
+    # usuario, 2026-09-16, chegou no meio desta mesma sessao) -- ver CLAUDE.md.
+    # unify_primario.py::build_operations_primario() so preenche estes campos para
+    # linhas inseridas DEPOIS desta migracao (pipeline incremental, nao reprocessa
+    # raw_id ja unificado) -- por isso o backfill explicito abaixo, cobrindo as
+    # linhas ja gravadas na primeira rodada (mesmo padrao ja usado por
+    # instrumento_financeiro/razao_social_oficial em `operations`, ver acima).
+    ("operations_primario", "taxa_valor", "REAL"),
+    ("operations_primario", "taxa_tipo", "TEXT"),
+    # prazo_dias/prazo_meses: pedido adicional do usuario na MESMA sessao (data
+    # exata, data_vencimento - data_emissao -- ver CLAUDE.md), chegou logo depois
+    # de taxa_valor/taxa_tipo acima -- mesmo motivo de precisar de ALTER TABLE
+    # explicito (tabela ja criada em producao antes deste pedido).
+    ("operations_primario", "prazo_dias", "INTEGER"),
+    ("operations_primario", "prazo_meses", "REAL"),
 ]
 
 
