@@ -24,7 +24,15 @@ from db import get_connection, get_engine
 from geo import regiao_de
 from incremental import insert_new_rows
 
-CAMPOS_CORRIGIVEIS = {"setor_bndes", "subsetor_bndes", "segmento"}
+# uf/municipio/cliente/cnpj adicionados 2026-09-16 (pedido do usuario) -- mesmo
+# mecanismo generico ja usado por setor_bndes/subsetor_bndes/segmento (o UPDATE
+# abaixo e f-string, mas so roda sobre um `campo` ja validado contra este set,
+# nunca sobre entrada livre). CUIDADO com `cnpj`: corrigir esse campo NAO dispara
+# reclassificacao automatica de setor com o CNPJ novo (isso so acontece no proximo
+# refresh/enriquecimento, e mesmo assim so se setor_origem='pendente') -- e so
+# uma correcao do dado bruto (ex: typo), nao uma feature de "corrigir CNPJ pra
+# re-enriquecer setor".
+CAMPOS_CORRIGIVEIS = {"setor_bndes", "subsetor_bndes", "segmento", "uf", "municipio", "cliente", "cnpj"}
 
 
 def registrar_correcao_manual(conn, operation_id: int, campo: str, valor_novo: str, usuario: str = None) -> None:

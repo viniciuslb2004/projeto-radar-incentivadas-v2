@@ -268,6 +268,36 @@ def alterar_ativo(usuario_id: int, payload: dict, usuario: dict = Depends(exigir
     return {"ok": True}
 
 
+@router.post("/api/usuarios/{usuario_id}/role")
+def alterar_role(usuario_id: int, payload: dict, usuario: dict = Depends(exigir_admin)):
+    """Promove/rebaixa uma conta existente entre 'admin' e 'usuario' -- ate aqui o
+    role so era definido na criacao (POST /api/usuarios). Mesma guarda do ultimo
+    admin ja usada em ativo/desativar e excluir: nao deixa rebaixar (admin ->
+    usuario) o ULTIMO admin ativo restante, pra nunca travar o painel sem ninguem
+    pra reativar ninguem."""
+    role_novo = payload.get("role")
+    if role_novo not in ("admin", "usuario"):
+        raise HTTPException(status_code=400, detail="Papel invalido (use 'admin' ou 'usuario')")
+    conn = get_connection(pooled=True)
+    try:
+        row = conn.execute("SELECT id, role, ativo FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        _, role_atual, ativo = row
+        if (
+            role_novo == "usuario"
+            and role_atual == "admin"
+            and ativo
+            and _contar_admins_ativos(conn, excluir_id=usuario_id) == 0
+        ):
+            raise HTTPException(status_code=409, detail="Nao e possivel rebaixar o ultimo admin ativo")
+        conn.execute("UPDATE admin_usuarios SET role = ? WHERE id = ?", (role_novo, usuario_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @router.post("/api/usuarios/{usuario_id}/senha")
 def alterar_senha(usuario_id: int, payload: dict, usuario: dict = Depends(exigir_admin)):
     """Reset administrativo de senha (NAO e' fluxo de "esqueci minha senha" -- so um
@@ -539,21 +569,25 @@ def buscar_operacoes(q: str = "", usuario: dict = Depends(exigir_admin)):
         return {"operacoes": []}
     conn = get_connection(pooled=True)
     try:
+        # uf/municipio adicionados 2026-09-16 junto com a expansao de
+        # CAMPOS_CORRIGIVEIS (ver src/unify.py) -- sem isso, selecionar "UF" ou
+        # "Município" no formulario de correcao pre-preenchia com undefined (o
+        # objeto de resultado nao tinha essas chaves).
         if termo.isdigit():
             rows = conn.execute(
-                "SELECT id, cliente, cnpj, setor_bndes, subsetor_bndes, segmento FROM operations "
+                "SELECT id, cliente, cnpj, setor_bndes, subsetor_bndes, segmento, uf, municipio FROM operations "
                 "WHERE id = ? LIMIT 20",
                 (int(termo),),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, cliente, cnpj, setor_bndes, subsetor_bndes, segmento FROM operations "
+                "SELECT id, cliente, cnpj, setor_bndes, subsetor_bndes, segmento, uf, municipio FROM operations "
                 "WHERE cliente ILIKE ? ORDER BY id DESC LIMIT 20",
                 (f"%{termo}%",),
             ).fetchall()
     finally:
         conn.close()
-    campos = ["id", "cliente", "cnpj", "setor_bndes", "subsetor_bndes", "segmento"]
+    campos = ["id", "cliente", "cnpj", "setor_bndes", "subsetor_bndes", "segmento", "uf", "municipio"]
     return {"operacoes": [dict(zip(campos, r)) for r in rows]}
 
 

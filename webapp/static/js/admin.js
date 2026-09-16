@@ -136,6 +136,7 @@
         const pillTexto = u.ativo ? "Ativo" : "Inativo";
         const acaoTexto = u.ativo ? "Desativar" : "Ativar";
         const roleTexto = u.role === "admin" ? "Admin" : "Usuário";
+        const roleAcaoTexto = u.role === "admin" ? "Rebaixar a usuário" : "Promover a admin";
         return `<tr>
           <td><button type="button" class="admin-usuario-link" data-id="${u.id}">${u.username}</button></td>
           <td><span class="admin-pill admin-role">${roleTexto}</span></td>
@@ -143,6 +144,7 @@
           <td>${formatarData(u.criado_em)}</td>
           <td>
             <button class="admin-toggle-btn" data-acao="ativo" data-id="${u.id}" data-ativo="${u.ativo}">${acaoTexto}</button>
+            <button class="admin-toggle-btn" data-acao="role" data-id="${u.id}" data-role="${u.role}" data-username="${u.username}">${roleAcaoTexto}</button>
             <button class="admin-toggle-btn" data-acao="senha" data-id="${u.id}" data-username="${u.username}">Alterar senha</button>
             <button class="admin-toggle-btn" data-acao="excluir" data-id="${u.id}" data-username="${u.username}">Excluir</button>
           </td>
@@ -232,6 +234,26 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ativo: !ativoAtual }),
         });
+      } else if (btn.dataset.acao === "role") {
+        const roleAtual = btn.dataset.role;
+        const roleNovo = roleAtual === "admin" ? "usuario" : "admin";
+        const mensagem =
+          roleNovo === "admin"
+            ? `Promover "${btn.dataset.username}" a admin (acesso ao painel + site)?`
+            : `Rebaixar "${btn.dataset.username}" a usuário comum (perde acesso ao painel)?`;
+        if (!confirm(mensagem)) {
+          btn.disabled = false;
+          return;
+        }
+        const resp = await apiFetch(`/usuarios/${id}/role`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: roleNovo }),
+        });
+        if (!resp.ok) {
+          const erro = await resp.json();
+          alert(erro.detail || "Não foi possível alterar o papel deste usuário.");
+        }
       } else if (btn.dataset.acao === "senha") {
         const senhaNova = prompt(`Nova senha para "${btn.dataset.username}" (mínimo 8 caracteres):`);
         if (senhaNova === null) {

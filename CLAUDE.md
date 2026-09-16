@@ -758,6 +758,14 @@ o painel inteiro sem ninguém pra reativar ninguém. Na prática só é alcanç�
 autoexclusão/autodesativação (quem chama a rota já precisa ser um admin ativo, então excluir/
 desativar um admin QUE NÃO seja você mesmo nunca zera a contagem).
 
+**Trocar papel de uma conta existente** (`POST /admin/api/usuarios/{id}/role`, aprovado
+2026-09-16): até aqui `role` só era definido na CRIAÇÃO da conta (`POST /admin/api/usuarios`)
+— esta rota promove/rebaixa uma conta já existente entre `admin`/`usuario`. Aplica a MESMA
+guarda do último admin já usada em ativar/desativar e excluir (`_contar_admins_ativos`): não
+deixa rebaixar (`admin` → `usuario`) o ÚLTIMO admin ativo restante. UI: botão na tabela de
+usuários que alterna o texto ("Promover a admin" / "Rebaixar a usuário") conforme o papel
+atual, com `confirm()` nativo antes de aplicar.
+
 **Reset administrativo de senha** (`POST /admin/api/usuarios/{id}/senha`, aprovado
 2026-09-16): admin troca a senha de QUALQUER usuário (não é fluxo de "esqueci minha senha" —
 não exige a senha antiga). Mesmo esquema de hash de sempre (`gerar_hash_senha`), valida
@@ -809,9 +817,24 @@ bug real das sequences dessincronizadas (ver "Coisas a saber antes de mexer") fo
 **Correções manuais** (`/admin/api/correcoes*` + `/admin/api/operacoes/buscar`, aprovado
 2026-09-10): tela sobre `operations_correcoes_manuais` que já existia (ver `src/db.py`) — só
 uma UI nova, nenhuma lógica duplicada. Busca operação por id exato ou cliente (ILIKE), escolhe
-um dos 3 campos corrigíveis (`setor_bndes`/`subsetor_bndes`/`segmento` — `unify.CAMPOS_CORRIGIVEIS`)
-e reaproveita `unify.py::registrar_correcao_manual` (a MESMA função que
+um dos campos corrigíveis (`unify.CAMPOS_CORRIGIVEIS`) e reaproveita
+`unify.py::registrar_correcao_manual` (a MESMA função que
 `webapp/main.py::enriquecimento_corrigir` já usava) pra aplicar e gravar o histórico.
+**Campos expandidos (2026-09-16, pedido do usuário)**: `CAMPOS_CORRIGIVEIS` tinha só
+`setor_bndes`/`subsetor_bndes`/`segmento` — ganhou `uf`/`municipio`/`cliente`/`cnpj`. O
+mecanismo já era genérico (o `UPDATE operations SET {campo} = ?` em `registrar_correcao_manual`
+é f-string, mas `campo` só chega ali depois de validado contra a whitelist, então nunca é
+entrada livre) — só precisou adicionar os 4 nomes ao set. `_atualizar_textos_apos_correcao`
+(mesmo arquivo) já recalculava busca/embedding depois de QUALQUER correção, incluindo esses
+campos, então a busca já reflete corretamente uma correção de cliente/cnpj/uf/município sem
+mudança nenhuma ali. Achado real ao expandir: `/admin/api/operacoes/buscar` (usado pra
+pré-preencher o formulário) não devolvia `uf`/`municipio` no resultado — corrigir esses dois
+campos pré-preenchia com `undefined` até isso ser corrigido (adicionados ao `SELECT`/retorno).
+**Cuidado com `cnpj`**: corrigir esse campo NÃO dispara reclassificação automática de setor
+com o CNPJ novo — isso só acontece no próximo refresh/enriquecimento, e mesmo assim só se
+`setor_origem='pendente'`. É só uma correção do dado bruto (ex: typo), não uma feature de
+"corrigir CNPJ pra re-enriquecer setor" — se um dia isso for pedido, é trabalho novo, não uma
+consequência automática desta mudança.
 "Desativar" só marca `ativa=FALSE` (nunca `DELETE` — é histórico) e não reverte o valor já
 aplicado em `operations`; isso só muda o que o próximo refresh semanal vai (deixar de)
 reforçar (`unify.py::_reaplicar_correcoes_manuais`). **UX ajustada 2026-09-10** (feedback real
