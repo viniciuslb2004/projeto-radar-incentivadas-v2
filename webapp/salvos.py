@@ -63,6 +63,19 @@ def operacao_esta_salva(conn, usuario_id: int, operation_id: int):
     return {"salva": True, "nota": row[0]}
 
 
+def listar_ids_salvos(conn, usuario_id: int) -> list:
+    """So os `operation_id` que o usuario ja salvou -- usado pela Busca (lista de
+    ate 200 resultados) pra saber, numa unica chamada em lote, quais cards ja devem
+    nascer com a estrelinha preenchida (★), em vez de uma checagem por operacao
+    (`operacao_esta_salva`, que so faz sentido pra UMA operacao de cada vez, ver
+    modal de detalhe)."""
+    rows = conn.execute(
+        "SELECT operation_id FROM usuario_operacoes_salvas WHERE usuario_id = ?",
+        (usuario_id,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def listar_operacoes_salvas(conn, usuario_id: int):
     """Lista as operacoes salvas do usuario, com os campos de `operations` ja
     juntados (mesmos campos que a Busca exporta, ver webapp/exportar_excel.py) --

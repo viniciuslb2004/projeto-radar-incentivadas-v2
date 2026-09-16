@@ -883,6 +883,24 @@ def salvos_pagina(usuario: dict = Depends(_exigir_usuario_logado)):
         conn.close()
 
 
+@app.get("/api/salvos/operacoes/ids")
+def salvos_ids(usuario: dict = Depends(_usuario_atual)):
+    """So os ids de operacao ja salvos do usuario logado -- usado pela Busca
+    (estrelinha mini em cada card de resultado, ver busca.js) pra saber em LOTE
+    quais dos ate 200 resultados ja estao favoritados, sem uma checagem por
+    operacao. Dependency OPCIONAL (`_usuario_atual`, nao `_exigir_usuario_logado`)
+    de proposito: ninguem logado so devolve lista vazia (nenhuma estrela vem
+    preenchida) em vez de 401 -- a Busca funciona igual pra visitante anonimo, so
+    sem nenhum favorito pra marcar."""
+    if usuario is None:
+        return {"ids": []}
+    conn = get_connection(pooled=True)
+    try:
+        return {"ids": salvos.listar_ids_salvos(conn, usuario["id"])}
+    finally:
+        conn.close()
+
+
 @app.post("/api/salvos/operacoes/{op_id}")
 def salvos_favoritar(op_id: int, body: dict = None, usuario: dict = Depends(_exigir_usuario_logado)):
     nota = (body or {}).get("nota")

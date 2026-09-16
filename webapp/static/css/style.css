@@ -764,6 +764,7 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
 }
 
 .result-card {
+  position: relative;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -773,11 +774,34 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
   cursor: pointer;
 }
 .result-card:hover { border-color: var(--blue-light); }
-.result-card .top-row { display: flex; justify-content: space-between; align-items: baseline; }
+.result-card .top-row { display: flex; justify-content: space-between; align-items: baseline; padding-right: 22px; }
 .result-card .cliente { font-weight: 700; color: var(--navy); font-size: 14px; }
 .result-card .valor { font-weight: 700; color: var(--steel-2); }
 .result-card .meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .result-card .score { font-size: 11px; color: var(--blue-mid); }
+
+/* Estrelinha de favoritar de cada card de resultado (Busca) -- só aparece no
+   hover do card (poupa espaço/ruído visual numa lista de até 200 resultados);
+   uma operação JÁ salva (`.ativo`) fica sempre visível, mesmo sem hover, senão
+   não haveria como notar que ela já está salva sem passar o mouse em cima. */
+.fav-btn-mini {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--blue-mid);
+  cursor: pointer;
+  padding: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+.result-card:hover .fav-btn-mini, .fav-btn-mini.ativo { opacity: 1; }
+.fav-btn-mini:hover { transform: scale(1.15); }
+.fav-btn-mini.ativo { color: var(--steel-2); }
+.fav-btn-mini:disabled { cursor: default; opacity: 0.6; }
 
 .empty-state { text-align: center; color: var(--text-muted); padding: 40px 0; }
 

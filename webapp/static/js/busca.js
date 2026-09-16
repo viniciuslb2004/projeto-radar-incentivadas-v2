@@ -4,6 +4,25 @@
 
 let ultimosResultados = [];
 
+// Ids de operacao ja salvos do usuario logado (Transacoes Salvas) -- carregado 1x
+// por busca (ver runBusca) via /api/salvos/operacoes/ids (rota em lote, ver
+// webapp/main.py::salvos_ids), NUNCA um GET por card: os resultados podem trazer
+// ate 200 linhas, e cada card ja tem sua propria estrelinha (`.fav-btn-mini`, ver
+// renderListaResultados) que precisa saber, de cara, se aquela operacao ja esta
+// favoritada. Vazio (nunca erro) tanto pra "ninguem logado" quanto pra qualquer
+// falha de rede -- nesses casos nenhuma estrela nasce preenchida, mas a busca em
+// si segue funcionando normalmente.
+let idsSalvosAtual = new Set();
+
+async function _carregarIdsSalvos() {
+  try {
+    const data = await fetchJSON("/api/salvos/operacoes/ids");
+    idsSalvosAtual = new Set(data.ids || []);
+  } catch (e) {
+    idsSalvosAtual = new Set();
+  }
+}
+
 // Historico de buscas: pessoal e temporario (so no navegador da propria pessoa,
 // via localStorage -- nunca vai pro servidor). Substitui os chips de exemplo
 // fixos que existiam antes (pedido do usuario).
@@ -110,6 +129,7 @@ function renderListaResultados() {
   container.innerHTML = lista
     .map(
       (r) => `<div class="result-card" data-id="${r.id}">
+        <button class="fav-btn-mini${idsSalvosAtual.has(r.id) ? " ativo" : ""}" data-op-id="${r.id}" title="${idsSalvosAtual.has(r.id) ? "Remover dos salvos" : "Salvar operação"}">${idsSalvosAtual.has(r.id) ? "★" : "☆"}</button>
         <div class="top-row">
           <span class="cliente">${r.cliente || "-"}</span>
           <span class="valor">${fmtBRLFull(r.valor_contratado)}</span>
@@ -123,6 +143,31 @@ function renderListaResultados() {
 
   container.querySelectorAll(".result-card").forEach((card) => {
     card.addEventListener("click", () => openOperacaoDetalhe(card.dataset.id));
+  });
+
+  // Estrelinha mini (só aparece no hover do card, ver .fav-btn-mini em style.css) --
+  // favorita/desfavorita sem abrir o modal de detalhe. stopPropagation() é
+  // essencial aqui: o card inteiro (acima) já tem seu próprio click que abre o
+  // modal, e os dois nunca devem disparar juntos.
+  container.querySelectorAll(".fav-btn-mini").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const opId = Number(btn.dataset.opId);
+      btn.disabled = true;
+      try {
+        const novoEstado = await alternarFavorito(opId, btn.classList.contains("ativo"));
+        btn.classList.toggle("ativo", novoEstado);
+        btn.textContent = novoEstado ? "★" : "☆";
+        btn.title = novoEstado ? "Remover dos salvos" : "Salvar operação";
+        if (novoEstado) idsSalvosAtual.add(opId);
+        else idsSalvosAtual.delete(opId);
+        if (typeof recarregarSalvos === "function") recarregarSalvos();
+      } catch (err) {
+        alert(err instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
+      } finally {
+        btn.disabled = false;
+      }
+    });
   });
 }
 
@@ -352,6 +397,8 @@ async function runBusca(q) {
     return;
   }
 
+  // 1x por busca (nunca 1 checagem por card) -- ver _carregarIdsSalvos acima.
+  await _carregarIdsSalvos();
   renderResultados(data);
 }
 

@@ -772,6 +772,21 @@ function fmtCampoDetalhe(campo) {
   }
 }
 
+// Alterna o favorito de UMA operacao (POST se ainda nao estava salva, DELETE se
+// ja estava) -- ponto UNICO que fala com /api/salvos/operacoes/{id}, reusado
+// tanto pelo botao do modal de detalhe (_configurarBotaoFavoritar, logo abaixo)
+// quanto pela estrelinha mini de cada card de resultado da Busca (ver busca.js,
+// `.fav-btn-mini`). Devolve o NOVO estado (true = acabou de ficar salva); deixa
+// ErroAutenticacao (401, ninguem logado) subir pro chamador tratar o alerta.
+async function alternarFavorito(opId, estavaAtiva) {
+  if (estavaAtiva) {
+    await deleteJSON(`/api/salvos/operacoes/${opId}`);
+    return false;
+  }
+  await postJSON(`/api/salvos/operacoes/${opId}`, {});
+  return true;
+}
+
 // Botao "Salvar"/"★ Salvo" do modal de detalhe de operacao (Transacoes Salvas, ver
 // webapp/salvos.py) -- reutilizavel de qualquer lugar que abre esse mesmo modal
 // (busca, tabela de operacoes, grupo economico etc, ja que todos passam por
@@ -790,13 +805,8 @@ function _configurarBotaoFavoritar(opId, salva) {
   btn.onclick = async () => {
     btn.disabled = true;
     try {
-      if (btn.classList.contains("ativo")) {
-        await deleteJSON(`/api/salvos/operacoes/${opId}`);
-        atualizarEstado(false);
-      } else {
-        await postJSON(`/api/salvos/operacoes/${opId}`, {});
-        atualizarEstado(true);
-      }
+      const novoEstado = await alternarFavorito(opId, btn.classList.contains("ativo"));
+      atualizarEstado(novoEstado);
       // Se a aba Transacoes Salvas ja carregou nesta visita, atualiza a lista dela
       // tambem -- funcao exposta por salvos.js, so chamada se existir.
       if (typeof recarregarSalvos === "function") recarregarSalvos();

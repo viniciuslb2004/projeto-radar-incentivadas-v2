@@ -935,6 +935,35 @@ CONTA LOGADA (nunca por navegador/dispositivo — decisão de produto explícita
    só guarda `operation_id` e a tabela `operations` já tem `cnpj`/`cliente`, listar/agrupar as
    operações salvas por empresa é um JOIN direto (`listar_operacoes_salvas` já devolve esses
    campos hoje), sem precisar de coluna nova nem migração.
+   **Estrelinha mini em cada card da Busca** (2026-09-16, `webapp/static/js/busca.js`,
+   `.fav-btn-mini` em `style.css`): favoritar sem precisar abrir o modal de detalhe — um
+   botão pequeno, posicionado absoluto no canto superior direito de cada `.result-card`,
+   visível só no `:hover` do card (`opacity:0` → `1`), EXCETO quando a operação já está
+   salva (`.fav-btn-mini.ativo` fica sempre visível, senão não haveria como notar que já
+   está salva sem passar o mouse por cima). Clique tem `stopPropagation()` (o card já tem
+   seu próprio `click` que abre o modal — os dois nunca podem disparar juntos) e reusa a
+   MESMA lógica de alternar favorito que o botão do modal usa
+   (`common.js::alternarFavorito`, extraída dos dois pra não duplicar a chamada a
+   `POST`/`DELETE /api/salvos/operacoes/{id}`). **Problema técnico resolvido antes de
+   implementar**: pra saber o estado inicial (★/☆) de até 200 resultados de uma vez, sem
+   200 checagens individuais, existe uma rota em lote —
+   `GET /api/salvos/operacoes/ids` (`webapp/main.py::salvos_ids` +
+   `salvos.py::listar_ids_salvos`) devolve só os `operation_id` já salvos do usuário
+   logado; `busca.js` chama isso 1x por busca (`_carregarIdsSalvos()`, dentro de
+   `runBusca()`, nunca em `renderListaResultados()` — que também roda a cada troca de
+   ordenação, sem precisar buscar de novo) e cruza localmente com `ultimosResultados`.
+   Dependency OPCIONAL (`_usuario_atual`, não `_exigir_usuario_logado`) nessa rota
+   especificamente: ninguém logado devolve `{"ids": []}` em vez de 401, pra Busca
+   continuar funcionando igual pra visitante anônimo (raro em produção, já que
+   `_verificar_acesso` — gate global — já barra `/api/*` inteiro assim que existe pelo
+   menos uma conta; na prática só importa no caso de sessão expirar NO MEIO do uso, onde
+   o catch de `_carregarIdsSalvos()` já cobria isso de qualquer forma). **Limitação aceita
+   de propósito**: a lista de resultados já renderizada na tela NÃO se atualiza sozinha se
+   a mesma operação for favoritada pelo OUTRO caminho (o botão do modal) — só uma busca
+   nova (`runBusca()`) re-consulta `/api/salvos/operacoes/ids` e re-renderiza os cards.
+   Isso nunca causa inconsistência de DADO (o backend faz upsert idempotente dos dois
+   lados), só um estado visual estático até a próxima busca — mesmo espírito de "as duas
+   fontes não se misturam" já documentado no item 2 abaixo pro histórico de busca.
 2. **Histórico de busca no SERVIDOR** (`usuario_busca_historico`: `usuario_id`, `query`,
    `fixada` BOOLEAN, `criado_em`) — grava a cada busca de um usuário LOGADO
    (`webapp/main.py::_registrar_busca_se_logado`, chamado tanto pela rota GET padrão sem IA
