@@ -986,7 +986,7 @@ CONTA LOGADA (nunca por navegador/dispositivo — decisão de produto explícita
    está salva sem passar o mouse por cima). Clique tem `stopPropagation()` (o card já tem
    seu próprio `click` que abre o modal — os dois nunca podem disparar juntos) e reusa a
    MESMA lógica de alternar favorito que o botão do modal usa
-   (`common.js::alternarFavorito`, extraída dos dois pra não duplicar a chamada a
+   (`common.js::alternarFavoritoOtimista`, extraída dos dois pra não duplicar a chamada a
    `POST`/`DELETE /api/salvos/operacoes/{id}`). **Problema técnico resolvido antes de
    implementar**: pra saber o estado inicial (★/☆) de até 200 resultados de uma vez, sem
    200 checagens individuais, existe uma rota em lote —
@@ -1007,6 +1007,26 @@ CONTA LOGADA (nunca por navegador/dispositivo — decisão de produto explícita
    Isso nunca causa inconsistência de DADO (o backend faz upsert idempotente dos dois
    lados), só um estado visual estático até a próxima busca — mesmo espírito de "as duas
    fontes não se misturam" já documentado no item 2 abaixo pro histórico de busca.
+   **UI otimista + animação de "pop"** (2026-09-16, `common.js::alternarFavoritoOtimista`):
+   ambos os botões de favoritar (modal E estrelinha mini) pintavam o novo estado (★/☆) SÓ
+   depois da resposta do `POST`/`DELETE` voltar — perceptível como um clique "travado"/com
+   delay contra a latência real do Aiven (ver "Coisas a saber antes de mexer" acima).
+   Corrigido: `renderizar(novoEstado)` (callback fornecido por cada chamador — texto+classe
+   no modal, só ícone+título+classe na mini) roda IMEDIATAMENTE no clique, ANTES de
+   `await`ar a chamada à API; se a chamada falhar (`ErroAutenticacao` ou qualquer outro
+   erro), reverte pra `renderizar(estavaAtiva)` e mostra o mesmo alerta de sempre — o
+   servidor continua sendo a fonte da verdade, só a PINTURA acontece adiantada.
+   **Verificado ao vivo simulando alta latência** (`time.sleep()` temporário nas rotas
+   `POST`/`DELETE /api/salvos/operacoes/{id}`, removido depois do teste): o botão já
+   reflete o novo estado antes da requisição completar (confirmado comparando o timestamp
+   da mudança visual com o da resposta de rede); e simulando falha (sessão invalidada no
+   meio do clique) o botão reverte pro estado anterior + mostra o alerta de login, como
+   esperado. Acompanha um "pop" rápido e discreto (`@keyframes fav-pop`, `transform:
+   scale(1) -> scale(1.18) -> scale(1)`, 0.2s, reiniciado via remove+reflow+readiciona a
+   classe `.fav-pop` — funciona mesmo em cliques rápidos em sequência) disparado nas DUAS
+   direções (favoritar e desfavoritar, inclusive no revert de uma falha) — mesma família de
+   timing das outras transitions de 0.15s já usadas no site (`.fav-btn`/`.fav-btn-mini`),
+   sem inventar um ritmo novo.
 2. **Histórico de busca no SERVIDOR** (`usuario_busca_historico`: `usuario_id`, `query`,
    `fixada` BOOLEAN, `criado_em`) — grava a cada busca de um usuário LOGADO
    (`webapp/main.py::_registrar_busca_se_logado`, chamado tanto pela rota GET padrão sem IA

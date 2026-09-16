@@ -148,25 +148,23 @@ function renderListaResultados() {
   // Estrelinha mini (só aparece no hover do card, ver .fav-btn-mini em style.css) --
   // favorita/desfavorita sem abrir o modal de detalhe. stopPropagation() é
   // essencial aqui: o card inteiro (acima) já tem seu próprio click que abre o
-  // modal, e os dois nunca devem disparar juntos.
+  // modal, e os dois nunca devem disparar juntos. UI otimista (ver
+  // common.js::alternarFavoritoOtimista) -- pinta ★/☆ na hora do clique, só
+  // reverte se a chamada ao servidor falhar.
   container.querySelectorAll(".fav-btn-mini").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
+    const opId = Number(btn.dataset.opId);
+    const renderizar = (ativo) => {
+      btn.classList.toggle("ativo", ativo);
+      btn.textContent = ativo ? "★" : "☆";
+      btn.title = ativo ? "Remover dos salvos" : "Salvar operação";
+      if (ativo) idsSalvosAtual.add(opId);
+      else idsSalvosAtual.delete(opId);
+    };
+    btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const opId = Number(btn.dataset.opId);
-      btn.disabled = true;
-      try {
-        const novoEstado = await alternarFavorito(opId, btn.classList.contains("ativo"));
-        btn.classList.toggle("ativo", novoEstado);
-        btn.textContent = novoEstado ? "★" : "☆";
-        btn.title = novoEstado ? "Remover dos salvos" : "Salvar operação";
-        if (novoEstado) idsSalvosAtual.add(opId);
-        else idsSalvosAtual.delete(opId);
+      alternarFavoritoOtimista(btn, opId, btn.classList.contains("ativo"), renderizar, () => {
         if (typeof recarregarSalvos === "function") recarregarSalvos();
-      } catch (err) {
-        alert(err instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
-      } finally {
-        btn.disabled = false;
-      }
+      });
     });
   });
 }

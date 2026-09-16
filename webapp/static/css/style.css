@@ -560,9 +560,25 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
 }
 .fav-btn:hover { background: rgba(255,255,255,0.22); }
 .fav-btn.ativo { background: #fff; color: var(--navy); }
+
+/* "Pop" rapido e discreto ao trocar de estado (☆<->★, nas duas direcoes) --
+   mascara a UI otimista de alternarFavoritoOtimista (common.js): o visual muda
+   na hora do clique, antes da resposta do servidor chegar, e este pop reforça a
+   sensacao de resposta instantanea. Mesma familia de timing das outras
+   transitions de 0.15s ja usadas no site (ver .fav-btn/.fav-btn-mini acima/
+   abaixo) -- nao inventa um ritmo novo. Reiniciada via _animarPopFavorito()
+   (remove+forca reflow+readiciona a classe), pra funcionar mesmo em cliques
+   rapidos em sequencia. */
+@keyframes fav-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+.fav-pop { animation: fav-pop 0.2s ease; }
 
 .salvos-nota {
   width: 100%;

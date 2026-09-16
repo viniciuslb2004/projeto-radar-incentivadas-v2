@@ -788,19 +788,48 @@ function fmtCampoDetalhe(campo) {
   }
 }
 
-// Alterna o favorito de UMA operacao (POST se ainda nao estava salva, DELETE se
-// ja estava) -- ponto UNICO que fala com /api/salvos/operacoes/{id}, reusado
-// tanto pelo botao do modal de detalhe (_configurarBotaoFavoritar, logo abaixo)
-// quanto pela estrelinha mini de cada card de resultado da Busca (ver busca.js,
-// `.fav-btn-mini`). Devolve o NOVO estado (true = acabou de ficar salva); deixa
-// ErroAutenticacao (401, ninguem logado) subir pro chamador tratar o alerta.
-async function alternarFavorito(opId, estavaAtiva) {
-  if (estavaAtiva) {
-    await deleteJSON(`/api/salvos/operacoes/${opId}`);
-    return false;
+// Anima um "pop" rapido (mesmo espirito das transitions de 0.15s ja usadas no
+// resto de style.css -- ver .fav-btn-mini/.acao-btn) toda vez que o estado de
+// favorito de um botao muda, nas duas direcoes (favoritar E desfavoritar) --
+// disfarca qualquer latencia residual da UI otimista abaixo. Remove e re-adiciona
+// a classe (forcando reflow no meio) pra reiniciar a animacao mesmo em cliques
+// rapidos em sequencia, onde a classe ja estaria presente da vez anterior.
+function _animarPopFavorito(el) {
+  el.classList.remove("fav-pop");
+  void el.offsetWidth;
+  el.classList.add("fav-pop");
+}
+
+// Alterna o favorito de UMA operacao com UI OTIMISTA: pinta o NOVO estado na
+// hora do clique (`renderizar`, fornecido pelo chamador -- cada botao pinta a si
+// mesmo de um jeito diferente, texto+classe no modal, so icone+titulo+classe na
+// estrelinha mini de busca.js) e SO DEPOIS dispara POST/DELETE
+// /api/salvos/operacoes/{id} em paralelo -- sem isso, a latencia real contra o
+// Aiven (ver CLAUDE.md) fazia o clique parecer travado/com delay (bug real
+// reportado pelo usuario, 2026-09-16). Se a chamada falhar, reverte pro estado
+// anterior (com o mesmo pop/alerta de sempre) -- o servidor continua sendo a
+// fonte da verdade, so a PINTURA acontece adiantada. `aoConcluir(novoEstado)` so
+// roda em caso de SUCESSO (nunca no revert) -- usado pelos dois chamadores pra
+// atualizar a aba Transacoes Salvas se ja tiver carregado (ver recarregarSalvos).
+async function alternarFavoritoOtimista(btn, opId, estavaAtiva, renderizar, aoConcluir) {
+  const novoEstado = !estavaAtiva;
+  renderizar(novoEstado);
+  _animarPopFavorito(btn);
+  btn.disabled = true;
+  try {
+    if (estavaAtiva) {
+      await deleteJSON(`/api/salvos/operacoes/${opId}`);
+    } else {
+      await postJSON(`/api/salvos/operacoes/${opId}`, {});
+    }
+    if (typeof aoConcluir === "function") aoConcluir(novoEstado);
+  } catch (e) {
+    renderizar(estavaAtiva);
+    _animarPopFavorito(btn);
+    alert(e instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
+  } finally {
+    btn.disabled = false;
   }
-  await postJSON(`/api/salvos/operacoes/${opId}`, {});
-  return true;
 }
 
 // Botao "Salvar"/"★ Salvo" do modal de detalhe de operacao (Transacoes Salvas, ver
@@ -813,24 +842,17 @@ function _configurarBotaoFavoritar(opId, salva) {
   const btn = document.getElementById("modal-favoritar-btn");
   if (!btn) return;
   btn.style.display = "inline-flex";
-  const atualizarEstado = (ativo) => {
+  const renderizar = (ativo) => {
     btn.textContent = ativo ? "★ Salvo" : "☆ Salvar";
     btn.classList.toggle("ativo", ativo);
   };
-  atualizarEstado(!!salva);
-  btn.onclick = async () => {
-    btn.disabled = true;
-    try {
-      const novoEstado = await alternarFavorito(opId, btn.classList.contains("ativo"));
-      atualizarEstado(novoEstado);
+  renderizar(!!salva);
+  btn.onclick = () => {
+    alternarFavoritoOtimista(btn, opId, btn.classList.contains("ativo"), renderizar, () => {
       // Se a aba Transacoes Salvas ja carregou nesta visita, atualiza a lista dela
       // tambem -- funcao exposta por salvos.js, so chamada se existir.
       if (typeof recarregarSalvos === "function") recarregarSalvos();
-    } catch (e) {
-      alert(e instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
-    } finally {
-      btn.disabled = false;
-    }
+    });
   };
 }
 
