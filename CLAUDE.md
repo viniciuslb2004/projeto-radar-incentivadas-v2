@@ -1489,6 +1489,99 @@ espírito do Supabase mantido como rede de segurança na migração pro Aiven).
 - Total de `operations_primario` após o corte: **15.076** (era 17.434 — a contagem sobe e
   desce um pouco ao longo do dia com o refresh diário automático, não é um erro de conta).
 
+### Pesquisa de fontes adicionais + melhoria de extração de taxa (2026-09-17)
+
+Pedido do usuário: pesquisar outras fontes ABERTAS/GRATUITAS que cubram o mesmo universo
+(debêntures/CRI/CRA/notas comerciais/letras financeiras/CDCA/CCB) e, complementarmente,
+melhorar a qualidade de extração das 2 fontes CVM já integradas.
+
+**Pesquisa de fontes novas — conclusão: nenhuma fonte aberta genuinamente melhor foi
+encontrada, esforço redirecionado pra qualidade da extração (ver abaixo).** Três candidatos
+investigados ao vivo (WebFetch/download real, não só a descrição da página):
+- **CVM — "Distribuições de Débentures - Planilha Individualizada"**
+  (`dados.cvm.gov.br/dataset/distrpubl`, arquivo `.ods` baixado e inspecionado com
+  `pandas`+`odfpy`): é uma série histórica ESTÁTICA/LEGADA, com a própria planilha
+  declarando `Data da Atualização do último Período: 02/01/2023` — **não é atualizada desde
+  2023-01**, cobre só debêntures sob rito ICVM 400/03 (nem CRI/CRA/CDCA/CCB/notas
+  comerciais, nem o rito automático da Resolução 160 que hoje domina o volume recente) e o
+  único campo de estrutura é "Garantia" (texto livre, sem carência nem taxa numérica
+  separada de "Juros" — mesma limitação que os 2 CSVs já integrados). Conclusão: **pior**
+  que o que já temos em cobertura, atualidade E granularidade — descartado.
+- **ANBIMA Data** (`data.anbima.com.br`/`developers.anbima.com.br`): API de preços/taxas
+  indicativas de MERCADO SECUNDÁRIO (marcação a mercado diária de CRI/CRA/debêntures já
+  emitidos) — dado de natureza DIFERENTE do que este radar cobre (ofertas PRIMÁRIAS, o
+  evento de emissão em si, não a negociação depois de emitido); também não cobre CDCA/CCB/
+  notas comerciais. Mesmo se fosse integrada um dia, seria uma tabela/conceito NOVO
+  ("cotação secundária"), não um substituto/complemento direto de `operations_primario` —
+  fora do escopo deste pedido (melhorar a mesma extração já existente).
+- **B3 — Hub de Dados Públicos** (`b3.com.br/pt_br/dados/hub-de-dados-publicos/`): mesmo
+  problema do ANBIMA Data — "fechamento diário por emissor"/"histórico de negócios" é
+  MERCADO SECUNDÁRIO (preço de negociação do papel já emitido), não dado de oferta
+  primária. Também não cobre CDCA/CCB.
+- **Conclusão prática**: a CVM (`oferta_distribuicao.csv` + `oferta_resolucao_160.csv`, já
+  integrados) continua sendo a única fonte aberta, gratuita e verificável de OFERTAS
+  PRIMÁRIAS deste universo de instrumentos — nenhuma integração nova feita. Esforço
+  redirecionado pra extrair MAIS informação útil das 2 fontes já existentes (abaixo).
+
+**Melhoria real de extração: `taxa_valor`/`taxa_tipo` — fallback "spread implícito"
+(`src/unify_primario.py::_extrair_taxa`, `_RE_TAXA_BARE`/`_RE_JUROS_AMBIGUO`)**. Investigado
+relendo o CSV principal linha a linha (não só o dicionário de dados): das 12.239 linhas em
+escopo, **1.012 tinham `juros` preenchido mas `taxa_valor` ficava `NULL`** mesmo antes deste
+fix — o padrão mais comum de longe era `juros` ser só um número seco (`"12% A.A."`, `"6%"`,
+`"13,5% A.A. - MENSAL"`, 265+54+34+... ocorrências) **enquanto `atualizacao_monetaria` já
+tinha um índice real preenchido** (IGPM 330, IPCA 135, TR 71, ANBID 56, IGP-M 50, TJLP 18,
+variação cambial/dólar etc. — confirmado amostrando as combinações reais). **Achado-chave**:
+a CVM grava índice e taxa em DOIS CAMPOS SEPARADOS desde 1989 — quando o campo de índice
+tem conteúdo real e `juros` é só um número seco sem operador `+`/`-` nem menção a índice
+nenhum dentro do próprio texto, a convenção do mercado de renda fixa brasileiro (e a própria
+separação dos dois campos oficiais) é ADITIVA (índice + juros), exatamente a mesma lógica
+que `'taxa_fixa'` já usava pra número seco quando o índice está VAZIO — só que aqui o índice
+existe. Implementado como um NOVO fallback (`taxa_tipo='spread'`), rodando só depois de todos
+os padrões anteriores falharem, e só quando `indexador_padronizado != "Prefixado"` (senão
+duplicaria a lógica de `'taxa_fixa'`, que já cobre exatamente esse caso quando não há
+índice). **Exclusão deliberada de ambiguidade**: `juros` contendo `" OU "` (ex: `"12% A.A.
+OU LIBOR + 3,5%"`, `"11,2% ou 9,4% aa, antes ou após 01/12/2003"` — duas taxas alternativas
+no mesmo campo) fica de fora de propósito — escolher uma das duas seria inventar qual se
+aplica; confirmado ao vivo: só 4 das 1.126 linhas com número seco caem nesse caso, o resto
+(1.122) é seguro de extrair. **Nunca inventa nada**: o número sempre vem literalmente do
+texto de `juros`, nunca calculado/estimado — mesma regra de ouro de sempre.
+
+**Cobertura medida (antes → depois, mesmas 12.239 linhas em escopo do CSV de 2026-09-17)**:
+**515 (~4,2%) → 1.373 (~11,2%)** — quase o triplo, `taxa_tipo` novo contribuindo 1.146
+`'spread'` (a maioria do ganho), 144 `'percentual_indexador'` e 83 `'taxa_fixa'` já
+existentes antes (números totais depois do fix, não só o delta). **Backfill rodado contra
+produção** (`unify_primario.backfill_taxa_e_prazo()`, já existia — reaproveitado, nenhuma
+função nova precisou ser escrita pra isso): sobre as 15.076 linhas já em `operations_primario`
+(pós-corte 2010+), `taxa_valor` preenchido subiu de **87 para 239** (86 `'spread'` implícito
++ 14 `'percentual_indexador'` + 9 `'taxa_fixa'` já existentes, dos 239 totais — o ganho
+relativo é menor que no CSV completo porque o padrão "número seco + índice legado tipo
+IGPM/TR/BTN" era mais comum em ofertas ANTIGAS, que o corte 2010+ já removeu; instrumentos
+modernos tendem a escrever a taxa já com operador `+`/`-` explícito, capturado pelos padrões
+`'spread'` anteriores). `prazo_dias` não mudou (534 preenchidos, mesmo valor de antes) — o
+backfill recalcula os dois juntos mas a lógica de prazo não foi alterada nesta sessão (ver
+abaixo).
+
+**`prazo_dias`/`prazo_meses`: nenhuma melhoria segura encontrada.** Investigado se havia
+mais campos de data utilizáveis nos 2 dicionários de dados oficiais (`meta_oferta_
+distribuicao.txt`/`meta_oferta_resolucao_160.txt`, os 2 relidos por completo nesta sessão,
+71+41 campos conferidos um a um) — confirmado que `Data_Emissao`/`Data_Vencimento`
+continuam sendo os ÚNICOS dois campos de data que descrevem o TÍTULO em si (todas as outras
+datas — `Data_Registro_Oferta`/`Data_Protocolo`/`Data_Requerimento` etc. — descrevem o
+PROCESSO administrativo, não o vencimento do papel; usar essas pra aproximar prazo seria
+inventar). A baixa cobertura (15,2% no CSV completo, ver seção acima) é uma limitação REAL
+da fonte (ofertas antigas/dispensadas raramente têm essas 2 datas digitalizadas), não um gap
+de código a corrigir — nenhuma mudança feita aqui, documentado pra não reabrir essa
+investigação à toa numa sessão futura.
+
+**Nenhuma mudança em `.github/workflows/refresh-primario.yml`**: o fix de `_extrair_taxa` é
+puramente computacional (nova regra de regex sobre colunas já lidas), sem migração de
+schema nem novo download/fonte — o próximo refresh diário automático já aplica a regra nova
+em qualquer linha nova via `_build_primario_ops` normalmente, sem precisar de nenhum passo
+extra no workflow. O backfill acima (`backfill_taxa_e_prazo()`) foi rodado manualmente UMA
+VEZ contra produção para corrigir o histórico já gravado — mesmo padrão de
+`backfill_busca_primario()` (ver seção "API e Busca" abaixo), não é algo que o workflow
+precisa repetir automaticamente.
+
 ### Escopo desta sessão (fundação — outras sessões constroem em cima)
 
 Esta sessão entregou SÓ a camada de dados (staging + `operations_primario` + schema +

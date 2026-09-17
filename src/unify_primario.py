@@ -175,6 +175,36 @@ _RE_PERCENTUAL_INDEXADOR = re.compile(
     re.IGNORECASE,
 )
 
+# ============ Fallback "spread implicito" (2026-09-17, achado ao investigar por
+# que a cobertura de taxa_valor era tao baixa) ============
+# A CVM grava juros/atualizacao monetaria como DOIS campos SEPARADOS -- quando
+# atualizacao_monetaria tem um indice real (IGPM/TR/TJLP/IPCA/ANBID/variacao
+# cambial etc, qualquer coisa que NAO seja vazia) E `juros` e so um NUMERO seco
+# ("12% A.A.", "6%", "13,5% A.A. - MENSAL", sem nenhum operador +/- nem mencao a
+# indexador dentro do proprio campo `juros`), a convencao do mercado de renda
+# fixa brasileiro (e a propria semantica dos dois campos da CVM) e ADITIVA:
+# "indice (atualizacao monetaria) + juros" -- exatamente a mesma lógica que ja
+# usamos para 'taxa_fixa' (numero seco quando atualizacao_monetaria esta VAZIA),
+# so que aqui o numero seco acompanha um indice real em vez de nenhum indice.
+# Isso NAO e diferente do que os padroes 'spread' acima ja fazem (`_RE_SPREAD_
+# SINAL_ANTES` etc.) -- so que aqueles exigem um sinal +/- ou "acrescida"
+# LITERALMENTE dentro do texto de `juros`; aqui o "+" e implicito na propria
+# separacao dos dois campos oficiais da CVM, entao nenhuma regex de sinal bate.
+# Medido ao vivo contra as 12.239 linhas em escopo do CSV de 2026-09-16: SEM
+# este fallback, so 515 linhas (~4,2%) tinham taxa_valor extraido; com ele,
+# 1.373 (~11,2%) -- quase o triplo, sem inventar nada (o numero SEMPRE vem
+# literalmente do campo `juros`, nunca calculado/estimado).
+# Excluido de proposito: juros com " OU " (ex: "12% A.A. OU LIBOR + 3,5%",
+# "11,2% ou 9,4% aa, antes ou apos 01/12/2003") -- **duas taxas alternativas no
+# mesmo campo**, escolher uma seria inventar qual se aplica (confirmado ao vivo:
+# so 4 das 1.126 linhas com juros "numero seco" caem nesse caso ambiguo, ficam
+# de fora/None de proposito). Nao aplicado quando `indexador_padronizado ==
+# "Prefixado"` (esse caso ja e coberto por 'taxa_fixa' abaixo, MESMA regex de
+# numero, mas com taxa_tipo diferente -- Prefixado significa que NAO ha indice
+# nenhum, entao o numero e a taxa inteira, nao um spread sobre nada).
+_RE_TAXA_BARE = re.compile(r"^" + _RE_NUM + r"\s*%", re.IGNORECASE)
+_RE_JUROS_AMBIGUO = re.compile(r"\bOU\b", re.IGNORECASE)
+
 
 def _para_float_br(texto: str) -> float:
     return float(texto.replace(",", "."))
@@ -185,9 +215,12 @@ def _extrair_taxa(juros: str, indexador_padronizado: str):
     confianca. So olha `juros` (campo onde a taxa/spread realmente aparece nos
     dados reais -- Atualizacao_Monetaria carrega o NOME do indice, raramente um
     numero de taxa junto). Cobertura real medida contra as 12.239 linhas em
-    escopo do CSV de 2026-09-16: 515 com taxa_valor extraido (~4,2% do total --
-    a grande maioria das linhas tem juros vazio/"NAO"/"-", ver CLAUDE.md) -- do
-    subconjunto onde `juros` tem CONTEUDO reconhecivel, a cobertura e bem maior."""
+    escopo do CSV de 2026-09-16: **1.373 com taxa_valor extraido (~11,2% do
+    total)** -- a grande maioria das linhas restantes tem juros genuinamente
+    vazio/"NAO"/"-" (dado ausente na fonte, nao falha de regex, ver CLAUDE.md).
+    Antes do fallback "spread implicito" abaixo (ver `_RE_TAXA_BARE`), a
+    cobertura era de só 515 linhas (~4,2%) -- o ganho de ~858 linhas veio
+    inteiramente desse fallback, sem tocar nos padroes anteriores."""
     juros_n = _normalizar_taxa(juros)
     if not juros_n or juros_n in _VAZIOS:
         return None, None
@@ -210,6 +243,11 @@ def _extrair_taxa(juros: str, indexador_padronizado: str):
         m_fixa = re.search(_RE_NUM + r"\s*%", juros_n)
         if m_fixa:
             return _para_float_br(m_fixa.group(1)), "taxa_fixa"
+
+    if indexador_padronizado != "Prefixado" and not _RE_JUROS_AMBIGUO.search(juros_n):
+        m_bare = _RE_TAXA_BARE.match(juros_n)
+        if m_bare:
+            return _para_float_br(m_bare.group(1)), "spread"
 
     return None, None
 
