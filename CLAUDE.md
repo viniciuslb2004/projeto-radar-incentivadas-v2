@@ -2227,17 +2227,28 @@ sozinho antes de encerrar).
   com `scripts/migrate_supabase_to_aiven.py`, que documenta a migração REAL/atual e não foi
   tocado.
 
-**Recomendações, NÃO aplicadas — precisam de decisão do usuário antes de mexer em produção**:
-- **Motor de busca (BNDES/FINEP e Primário) sem pool de conexões**: `src/search_fts.py`/
-  `src/search_fts_primario.py` chamam `get_connection()` sem `pooled=True` — toda busca (provavelmente
-  a rota mais usada do site) abre uma conexão direta ao Aiven em vez de reaproveitar o
-  `ConnectionPool` (que os outros ~26 call sites de `webapp/main.py` usam, com a proteção
-  `check=ConnectionPool.check_connection` contra conexão morta pós-`AdminShutdown`, já
-  documentada como bug real corrigido). Isso contribui pro esgotamento das 20 conexões do
-  Aiven free tier — **o mesmo incidente aconteceu 3 vezes em 2026-09-17** (ver entradas de
-  "esgotamento de conexões" ao longo deste arquivo). Mudar pra `pooled=True` é simples, mas o
-  pool tem `max_size=2` — buscas concorrentes por esse caminho merecem teste de carga antes de
-  mudar em produção, não é um ajuste trivial.
+**Motor de busca migrado pro pool de conexões (2026-09-17, aplicado depois de teste de carga)**:
+`src/search_fts.py::buscar_texto`/`src/search_fts_primario.py::buscar_texto_primario` chamavam
+`get_connection()` sem `pooled=True` — toda busca (provavelmente a rota mais usada do site) abria
+uma conexão direta ao Aiven em vez de reaproveitar o `ConnectionPool` (que os outros ~26 call
+sites de `webapp/main.py` já usam, com a proteção `check=ConnectionPool.check_connection` contra
+conexão morta pós-`AdminShutdown`). Isso contribuía pro esgotamento das 20 conexões do Aiven free
+tier — **o mesmo incidente aconteceu 3 vezes em 2026-09-17**. **Risco teórico levantado antes de
+mexer**: como as rotas rodam síncronas numa threadpool e o pool tem `max_size=2` POR PROCESSO,
+uma busca lenta (tiers 1-3 fazem seq scan, ~3-8s documentado acima) passaria a competir pelo
+MESMO par de conexões que qualquer outra rota da mesma instância — risco de uma busca lenta
+"segurar" uma das 2 únicas vagas e fazer outras requisições concorrentes (ex: `/api/kpis`) esperar
+na fila, algo que não acontecia com busca usando conexão própria.
+**Testado ao vivo antes de aplicar** (`uvicorn` local, mesmo processo = mesmo pool de uma
+instância real da Vercel): bateria de 2 buscas + 2 `/api/kpis` concorrentes (`ThreadPoolExecutor`),
+comparando ANTES (busca sem pool) e DEPOIS (busca com `pooled=True`) do patch, rodada 2x cada.
+Resultado: tempos praticamente iguais entre as duas versões (ex: busca ~14,6s sem pool vs ~15,4s
+com pool na 1ª rodada, mas ~11-12s com pool na 2ª rodada — a variação entre rodadas da MESMA
+versão foi maior que a diferença entre versões, confirmando que é ruído normal de rede do Aiven
+free tier, não fila real introduzida pelo pool). Nenhum sinal de fila severa (se houvesse, as
+chamadas de `/api/kpis` teriam ficado presas atrás das buscas lentas — continuaram na mesma
+faixa de tempo nas duas versões). Conclusão: a troca não piora a eficiência de forma perceptível
+— aplicada.
 - **`operations_primario` sem índice em `data_referencia`** — usada em praticamente todo filtro
   de data e em `_periodo_anterior_primario` (toda rota `/tendencias/*`). Tabela pequena o
   suficiente (~15 mil linhas) pra não ser urgente, mas é uma lacuna real.

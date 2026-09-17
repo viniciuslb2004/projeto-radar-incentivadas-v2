@@ -99,7 +99,7 @@ def buscar_texto_primario(
 
     _norm = _normaliza_ortografia_sql
 
-    conn = get_connection()
+    conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
 
