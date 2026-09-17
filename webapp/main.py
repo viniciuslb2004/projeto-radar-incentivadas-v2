@@ -561,6 +561,7 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
 
 @app.get("/api/segmentos")
 def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None, limit: int = 20):
+    limit = max(1, min(limit, 500))
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
     conn = get_connection(pooled=True)
     try:
@@ -787,6 +788,8 @@ def operacoes(
     limit: int = 200,
     offset: int = 0,
 ):
+    limit = max(1, min(limit, 2000))
+    offset = max(0, offset)
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento)
     coluna_ordenacao = ORDENACAO_COLUNAS.get(order_by, "valor_contratado")
     direcao = "ASC" if order_dir == "asc" else "DESC"
@@ -1291,6 +1294,7 @@ def editais_dashboard(situacao: str = None, aplicavel_empresa: int = None, tema:
 def editais_lista(situacao: str = None, aplicavel_empresa: int = None, tema: str = None,
                    regiao: str = None, tipo_oportunidade: str = None, tipo_cooperacao: str = None,
                    q: str = None, order_by: str = "prazo", order_dir: str = "asc", limit: int = 200):
+    limit = max(1, min(limit, 2000))
     where, params = _editais_where(situacao, aplicavel_empresa, tema, regiao, tipo_oportunidade, tipo_cooperacao, q)
     colunas_ordenacao = {
         "prazo": "prazo_proposto",
@@ -1474,6 +1478,8 @@ def linhas(
     order_by: str = "data_atualizacao", order_dir: str = "desc",
     limit: int = 20, offset: int = 0,
 ):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     where, params = _linhas_where(instituicao, setor, porte, regiao, status, fluxo, q)
     col_ordenacao = order_by if order_by in LINHAS_COLS_LISTA else "data_atualizacao"
     direcao = "ASC" if order_dir == "asc" else "DESC"
@@ -1525,6 +1531,7 @@ def linha_detalhe(linha_id: int):
 
 @app.get("/api/enriquecimento/importacoes")
 def enriquecimento_importacoes(limit: int = 20):
+    limit = max(1, min(limit, 200))
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -1556,6 +1563,8 @@ def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
     informado na planilha de origem, caso em que nenhum enriquecimento automatico
     (CNPJ->CNAE) tem como resolver; so uma correcao manual (quem conhece a operacao)
     pode."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -1575,6 +1584,7 @@ def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
 
 @app.get("/api/enriquecimento/correcoes")
 def enriquecimento_correcoes(limit: int = 50):
+    limit = max(1, min(limit, 500))
     conn = get_connection(pooled=True)
     try:
         rows = conn.execute(

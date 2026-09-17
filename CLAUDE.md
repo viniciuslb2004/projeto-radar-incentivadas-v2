@@ -2203,6 +2203,69 @@ conexões do Aiven em produção durante esta sessão — `uvicorn` local + `pre
 servidor do Browser pane, confirmado via `Get-NetTCPConnection` que nenhuma conexão restante
 apontava pro host do Aiven).
 
+## Auditoria geral de otimização (2026-09-17, pedido do usuário)
+
+Auditoria só de leitura (backend/performance/segurança, frontend, dead code/duplicação) sobre o
+site inteiro — resultado consolidado e as correções de baixo risco aplicadas diretamente pelo
+coordenador (o processo original que rodou as 3 sub-investigações não chegou a aplicar nada
+sozinho antes de encerrar).
+
+**Aplicado (baixo risco, testado ao vivo contra produção antes de mergear)**:
+- **Teto em `limit`/`offset`** nas rotas públicas que aceitavam qualquer valor do cliente sem
+  clamp (`GET /api/operacoes`, `/api/editais`, `/api/linhas`, `/api/segmentos`,
+  `/api/enriquecimento/{importacoes,pendentes,correcoes}`, `GET /api/primario/operacoes`,
+  `/api/primario/segmentos`) — mesmo padrão já usado no painel de admin
+  (`limit = max(1, min(limit, N))`). Confirmado ao vivo: `?limit=999999999` agora devolve
+  exatamente o teto (2000 nas rotas de listagem de operações, 500/200 nas menores) em vez de
+  tentar serializar a tabela inteira; `offset` negativo agora clampa pra 0 em vez de devolver
+  um erro do Postgres. Não era um DoS anônimo (todas essas rotas exigem sessão válida), mas
+  era desnecessário.
+- **`scripts/migrate_sqlite_to_supabase.py` removido** — confirmado por grep que só era
+  referenciado em `README.md`/`RESUME.md` (docs desatualizadas), nunca em código, CLAUDE.md ou
+  workflow — migração de UM PASSO ANTERIOR (SQLite→Supabase) que já é duplamente obsoleta (o
+  projeto migrou depois Supabase→Aiven, e não existe mais "modo local" com SQLite). Não confundir
+  com `scripts/migrate_supabase_to_aiven.py`, que documenta a migração REAL/atual e não foi
+  tocado.
+
+**Recomendações, NÃO aplicadas — precisam de decisão do usuário antes de mexer em produção**:
+- **Motor de busca (BNDES/FINEP e Primário) sem pool de conexões**: `src/search_fts.py`/
+  `src/search_fts_primario.py` chamam `get_connection()` sem `pooled=True` — toda busca (provavelmente
+  a rota mais usada do site) abre uma conexão direta ao Aiven em vez de reaproveitar o
+  `ConnectionPool` (que os outros ~26 call sites de `webapp/main.py` usam, com a proteção
+  `check=ConnectionPool.check_connection` contra conexão morta pós-`AdminShutdown`, já
+  documentada como bug real corrigido). Isso contribui pro esgotamento das 20 conexões do
+  Aiven free tier — **o mesmo incidente aconteceu 3 vezes em 2026-09-17** (ver entradas de
+  "esgotamento de conexões" ao longo deste arquivo). Mudar pra `pooled=True` é simples, mas o
+  pool tem `max_size=2` — buscas concorrentes por esse caminho merecem teste de carga antes de
+  mudar em produção, não é um ajuste trivial.
+- **`operations_primario` sem índice em `data_referencia`** — usada em praticamente todo filtro
+  de data e em `_periodo_anterior_primario` (toda rota `/tendencias/*`). Tabela pequena o
+  suficiente (~15 mil linhas) pra não ser urgente, mas é uma lacuna real.
+- **`webapp/primario/routes.py::operacao_detalhe`**: sempre busca o "raw extra" em
+  `cvm_oferta_distribuicao_raw` pelo `raw_id`, mesmo quando a operação veio de
+  `cvm_oferta_resolucao_160_raw` (~30% da tabela) — pode coincidir com um id de uma oferta não
+  relacionada e devolver `raw_extra` errado (nunca 500, nunca vaza dado de outro usuário, é
+  tudo dado público). Baixo risco técnico de corrigir (checar `raw_table` antes), mas é mudança
+  de comportamento visível.
+- **`.grid-3`/`.narrativa`/`.progress-track`/`tr.eleg-linha-detalhe:hover` (CSS morto,
+  `style.css`)**: confirmado zero uso em qualquer `.html`/`.js` do projeto — seguro remover,
+  mas `.narrativa` em especial pode ser vestígio de uma feature a reaproveitar (confirmar antes
+  de apagar).
+- **`/api/filtros`/`/api/primario/filtros` buscado 2-3x** (carga inicial da página +
+  `busca.js::_popularFiltrosBusca` independente + toda troca de mercado via `alternarMercado()`)
+  — mesmo endpoint, mesmos dados, poderia virar um cache simples em `common.js`. Baixo risco,
+  ganho pequeno de rede.
+- **`importar_finep_editais` (`src/linhas_incentivadas.py`)**: confirmado sem nenhuma chamada
+  real, mas o próprio docstring já diz que é mantida de propósito como referência — não remover
+  sem perguntar (é o mesmo tipo de "guardado e flexível" documentado em outros lugares deste
+  arquivo).
+
+**Nenhum problema encontrado**: SQL injection (todo f-string interpola só nomes de coluna
+hardcoded/whitelisted, nunca valor de request — valores sempre via `?`), autenticação/
+autorização (todos os gates conferidos, sem furo), cookies/sessão (sem regressão), N+1 (nenhum
+padrão de loop-com-query encontrado em nenhuma rota), assets/JS mortos (nenhum arquivo órfão),
+vazamento de `localStorage` (histórico de busca já limitado a 8 itens por usuário).
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |

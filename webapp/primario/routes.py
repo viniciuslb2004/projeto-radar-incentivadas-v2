@@ -463,6 +463,8 @@ def operacoes(
     offset: int = 0,
 ):
     """Listagem paginada/ordenavel -- espelha `GET /api/operacoes` (BNDES/FINEP)."""
+    limit = max(1, min(limit, 2000))
+    offset = max(0, offset)
     where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
     coluna_ordenacao = ORDENACAO_COLUNAS.get(order_by, "valor_total")
     direcao = "ASC" if order_dir == "asc" else "DESC"
@@ -710,6 +712,7 @@ def segmentos(setor: str = None, subsetor: str = None, instrumento: str = None, 
     """Espelha `GET /api/segmentos` -- usado por `tendencias.js::loadSegmentos`
     em conjunto com `/tendencias/segmentos` (mesma nota de `setor`/`subsetor`
     exatos de `subsetores()` acima)."""
+    limit = max(1, min(limit, 500))
     where, params = _filters_clause_primario_exato(instrumento, uf, setor, subsetor, data_inicio, data_fim)
     conn = get_connection(pooled=True)
     try:
