@@ -12,14 +12,14 @@
 <div id="loading-overlay">
   <img src="/img/logo-artica.png" alt="Ártica" class="loading-logo">
   <div class="loading-spinner"></div>
-  <div class="loading-brand">Radar de Crédito Incentivado</div>
+  <div class="loading-brand brand-texto">Radar de Crédito Incentivado</div>
   <div class="loading-texto">Carregando dados...</div>
 </div>
 
 <div id="login-overlay" class="hidden">
   <form id="login-card">
     <img src="/img/logo-artica.png" alt="Ártica" class="login-logo">
-    <div class="login-titulo">Radar de Crédito Incentivado</div>
+    <div class="login-titulo brand-texto">Radar de Crédito Incentivado</div>
     <div class="login-subtitulo">Acesso restrito &middot; entre com suas credenciais</div>
     <label for="login-usuario">Usuário</label>
     <input type="text" id="login-usuario" autocomplete="username" autofocus>
@@ -48,17 +48,17 @@
 </div>
 
 <div class="topbar">
-  <div class="brand">
+  <div class="brand" id="brand-toggle" title="Clique para alternar entre Crédito Incentivado e Crédito Primário">
     <img src="/img/logo-artica.png" alt="Ártica" class="topbar-logo">
-    <div>Radar de Crédito Incentivado</div>
+    <div class="brand-texto">Radar de Crédito Incentivado</div>
   </div>
   <div class="tabs-wrap" id="tabs-wrap">
     <div class="tabs" id="tabs">
       <button class="tab-btn active" data-view="consolidado">Consolidado</button>
       <button class="tab-btn" data-view="tendencias">Tendências &amp; Insights</button>
       <button class="tab-btn" data-view="busca">Busca</button>
-      <button class="tab-btn" data-view="editais">Editais</button>
-      <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
+      <button class="tab-btn" data-view="editais" data-mercado-only="incentivado">Editais</button>
+      <button class="tab-btn" data-view="linhas" data-mercado-only="incentivado">Linhas Incentivadas</button>
       <button class="tab-btn" data-view="salvos">Transações Salvas</button>
     </div>
   </div>
@@ -70,7 +70,7 @@
 
 <div class="filterbar" id="filterbar">
   <div>
-    <label>Agência</label>
+    <label id="f-agencia-label">Agência</label>
     <select id="f-agencia"><option value="Todas">Todas</option></select>
   </div>
   <div>
@@ -108,7 +108,7 @@
     <div class="grid-2">
       <div class="card">
         <div class="card-header">
-          <span>Evolução temporal &mdash; BNDES x FINEP <span class="hint">R$ contratado por período</span></span>
+          <span><span id="chart-serie-titulo">Evolução temporal &mdash; BNDES x FINEP</span> <span class="hint" id="chart-serie-hint">R$ contratado por período</span></span>
           <select id="serie-granularidade" class="header-select">
             <option value="mensal">Mensal</option>
             <option value="trimestral" selected>Trimestral</option>
@@ -119,19 +119,46 @@
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-serie"></canvas></div></div>
       </div>
       <div class="card">
-        <div class="card-header">Ranking de setores <span class="hint">clique para detalhar</span></div>
+        <div class="card-header"><span id="chart-setores-titulo">Ranking de setores</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-setores"></canvas></div></div>
       </div>
     </div>
 
     <div class="grid-2">
       <div class="card">
-        <div class="card-header">Por UF <span class="hint">clique para detalhar</span></div>
+        <div class="card-header"><span id="chart-uf-titulo">Por UF</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-uf"></canvas></div></div>
       </div>
       <div class="card">
-        <div class="card-header">Por porte do cliente <span class="hint">clique para detalhar</span></div>
+        <div class="card-header"><span id="chart-porte-titulo">Por porte do cliente</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-porte"></canvas></div></div>
+      </div>
+    </div>
+
+    <!-- Dashboards especificos de renda fixa (taxa/prazo) -- so existem no
+         modo Primario (CVM), sem equivalente conceitual no credito de fomento
+         (BNDES/FINEP nao tem "taxa"/"indexador" de mercado nem "prazo" no
+         mesmo sentido de um titulo de divida). Cobertura PARCIAL dos dados
+         (ver CLAUDE.md, secao "Radar de Credito Primario") -- os avisos de
+         amostra parcial ficam dentro de cada card (#chart-taxas-aviso/
+         #chart-prazos-aviso), preenchidos pelo JS a partir da resposta da API,
+         nunca escondidos. -->
+    <div class="grid-2" data-mercado-only="primario">
+      <div class="card">
+        <div class="card-header">Taxas por indexador <span class="hint">amostra parcial &mdash; nem toda oferta tem taxa extraída</span></div>
+        <div class="card-body">
+          <div id="chart-taxas-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
+          <div id="chart-taxas-vazio" class="empty-state" style="display:none;">Dados de taxa ainda não disponíveis para este filtro.</div>
+          <div class="chart-wrap"><canvas id="chart-taxas"></canvas></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Prazos por instrumento <span class="hint">amostra parcial &mdash; nem toda oferta tem as duas datas</span></div>
+        <div class="card-body">
+          <div id="chart-prazos-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
+          <div id="chart-prazos-vazio" class="empty-state" style="display:none;">Dados de prazo ainda não disponíveis para este filtro.</div>
+          <div class="chart-wrap"><canvas id="chart-prazos"></canvas></div>
+        </div>
       </div>
     </div>
   </section>
@@ -187,7 +214,7 @@
 
     <div class="grid-2">
       <div class="card">
-        <div class="card-header">Destinação de recursos <span class="hint">produto / instrumento</span></div>
+        <div class="card-header"><span id="chart-produtos-titulo">Destinação de recursos</span> <span class="hint" id="chart-produtos-hint">produto / instrumento</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-produtos"></canvas></div></div>
       </div>
       <div class="card">
@@ -206,7 +233,7 @@
         </div>
         <div class="card-body" style="max-height:340px; overflow-y:auto;">
           <table class="ops-table" id="tabela-maiores">
-            <thead><tr><th>Cliente</th><th>Agência</th><th>Setor</th><th>Data</th><th>Valor</th></tr></thead>
+            <thead><tr><th id="tabela-maiores-th-cliente">Cliente</th><th id="tabela-maiores-th-agencia">Agência</th><th>Setor</th><th>Data</th><th>Valor</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -223,7 +250,7 @@
     <div class="example-chips" id="busca-historico" style="display:none;"></div>
     <div class="filterbar" id="busca-filterbar" style="margin: 18px 0 0; border: 1px solid var(--border); border-radius: var(--radius);">
       <div>
-        <label>Entidade</label>
+        <label id="bu-label-agencia">Entidade</label>
         <select id="bu-f-agencia"><option value="">Todas</option></select>
       </div>
       <div>
@@ -242,7 +269,7 @@
         </select>
       </div>
       <div>
-        <label>Tipo de linha</label>
+        <label id="bu-label-produto">Tipo de linha</label>
         <select id="bu-f-produto"><option value="">Todas</option></select>
       </div>
       <div>
