@@ -88,6 +88,13 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from webapp.admin.routes import router as admin_router  # noqa: E402
 app.include_router(admin_router, prefix="/admin")
 
+# Radar de Credito Primario (/api/primario/*) -- pacote isolado, mesmo espirito do
+# painel de admin acima; prefixo comeca com /api/ entao ja passa pelo gate global
+# _verificar_acesso (dependencies=[Depends(_verificar_acesso)] do FastAPI(...) acima),
+# sem precisar de nenhuma dependency propria -- ver webapp/primario/routes.py.
+from webapp.primario.routes import router as primario_router  # noqa: E402
+app.include_router(primario_router, prefix="/api/primario")
+
 
 def _ip_do_request(request: Request) -> str:
     return request.headers.get("x-forwarded-for", request.client.host if request.client else None)

@@ -719,7 +719,14 @@ CREATE TABLE IF NOT EXISTS operations_primario (
     juros TEXT,                          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
     atualizacao_monetaria TEXT,          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
     raw_table TEXT NOT NULL,
-    raw_id INTEGER NOT NULL
+    raw_id INTEGER NOT NULL,
+    -- Motor de busca sem IA (ver src/search_fts_primario.py e src/unify_primario.py::
+    -- _atualizar_busca_primario) -- MESMO padrao de operations.search_document/search_vector,
+    -- mais simples (sem search_taxonomia_termos: nao ha dicionario de sinonimos curado
+    -- para o emissor da CVM, ver CLAUDE.md). Populado por _atualizar_busca_primario, nunca
+    -- no INSERT em si (diferente de `operations`) -- ver comentario na propria funcao.
+    search_document TEXT,
+    search_vector TSVECTOR
 );
 CREATE INDEX IF NOT EXISTS idx_operations_primario_raw ON operations_primario(raw_table, raw_id);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_cnpj_emissor ON operations_primario(cnpj_emissor);
@@ -727,6 +734,9 @@ CREATE INDEX IF NOT EXISTS idx_operations_primario_setor ON operations_primario(
 CREATE INDEX IF NOT EXISTS idx_operations_primario_uf ON operations_primario(uf_emissor);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_ano ON operations_primario(ano);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_instrumento ON operations_primario(instrumento_padronizado);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_search_vector ON operations_primario USING GIN(search_vector);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_nome_trgm ON operations_primario USING GIN(nome_emissor gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_segmento_trgm ON operations_primario USING GIN(segmento_emissor gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS refresh_primario_log (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -815,6 +825,16 @@ MIGRACOES_COLUNAS = [
     # explicito (tabela ja criada em producao antes deste pedido).
     ("operations_primario", "prazo_dias", "INTEGER"),
     ("operations_primario", "prazo_meses", "REAL"),
+    # Motor de busca sem IA do Radar de Credito Primario (ver src/search_fts_primario.py) --
+    # adicionadas DEPOIS que operations_primario ja tinha as 12.232 linhas da primeira rodada
+    # do pipeline CVM em producao (mesmo motivo de taxa_valor/prazo_dias acima: coluna nova
+    # precisa de ALTER TABLE explicito numa tabela ja existente). Backfill explicito via
+    # unify_primario.py::backfill_busca_primario() (rodado manualmente uma vez, mesmo padrao
+    # de instrumento_financeiro/razao_social_oficial -- ver comentario acima -- so que aqui
+    # SEM gatilho automatico dentro desta funcao: o volume e pequeno o suficiente (12 mil
+    # linhas) para rodar como um comando avulso em vez de acoplar a _aplicar_migracoes).
+    ("operations_primario", "search_document", "TEXT"),
+    ("operations_primario", "search_vector", "TSVECTOR"),
 ]
 
 

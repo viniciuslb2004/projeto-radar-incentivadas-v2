@@ -1355,7 +1355,116 @@ enriquecimento de emissor), deliberadamente sem tocar em: rotas `/api/primario/*
 motor de busca, frontend/abas novas. O schema de `operations_primario` já está estável o
 suficiente para outra sessão começar a codificar contra ele em paralelo, mesmo antes do
 enriquecimento de 100% dos emissores pendentes terminar (o campo `setor_emissor`/`uf_emissor`
-IS NULL é um estado normal e esperado, não um bug a esperar sumir).
+IS NULL é um estado normal e esperado, não um bug a esperar sumir). **Motor de busca + rotas
+construídos na sessão seguinte, mesmo dia — ver seção própria abaixo, "Radar de Crédito
+Primário — API e Busca".**
+
+## Radar de Crédito Primário — API e Busca
+
+Segunda camada do Radar de Crédito Primário (ver seção acima para a camada de dados),
+construída em sessão separada no mesmo dia (2026-09-16): motor de busca sem IA + rotas
+FastAPI que consomem `operations_primario`. **Deliberadamente sem frontend/toggle de
+mercado/Transações Salvas generalizada** — isso é trabalho de uma sessão futura, que
+consome as rotas documentadas aqui.
+
+### Motor de busca (`src/search_fts_primario.py`)
+
+Espelha `src/search_fts.py` (BNDES/FINEP), **mais simples**: não há dicionário de
+sinônimos/taxonomia curado para o emissor da CVM (`setor_emissor`/`subsetor_emissor` usam a
+MESMA taxonomia BNDES via `cnpj_cnae`, mas ninguém curou sinônimos especificos pra isso),
+então não existe uma coluna equivalente a `search_taxonomia_termos`. 4 tiers (contra 6 do
+motor BNDES/FINEP):
+1. CNPJ do emissor (só se o fragmento numérico tiver ≥8 dígitos, mesma guarda contra
+   falso-positivo já documentada para o motor BNDES/FINEP) ou prefixo de `nome_emissor`.
+2. `instrumento_padronizado` OU `setor_emissor`/`subsetor_emissor` (keyword, `LIKE`).
+3. Full-text (`search_vector @@ websearch_to_tsquery`, query PRÓPRIA com `@@` direto no
+   `WHERE` — NUNCA dentro de um CASE avaliado sobre a tabela inteira, mesma disciplina de
+   performance já documentada em detalhe na seção "Bugs reais já corrigidos" pro motor
+   BNDES/FINEP, reaplicada aqui desde o primeiro commit). Confirmado com `EXPLAIN ANALYZE`
+   ao vivo: `Bitmap Index Scan` no índice GIN (`idx_operations_primario_search_vector`),
+   ~0.4ms de execução.
+4. Trigrama (`pg_trgm`) em `nome_emissor`/`segmento_emissor`, só roda se as tiers 1-3
+   voltarem com poucos resultados (mesmo `MINIMO_ANTES_DE_TRIGRAMA` do motor BNDES/FINEP).
+
+`instrumento`/`uf`/`setor`/`valor_minimo` são FILTROS ESTRUTURADOS (`AND`, nunca dentro do
+ranking de texto) — mesmo princípio já documentado pro filtro de UF do motor BNDES/FINEP.
+`setor` combina `setor_emissor` (4 categorias amplas) e `subsetor_emissor` (mais granular)
+num `OR` simples, mesmo padrão do filtro `setor` do motor BNDES/FINEP (o front não precisa
+saber se o valor escolhido é setor ou subsetor).
+
+**`search_document`/`search_vector` NÃO existiam no schema quando esta sessão começou** —
+a tarefa original assumia que sim ("confirme antes de assumir"); confirmado ao vivo
+(`information_schema.columns`) que as 12.232 linhas gravadas na sessão anterior não tinham
+essas duas colunas. Adicionadas via `MIGRACOES_COLUNAS` (`src/db.py`) + populadas por
+`src/unify_primario.py::backfill_busca_primario()` (rodado uma única vez contra produção,
+em lotes de 2.000 — mesmo motivo de cautela com o Aiven free tier já documentado em
+`scripts/backfill_search_taxonomia.py` — confirmado: 12.232/12.232 linhas populadas).
+Índices criados: `idx_operations_primario_search_vector` (GIN sobre `search_vector`),
+`idx_operations_primario_nome_trgm`/`idx_operations_primario_segmento_trgm` (GIN trigram,
+para a tier 4).
+
+**Diferença deliberada de design frente a `unify.py`** (documentada no próprio código,
+`src/unify_primario.py::_atualizar_busca_primario`): no motor BNDES/FINEP,
+`search_document`/`search_taxonomia_termos` são calculados ANTES do insert (o BNDES já
+chega com setor NATIVO, que não muda depois). Aqui, TODO emissor depende do enriquecimento
+via CNPJ — uma linha recém-inserida quase sempre começa com `setor_emissor`/`uf_emissor`
+NULL (pendente) e só ganha valor depois, via `_reclassificar_emissores_pendentes`.
+`_atualizar_busca_primario(conn, ids)` roda depois de QUALQUER mudança (insert OU
+reclassificação), sempre lendo o estado ATUAL da linha direto do banco, em vez de manter
+duas cópias da lógica de `search_document` (uma pré-insert, outra pós-reclassificação) —
+`build_operations_primario()` já chama essa função nos dois pontos.
+
+### Rotas FastAPI (`webapp/primario/`, prefixo `/api/primario/*`)
+
+Pacote ISOLADO, mesmo espírito de `webapp/admin/` — nunca misturado com `webapp/main.py`
+(grande, do outro mercado). A ÚNICA mudança em `webapp/main.py` é o
+`app.include_router(primario_router, prefix="/api/primario")`, logo após o include do
+router do painel de admin.
+
+**Autenticação**: nenhuma dependency própria — o prefixo começa com `/api/`, então o gate
+global (`_verificar_acesso`, `dependencies=[Depends(_verificar_acesso)]` do `FastAPI(...)`
+em `webapp/main.py`) já cobre qualquer rota sob `/api/primario/*` automaticamente (mesmo
+mecanismo que já protege `/api/operacoes`, `/api/busca` etc.). **Confirmado ao vivo**: uma
+chamada sem sessão válida contra `/api/primario/filtros` devolve 401; com uma sessão válida
+(mintada via `webapp.admin.auth.criar_sessao`, mesmo caminho documentado na seção "Coisas a
+saber antes de mexer" para testar localmente), devolve os dados normalmente.
+
+- **`GET /api/primario/filtros`**: valores distintos para popular selects (instrumentos,
+  setores, subsetores, ufs, indexadores, anos, `data_min`/`data_max` sobre
+  `data_referencia`) — espelha `GET /api/filtros`. `setores`/`subsetores` só têm os valores
+  já resolvidos via CNPJ (um emissor pendente não aparece nesses selects até resolver, mas
+  continua contável em `kpis`/`operacoes`).
+- **`GET /api/primario/kpis`**: agregados básicos (`n_operacoes`, `valor_total_total`,
+  `cheque_medio`) + `por_instrumento` (troca `por_agencia` do motor BNDES/FINEP — não existe
+  conceito de agência neste mercado, ver pedido original: "não invente um conceito
+  equivalente"). Mesmos filtros estruturados de `operacoes`/`busca` (`instrumento`, `uf`,
+  `setor`, `data_inicio`/`data_fim` sobre `data_referencia`).
+- **`GET /api/primario/operacoes`**: listagem paginada/ordenável (`order_by`:
+  `valor`|`data`|`prazo`|`taxa`|`nome`), espelha `GET /api/operacoes`.
+- **`GET /api/primario/busca`**: motor de busca acima.
+- **`GET /api/primario/operacoes/{id}`**: detalhe — mais simples que
+  `GET /api/operacoes/{op_id}` (sem `montar_detalhe_amigavel`, específico do schema
+  `bndes_raw`/`finep_*_raw`, ver `webapp/detalhe.py`): devolve as colunas de
+  `operations_primario` (já é dado tratado/legível, com `search_document`/`search_vector`
+  removidos da resposta — campos internos do motor de busca, nunca úteis num detalhe) +
+  campos crus adicionais de `cvm_oferta_distribuicao_raw` que não viraram coluna própria
+  (`nome_ofertante`, `modalidade_registro` etc., em `raw_extra`) + identificação da empresa
+  via `cnpj_cnae` quando o CNPJ já foi resolvido (mesmo padrão do detalhe BNDES/FINEP, campo
+  `empresa`).
+
+### Testado ao vivo (2026-09-16, contra produção/Aiven)
+
+Bateria real (servidor local `uvicorn`, sessão de teste mintada e apagada depois, ver
+"Coisas a saber antes de mexer"): nome de emissor real (`VALE S.A.` → 20 resultados, tier 1,
+inclui o nome histórico `CIA VALE DO RIO DOCE` sob o MESMO CNPJ — confirma que a base
+realmente registra o rebrand da empresa ao longo do tempo, não é bug), CNPJ completo
+(`33592510000154` → `eh_busca_cnpj: true`, mesmos resultados), filtro estruturado de
+instrumento (`instrumento=Debênture` + busca por nome → só debêntures daquele emissor),
+filtro de UF (`uf=SP` combinado com `instrumento` em `kpis`/`operacoes`), filtro de setor
+(`setor=COMERCIO/SERVICOS` em `busca` → só resultados daquele setor), CNPJ curto/fragmento
+numérico sem 8 dígitos (`abc123nada` → 0 resultados na tier 1, confirma que a guarda contra
+falso-positivo já documentada pro motor BNDES/FINEP também vale aqui). `EXPLAIN ANALYZE` na
+tier 3 confirmou `Bitmap Index Scan` no GIN (não seq scan).
 
 ## Onde procurar o quê (mapa rápido)
 
@@ -1369,6 +1478,7 @@ IS NULL é um estado normal e esperado, não um bug a esperar sumir).
 | Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
 | Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/unify_primario.py`, `src/refresh_primario.py` |
+| Radar de Crédito Primário (API/rotas + motor de busca) | `webapp/primario/routes.py`, `src/search_fts_primario.py` |
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |

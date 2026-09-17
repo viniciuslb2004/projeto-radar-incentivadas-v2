@@ -445,18 +445,155 @@ def backfill_taxa_e_prazo(conn=None) -> int:
             conn.close()
 
 
+# ============ Motor de busca sem IA (ver src/search_fts_primario.py) ============
+# MESMO espirito de unify.py::_search_document/_atualizar_search_vector, mais simples:
+# nao ha um dicionario de sinonimos/taxonomia curado para o emissor da CVM (diferente do
+# setor/subsetor/segmento do BNDES, ver search_taxonomy.py), entao nao existe uma coluna
+# equivalente a search_taxonomia_termos aqui -- so search_document (texto legivel, para
+# depuracao) e search_vector (tsvector com peso por campo, o que a busca de verdade usa).
+#
+# Diferenca deliberada de design frente a unify.py: la, search_document/search_taxonomia_termos
+# sao calculados ANTES do insert (colunas do proprio DataFrame, ver OPERATIONS_COLS) porque o
+# BNDES ja chega com setor NATIVO (nao muda depois). Aqui, TODO emissor depende do
+# enriquecimento via CNPJ (ver docstring do modulo) -- setor_emissor/subsetor_emissor/
+# segmento_emissor/uf_emissor/municipio_emissor de uma linha reciem-inserida quase sempre
+# comecam NULL (pendente) e so ganham valor depois, via _reclassificar_emissores_pendentes.
+# Calcular search_document uma unica vez no insert deixaria a busca cega a esses campos ate
+# o PROXIMO refresh reprocessar tudo de novo -- em vez disso, _atualizar_busca_primario roda
+# depois de QUALQUER mudanca (insert OU reclassificacao), sempre lendo o estado ATUAL da
+# linha direto do banco. Um pouco mais de leitura, bem mais simples (uma unica funcao, um
+# unico caminho, sem duas copias de _search_document -- pre-insert e pos-reclassificacao).
+_BUSCA_COLS = [
+    "id", "nome_emissor", "razao_social_oficial_emissor", "cnpj_emissor",
+    "instrumento_padronizado", "instrumento", "setor_emissor", "subsetor_emissor",
+    "segmento_emissor", "nome_lider", "indexador_padronizado", "uf_emissor", "municipio_emissor",
+]
+
+
+def _search_document_primario(row: dict) -> str:
+    """Texto-fonte LEGIVEL do motor de busca sem IA (depuracao/exportacao) -- o
+    tsvector de busca de verdade (search_vector) e montado a parte, com peso por
+    campo, em _atualizar_busca_primario (nao a partir deste texto plano)."""
+    parts = [
+        row.get("nome_emissor"),
+        row.get("razao_social_oficial_emissor"),
+        row.get("cnpj_emissor"),
+        row.get("instrumento_padronizado"),
+        row.get("instrumento"),
+        row.get("setor_emissor"),
+        row.get("subsetor_emissor"),
+        row.get("segmento_emissor"),
+        row.get("nome_lider"),
+        row.get("indexador_padronizado"),
+        row.get("municipio_emissor"),
+        row.get("uf_emissor"),
+    ]
+    return " | ".join(str(p) for p in parts if p not in (None, "", "nan"))
+
+
+def _atualizar_busca_primario(conn, ids: list) -> None:
+    """Recalcula search_document + search_vector (tsvector com peso por campo, Postgres
+    usa A > B > C > D) para os ids informados, direto das colunas ja gravadas em
+    operations_primario:
+      A: nome_emissor/razao social oficial/CNPJ (identificacao do emissor -- prioridade maxima)
+      B: setor/subsetor/segmento do emissor (o que o emissor FAZ, mesma taxonomia do BNDES via cnpj_cnae)
+      C: instrumento (padronizado + cru)/indexador/nome do lider (caracteristicas da oferta)
+      D: uf/municipio do emissor (contexto geografico)
+    Mesma normalizacao 'optic'->'otic' de unify.py::_atualizar_search_vector (segmento_emissor
+    vem do MESMO cnae_descricao que popula operations.segmento, entao pode ter o mesmo caso
+    real de 'fibra optica'/'fibra otica' tratadas como palavras diferentes pelo stemmer)."""
+    ids = [int(i) for i in dict.fromkeys(ids)]
+    if not ids:
+        return
+    cur = conn.cursor()
+    rows = cur.execute(
+        f"SELECT {', '.join(_BUSCA_COLS)} FROM operations_primario WHERE id = ANY(?)",
+        [ids],
+    ).fetchall()
+    updates = [
+        (_search_document_primario(dict(zip(_BUSCA_COLS, r))), r[0])
+        for r in rows
+    ]
+    if updates:
+        cur.executemany(
+            "UPDATE operations_primario SET search_document = ? WHERE id = ?", updates
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        UPDATE operations_primario SET search_vector =
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
+                coalesce(nome_emissor, '') || ' ' || coalesce(razao_social_oficial_emissor, '') || ' ' || coalesce(cnpj_emissor, '')
+            ), '\\moptic', 'otic', 'gi')), 'A') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
+                coalesce(setor_emissor, '') || ' ' || coalesce(subsetor_emissor, '') || ' ' || coalesce(segmento_emissor, '')
+            ), '\\moptic', 'otic', 'gi')), 'B') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
+                coalesce(instrumento_padronizado, '') || ' ' || coalesce(instrumento, '') || ' ' ||
+                coalesce(indexador_padronizado, '') || ' ' || coalesce(nome_lider, '')
+            ), '\\moptic', 'otic', 'gi')), 'C') ||
+            setweight(to_tsvector('portuguese', regexp_replace(unaccent(
+                coalesce(uf_emissor, '') || ' ' || coalesce(municipio_emissor, '')
+            ), '\\moptic', 'otic', 'gi')), 'D')
+        WHERE id = ANY(?)
+        """,
+        [ids],
+    )
+    conn.commit()
+
+
+def backfill_busca_primario(conn=None, tamanho_lote: int = 2000) -> int:
+    """Backfill UNICO: search_document/search_vector foram adicionados a
+    operations_primario DEPOIS da primeira rodada do pipeline ja ter inserido 12.232
+    linhas (ver CLAUDE.md e MIGRACOES_COLUNAS em src/db.py) -- sem isso, todo o
+    historico ja carregado ficaria para sempre invisivel pro motor de busca. Roda em
+    lotes pequenos (mesmo motivo documentado em scripts/backfill_search_taxonomia.py --
+    o Aiven free tier ja derrubou conexao no meio de escritas longas) -- idempotente,
+    seguro de rodar mais de uma vez."""
+    fechar = conn is None
+    conn = conn or get_connection()
+    try:
+        ids = [r[0] for r in conn.execute("SELECT id FROM operations_primario ORDER BY id").fetchall()]
+        for inicio in range(0, len(ids), tamanho_lote):
+            lote = ids[inicio:inicio + tamanho_lote]
+            _atualizar_busca_primario(conn, lote)
+            print(f"  (backfill busca primario: {inicio + len(lote)}/{len(ids)})")
+        return len(ids)
+    finally:
+        if fechar:
+            conn.close()
+
+
 def build_operations_primario() -> dict:
     conn = get_connection()
     try:
         emissor_lookup = _load_emissor_lookup(conn)
         novas = _build_primario_ops(conn, emissor_lookup)
 
+        novos_ids = []
         if not novas.empty:
             insert_new_rows(conn, "operations_primario", novas, OPERATIONS_PRIMARIO_COLS)
             conn.commit()
+            # recupera os ids autoincrement recem-atribuidos, por raw_id (raw_table e
+            # sempre 'cvm_oferta_distribuicao_raw' aqui -- ver OPERATIONS_PRIMARIO_COLS)
+            raw_ids = novas["raw_id"].astype(int).tolist()
+            placeholders = ", ".join("?" * len(raw_ids))
+            rows = conn.execute(
+                f"SELECT id FROM operations_primario WHERE raw_table = 'cvm_oferta_distribuicao_raw' "
+                f"AND raw_id IN ({placeholders})",
+                raw_ids,
+            ).fetchall()
+            novos_ids = [r[0] for r in rows]
+            _atualizar_busca_primario(conn, novos_ids)
 
         reclassificados_ids = _reclassificar_emissores_pendentes(conn, emissor_lookup)
         conn.commit()
+        if reclassificados_ids:
+            # reclassificacao muda setor/subsetor/segmento/uf/municipio -- search_document/
+            # search_vector precisam ser recalculados pra essas linhas tambem, senao a busca
+            # continua cega a um emissor que acabou de resolver o CNPJ.
+            _atualizar_busca_primario(conn, reclassificados_ids)
 
         total_ops = conn.execute("SELECT COUNT(*) FROM operations_primario").fetchone()[0]
         n_pendentes = conn.execute(
