@@ -1542,9 +1542,18 @@ duplicaria a lógica de `'taxa_fixa'`, que já cobre exatamente esse caso quando
 índice). **Exclusão deliberada de ambiguidade**: `juros` contendo `" OU "` (ex: `"12% A.A.
 OU LIBOR + 3,5%"`, `"11,2% ou 9,4% aa, antes ou após 01/12/2003"` — duas taxas alternativas
 no mesmo campo) fica de fora de propósito — escolher uma das duas seria inventar qual se
-aplica; confirmado ao vivo: só 4 das 1.126 linhas com número seco caem nesse caso, o resto
-(1.122) é seguro de extrair. **Nunca inventa nada**: o número sempre vem literalmente do
-texto de `juros`, nunca calculado/estimado — mesma regra de ouro de sempre.
+aplica. **BUG REAL corrigido pelo coordenador antes do merge (2026-09-17)**: a guarda de
+`"OU"` implementada nesta sessão só protegia o fallback NOVO acima — os 3 padrões de
+`'spread'` já EXISTENTES antes desta sessão (`_RE_SPREAD_SINAL_ANTES`/`_RE_SPREAD_ACRESCIDA`/
+`_RE_SPREAD_SINAL_DEPOIS`) rodavam ANTES da guarda e extraíam o número de qualquer jeito
+quando havia um sinal `+`/`-` explícito, mesmo com `"OU"` no meio do texto (reproduzido ao
+vivo: `_extrair_taxa("12% A.A. OU LIBOR + 3,5%", "Outro")` devolvia `(3.5, 'spread')` em vez
+de `(None, None)`). Corrigido movendo a guarda pra antes de TODOS os padrões (não só o
+último). **Confirmado que isso não afetou nenhuma linha real**: 0 linhas em produção têm
+`taxa_valor` extraído E `"OU"` no texto de `juros` (checado direto contra o banco) — o gap
+era real mas latente, sem impacto nos dados já gravados; ficava como risco pro próximo
+refresh diário trazer um caso assim. **Nunca inventa nada**: o número sempre vem literalmente
+do texto de `juros`, nunca calculado/estimado — mesma regra de ouro de sempre.
 
 **Cobertura medida (antes → depois, mesmas 12.239 linhas em escopo do CSV de 2026-09-17)**:
 **515 (~4,2%) → 1.373 (~11,2%)** — quase o triplo, `taxa_tipo` novo contribuindo 1.146

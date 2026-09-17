@@ -225,6 +225,20 @@ def _extrair_taxa(juros: str, indexador_padronizado: str):
     if not juros_n or juros_n in _VAZIOS:
         return None, None
 
+    # BUG REAL corrigido pelo coordenador antes do merge (2026-09-17): a guarda de
+    # ambiguidade "OU" (duas taxas alternativas no mesmo campo, ver comentario de
+    # _RE_JUROS_AMBIGUO acima) só protegia o fallback NOVO (_RE_TAXA_BARE) -- os 3
+    # padroes de spread ORIGINAIS logo abaixo (_RE_SPREAD_SINAL_ANTES/ACRESCIDA/
+    # SINAL_DEPOIS) rodavam ANTES dessa guarda e extraiam o numero de qualquer
+    # jeito quando o texto tinha um sinal +/- explicito, mesmo com "OU" no meio
+    # (ex: "12% A.A. OU LIBOR + 3,5%" -- duas taxas alternativas -- extraia 3.5
+    # como se fosse a UNICA taxa, escondendo que a outra alternativa existe).
+    # Confirmado ao vivo: 0 linhas de producao caem nesse caso hoje (nenhuma tem
+    # taxa_valor extraido E "OU" no texto), mas o proximo refresh diario pode
+    # trazer uma -- guarda movida pra cobrir TODOS os padroes, nao so o ultimo.
+    if _RE_JUROS_AMBIGUO.search(juros_n):
+        return None, None
+
     for regex, tipo in (
         (_RE_SPREAD_SINAL_ANTES, "spread"),
         (_RE_SPREAD_ACRESCIDA, "spread"),
@@ -244,7 +258,7 @@ def _extrair_taxa(juros: str, indexador_padronizado: str):
         if m_fixa:
             return _para_float_br(m_fixa.group(1)), "taxa_fixa"
 
-    if indexador_padronizado != "Prefixado" and not _RE_JUROS_AMBIGUO.search(juros_n):
+    if indexador_padronizado != "Prefixado":
         m_bare = _RE_TAXA_BARE.match(juros_n)
         if m_bare:
             return _para_float_br(m_bare.group(1)), "spread"
