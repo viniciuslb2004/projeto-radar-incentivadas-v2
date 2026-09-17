@@ -1457,6 +1457,38 @@ via BrasilAPI, sem precisar do job pesado. Automação: `.github/workflows/refre
 diário (09:00 UTC, 1h depois do refresh de editais — mesmo secret `DATABASE_URL`), com
 `workflow_dispatch` para rodar manualmente.
 
+### Corte de escopo temporal: 2010+ (pedido do usuário, 2026-09-17)
+
+Decisão de produto: o Radar de Crédito Primário passa a focar em emissões a partir de
+**2010-01-01** — dado mais antigo removido de propósito, com backup (nunca descartado, mesmo
+espírito do Supabase mantido como rede de segurança na migração pro Aiven).
+
+- **Backup antes de apagar**: `operations_primario_pre2010_backup` (mesmas colunas de
+  `operations_primario`, criada via `CREATE TABLE ... AS SELECT * FROM operations_primario
+  WHERE data_referencia < '2010-01-01'` antes do `DELETE`) — **2.358 linhas** preservadas
+  intactas, cobrindo 1989-09-01 a 2009-12-29.
+- **`DELETE FROM operations_primario WHERE data_referencia < '2010-01-01'`**: rodado contra
+  produção (Aiven) em 2026-09-17, confirmado via `raw_table`+`raw_id` que TODA linha removida
+  já estava coberta pelo backup antes do delete (0 linhas órfãs). Linhas com
+  `data_referencia IS NULL` **nunca são removidas** por este corte (hoje, 2026-09-17, esse
+  caso não ocorre na base real — 0 linhas — mas o filtro preserva o caso de qualquer forma:
+  sem data resolvida, não há como confirmar que a linha é de fato anterior a 2010, então
+  destruí-la seria apagar dado real sem justificativa).
+- **Corte tornado PERMANENTE no pipeline** (`src/unify_primario.py::_filtrar_corte_temporal`,
+  `DATA_CORTE_MINIMA = "2010-01-01"`) — aplicado dentro de `_build_primario_ops`/
+  `_build_primario_ops_r160`, logo depois de `data_referencia` já calculada e ANTES do
+  insert. **Sem isso, o próximo refresh reintroduziria as mesmas 2.358 linhas**: as staging
+  tables (`cvm_oferta_distribuicao_raw`/`cvm_oferta_resolucao_160_raw`) continuam com o
+  histórico completo (nunca truncadas), e o mecanismo incremental por `raw_id` trata qualquer
+  linha ausente de `operations_primario` como "ainda não processada", reinserindo-a na
+  próxima rodada — **isso realmente aconteceu uma vez** durante esta mudança (a primeira
+  tentativa de `DELETE` foi desfeita por um refresh que rodou antes do filtro permanente
+  estar pronto/commitado) e foi corrigido repetindo o `DELETE` só depois do filtro já estar
+  em vigor. **Confirmado ao vivo**: rodar `build_operations_primario()` de novo depois do
+  filtro entrar em vigor reporta `0 linhas novas` (nenhuma reintrodução).
+- Total de `operations_primario` após o corte: **15.076** (era 17.434 — a contagem sobe e
+  desce um pouco ao longo do dia com o refresh diário automático, não é um erro de conta).
+
 ### Escopo desta sessão (fundação — outras sessões constroem em cima)
 
 Esta sessão entregou SÓ a camada de dados (staging + `operations_primario` + schema +
