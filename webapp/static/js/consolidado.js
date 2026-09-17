@@ -1,13 +1,29 @@
-// Aba Consolidado: KPIs + serie temporal + setores + UF + porte.
+// Aba Consolidado: KPIs + serie temporal + setores + UF + porte (+ taxas/prazos
+// no modo Primario -- ver bloco no final do arquivo). CLAUDE.md, secao "Radar
+// de Credito Primario -- Frontend" documenta TODOS os endpoints /api/primario/*
+// assumidos aqui (ainda nao construidos/testados contra um backend real).
 
-let chartSerie, chartSetores, chartPorte;
+let chartSerie, chartSetores, chartPorte, chartTaxas, chartPrazos;
 
 function kpiCard(label, value, sub) {
   return `<div class="kpi-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 }
 
 async function loadKPIs(filters) {
-  const data = await fetchJSON("/api/kpis?" + qs(filters));
+  const data = await fetchJSON(apiMercado("/api/kpis") + "?" + qs(filters));
+  if (_mercadoAtivo === "primario") {
+    // Sem "desembolso" no mercado de capitais (o valor da oferta e captado de
+    // uma vez, nao em parcelas como um financiamento BNDES/FINEP) -- 4o KPI
+    // vira "emissores distintos" em vez de "volume desembolsado".
+    const porInstrumento = data.por_instrumento || data.por_agencia || [];
+    const porInstrumentoTxt = porInstrumento.map((a) => `${a.instrumento || a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
+    document.getElementById("kpi-row").innerHTML =
+      kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
+      kpiCard("Volume total emitido", fmtBRL(data.valor_contratado_total ?? data.valor_total), porInstrumentoTxt) +
+      kpiCard("Emissores distintos", fmtNum(data.n_emissores_distintos ?? data.n_emissores)) +
+      kpiCard("Ticket médio por operação", fmtBRL(data.cheque_medio));
+    return;
+  }
   const porAgencia = data.por_agencia.map((a) => `${a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
   document.getElementById("kpi-row").innerHTML =
     kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
@@ -49,17 +65,22 @@ function _sequenciaCompletaPeriodos(granularidade, pares) {
 
 async function loadSerieTemporal(filters) {
   const granularidade = document.getElementById("serie-granularidade").value;
-  const data = await fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade }));
+  const data = await fetchJSON(apiMercado("/api/serie_temporal") + "?" + qs({ ...filters, granularidade }));
+  if (!Array.isArray(data)) { if (chartSerie) { chartSerie.destroy(); chartSerie = null; } return; }
+  // Incentivado agrupa por agencia (BNDES/FINEP, 2 valores fixos, cores
+  // proprias); Primario agrupa por instrumento (Debênture/CRI/CRA/... --
+  // numero variavel, sem paleta fixa -- usa AZUL_TONS em sequencia).
+  const agrupador = _mercadoAtivo === "primario" ? "instrumento" : "agencia";
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
   const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos).map((s) => s.label);
-  const agencias = [...new Set(data.map((d) => d.agencia))];
-  const colors = { BNDES: "#223850", FINEP: "#7C93AC" };
+  const grupos = [...new Set(data.map((d) => d[agrupador]))];
+  const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC" };
 
-  const datasets = agencias.map((ag) => ({
-    label: ag,
-    backgroundColor: colors[ag] || "#5878A0",
+  const datasets = grupos.map((g, i) => ({
+    label: g,
+    backgroundColor: _mercadoAtivo === "primario" ? AZUL_TONS[i % AZUL_TONS.length] : (coresIncentivado[g] || "#5878A0"),
     data: periodos.map((p) => {
-      const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo) === p && d.agencia === ag);
+      const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo) === p && d[agrupador] === g);
       return row ? row.valor_total : 0;
     }),
   }));
@@ -77,13 +98,28 @@ async function loadSerieTemporal(filters) {
   });
 }
 
+// Incentivado: ranking por setor_bndes (CNAE). Primario: ranking por
+// instrumento_padronizado (Debênture/CRI/CRA/Nota Comercial/Letra Financeira/
+// CDCA/CCB) -- a dimensao mais especifica e distintiva de renda fixa, dai
+// virar o destaque do Consolidado em vez de repetir "setor" (que ja aparece
+// no filtro compartilhado e no drill-down de Tendencias). Suposicao de
+// contrato: GET /api/primario/instrumentos devolve [{instrumento,
+// valor_total, n_operacoes}], mesmo formato de /api/setores.
 async function loadSetores(filters) {
-  const data = (await fetchJSON("/api/setores?" + qs(filters))).slice(0, 10);
+  const endpoint = _mercadoAtivo === "primario" ? "/api/primario/instrumentos" : "/api/setores";
+  let data;
+  try {
+    data = (await fetchJSON(endpoint + "?" + qs(filters))).slice(0, 10);
+  } catch (e) {
+    data = [];
+  }
+  if (!Array.isArray(data)) data = [];
+  const campo = _mercadoAtivo === "primario" ? "instrumento" : "setor";
   if (chartSetores) chartSetores.destroy();
   chartSetores = new Chart(document.getElementById("chart-setores"), {
     type: "bar",
     data: {
-      labels: data.map((d) => d.setor),
+      labels: data.map((d) => d[campo]),
       datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: AZUL_TONS[1] }],
     },
     options: {
@@ -97,8 +133,9 @@ async function loadSetores(filters) {
       scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
       onClick: (evt, els) => {
         if (!els.length) return;
-        const setor = data[els[0].index].setor;
-        openOperacoesModal(`Setor: ${setor}`, { setor });
+        const valor = data[els[0].index][campo];
+        if (_mercadoAtivo === "primario") openOperacoesModal(`Instrumento: ${valor}`, { instrumento: valor });
+        else openOperacoesModal(`Setor: ${valor}`, { setor: valor });
       },
     },
   });
@@ -210,7 +247,17 @@ function _garantirSvgMapaUF() {
 }
 
 async function loadUF(filters) {
-  const data = await fetchJSON("/api/uf?" + qs(filters));
+  // Primario: uf_emissor (localizacao do emissor do titulo) -- mesmo conceito
+  // de "UF" que o mapa ja mostra pro Incentivado, so a coluna de origem muda
+  // no backend. Suposicao de contrato: /api/primario/uf devolve o MESMO
+  // formato de /api/uf ({uf, valor_total, n_operacoes}).
+  let data;
+  try {
+    data = await fetchJSON(apiMercado("/api/uf") + "?" + qs(filters));
+  } catch (e) {
+    data = [];
+  }
+  if (!Array.isArray(data)) data = [];
 
   // /api/uf devolve tambem siglas que NAO sao um dos 27 estados -- "IE" (operacoes de
   // abrangencia nacional/interestadual, ex: Petrobras, Banco do Brasil) e "NI" (UF nao
@@ -276,7 +323,16 @@ async function loadUF(filters) {
 }
 
 async function loadPorte(filters) {
-  const data = await fetchJSON("/api/porte?" + qs(filters));
+  // porte_emissor (Primario) usa o MESMO cache/vocabulario de porte que
+  // porte_cliente (cnpj_cnae, ver CLAUDE.md) -- suposicao de contrato:
+  // /api/primario/porte devolve o MESMO formato de /api/porte.
+  let data;
+  try {
+    data = await fetchJSON(apiMercado("/api/porte") + "?" + qs(filters));
+  } catch (e) {
+    data = [];
+  }
+  if (!Array.isArray(data)) data = [];
   if (chartPorte) chartPorte.destroy();
   chartPorte = new Chart(document.getElementById("chart-porte"), {
     type: "doughnut",
@@ -297,9 +353,175 @@ async function loadPorte(filters) {
   });
 }
 
+// ============ Taxas e prazos (renda fixa, so modo Primario) ============
+// Sem equivalente no credito de fomento (BNDES/FINEP nao tem "taxa"/
+// "indexador" de mercado nem "prazo" no mesmo sentido de um titulo de
+// divida) -- as duas funcoes abaixo saem cedo (e limpam qualquer grafico
+// antigo) quando o mercado ativo NAO e o Primario, entao e seguro chamalas
+// incondicionalmente em refreshConsolidado(). SUPOSICAO DE CONTRATO (ver
+// aviso no topo de common.js e CLAUDE.md, secao "Radar de Credito Primario
+// -- Frontend"): endpoints /api/primario/graficos/taxas e /prazos ainda NAO
+// existem/nao foram testados contra um backend real -- formato assumido:
+// { n_total, n_com_taxa|n_com_prazo, cobertura_pct, linhas: [...] }.
+
+// Distribuicao de TAXA por indexador. taxa_tipo 'spread'/'taxa_fixa' sao a
+// MESMA unidade (pontos percentuais a.a., aditivos) -- as unicas incluidas
+// no grafico; 'percentual_indexador' (ex: "108% do CDI") e MULTIPLICATIVO,
+// unidade diferente, nunca misturado no mesmo grafico -- so contado no aviso.
+async function loadTaxas(filters) {
+  if (_mercadoAtivo !== "primario") {
+    if (chartTaxas) { chartTaxas.destroy(); chartTaxas = null; }
+    return;
+  }
+  const aviso = document.getElementById("chart-taxas-aviso");
+  const vazio = document.getElementById("chart-taxas-vazio");
+  let data = null;
+  try {
+    data = await fetchJSON("/api/primario/graficos/taxas?" + qs(filters));
+  } catch (e) {
+    data = null;
+  }
+  const linhasTodas = data && Array.isArray(data.linhas) ? data.linhas : [];
+  const comparaveis = linhasTodas.filter((l) => l.taxa_tipo === "spread" || l.taxa_tipo === "taxa_fixa");
+  const multiplicativas = linhasTodas.filter((l) => l.taxa_tipo === "percentual_indexador");
+
+  if (aviso) {
+    if (data && typeof data.n_total === "number") {
+      const nComTaxa = data.n_com_taxa ?? linhasTodas.reduce((acc, l) => acc + (l.n || 0), 0);
+      const pct = data.cobertura_pct != null
+        ? data.cobertura_pct.toFixed(1).replace(".", ",")
+        : (data.n_total ? ((nComTaxa / data.n_total) * 100).toFixed(1).replace(".", ",") : "0,0");
+      let txt = `⚠ Amostra parcial: taxa extraída em ${fmtNum(nComTaxa)} de ${fmtNum(data.n_total)} operações (${pct}%) — nem toda oferta tem a taxa registrada em formato reconhecível.`;
+      if (multiplicativas.length) {
+        const nMult = multiplicativas.reduce((acc, l) => acc + (l.n || 0), 0);
+        txt += ` Mais ${fmtNum(nMult)} operações cotadas como % do indexador (ex: "108% do CDI") não entram neste gráfico por usarem outra unidade.`;
+      }
+      aviso.textContent = txt;
+      aviso.style.display = "block";
+    } else {
+      aviso.style.display = "none";
+    }
+  }
+
+  if (!comparaveis.length) {
+    if (vazio) vazio.style.display = "block";
+    if (chartTaxas) { chartTaxas.destroy(); chartTaxas = null; }
+    return;
+  }
+  if (vazio) vazio.style.display = "none";
+
+  if (chartTaxas) chartTaxas.destroy();
+  chartTaxas = new Chart(document.getElementById("chart-taxas"), {
+    type: "bar",
+    data: {
+      labels: comparaveis.map((l) => l.indexador),
+      datasets: [{ data: comparaveis.map((l) => l.taxa_mediana), backgroundColor: AZUL_TONS[1] }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${Number(ctx.raw).toFixed(2).replace(".", ",")} p.p. (n=${fmtNum(comparaveis[ctx.dataIndex].n || 0)})`,
+          },
+        },
+      },
+      scales: { y: { ticks: { callback: (v) => v + " p.p." } } },
+    },
+  });
+}
+
+// Distribuicao de PRAZO (meses) por instrumento -- dado EXATO quando existe
+// (data_vencimento - data_emissao, ver CLAUDE.md), so a COBERTURA e parcial.
+async function loadPrazos(filters) {
+  if (_mercadoAtivo !== "primario") {
+    if (chartPrazos) { chartPrazos.destroy(); chartPrazos = null; }
+    return;
+  }
+  const aviso = document.getElementById("chart-prazos-aviso");
+  const vazio = document.getElementById("chart-prazos-vazio");
+  let data = null;
+  try {
+    data = await fetchJSON("/api/primario/graficos/prazos?" + qs(filters));
+  } catch (e) {
+    data = null;
+  }
+  const linhas = data && Array.isArray(data.linhas) ? data.linhas : [];
+
+  if (aviso) {
+    if (data && typeof data.n_total === "number") {
+      const nComPrazo = data.n_com_prazo ?? linhas.reduce((acc, l) => acc + (l.n || 0), 0);
+      const pct = data.cobertura_pct != null
+        ? data.cobertura_pct.toFixed(1).replace(".", ",")
+        : (data.n_total ? ((nComPrazo / data.n_total) * 100).toFixed(1).replace(".", ",") : "0,0");
+      aviso.textContent = `⚠ Amostra parcial: prazo calculável em ${fmtNum(nComPrazo)} de ${fmtNum(data.n_total)} operações (${pct}%) — só quando emissão e vencimento estão preenchidos na fonte (CVM).`;
+      aviso.style.display = "block";
+    } else {
+      aviso.style.display = "none";
+    }
+  }
+
+  if (!linhas.length) {
+    if (vazio) vazio.style.display = "block";
+    if (chartPrazos) { chartPrazos.destroy(); chartPrazos = null; }
+    return;
+  }
+  if (vazio) vazio.style.display = "none";
+
+  if (chartPrazos) chartPrazos.destroy();
+  chartPrazos = new Chart(document.getElementById("chart-prazos"), {
+    type: "bar",
+    data: {
+      labels: linhas.map((l) => l.instrumento),
+      datasets: [{ data: linhas.map((l) => l.prazo_mediano_meses), backgroundColor: AZUL_TONS[2] }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${fmtNum(Math.round(ctx.raw))} meses (n=${fmtNum(linhas[ctx.dataIndex].n || 0)})`,
+          },
+        },
+      },
+      scales: { x: { ticks: { callback: (v) => v + "m" } } },
+    },
+  });
+}
+
+// Rotulos/hints dos cards do Consolidado que trocam de significado por
+// mercado -- chamada por common.js::_aplicarIdentidadeMercado() (via
+// `typeof` check, nunca o inverso, pra common.js nao depender de detalhe de
+// implementacao desta aba).
+function _aplicarRotulosMercadoConsolidado() {
+  const primario = _mercadoAtivo === "primario";
+  const set = (id, texto) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = texto;
+  };
+  set("chart-serie-titulo", primario ? "Evolução temporal — por instrumento" : "Evolução temporal — BNDES x FINEP");
+  set("chart-serie-hint", primario ? "R$ emitido por período" : "R$ contratado por período");
+  set("chart-setores-titulo", primario ? "Ranking por instrumento" : "Ranking de setores");
+  set("chart-uf-titulo", primario ? "Por UF do emissor" : "Por UF");
+  set("chart-porte-titulo", primario ? "Por porte do emissor" : "Por porte do cliente");
+}
+
 async function refreshConsolidado(filters) {
   filters = filters || currentFilters();
-  await Promise.all([loadKPIs(filters), loadSerieTemporal(filters), loadSetores(filters), loadUF(filters), loadPorte(filters)]);
+  await Promise.all([
+    loadKPIs(filters),
+    loadSerieTemporal(filters),
+    loadSetores(filters),
+    loadUF(filters),
+    loadPorte(filters),
+    loadTaxas(filters),
+    loadPrazos(filters),
+  ]);
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
