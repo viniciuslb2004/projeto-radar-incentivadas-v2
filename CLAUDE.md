@@ -19,9 +19,11 @@ inteligência de mercado) — não é uma ferramenta de originação/contrataç�
 
 **Segundo "modo" em construção desde 2026-09-16: "Radar de Crédito Primário"**, cobrindo o
 mercado de capitais primário (debêntures, CRI, CRA, notas comerciais, letras financeiras, CDCA,
-CCB) via dados da CVM — ver seção própria "Radar de Crédito Primário — Pipeline CVM" mais abaixo.
-Só a CAMADA DE DADOS existe até aqui (staging + `operations_primario`); rotas de API, motor de
-busca e frontend são trabalho de sessões seguintes.
+CCB, CPR-F) via dados da CVM — DUAS fontes/staging tables diferentes (o dataset principal de
+Ofertas Públicas E um segundo CSV do rito automático/Resolução CVM 160, que sozinho cobre a
+maior parte da atividade de 2023 em diante) — ver seção própria "Radar de Crédito Primário —
+Pipeline CVM" mais abaixo. Só a CAMADA DE DADOS existe até aqui (staging + `operations_primario`);
+rotas de API, motor de busca e frontend são trabalho de sessões seguintes.
 
 100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Aiven)
 hospedados juntos na Vercel. Não existe mais "modo local" com banco separado (SQLite) — tanto
@@ -114,9 +116,10 @@ Postgres via `DATABASE_URL`.
 - **`operations_correcoes_manuais`**: correções manuais pontuais em campos de `operations`,
   reaplicadas automaticamente a cada refresh (ver `unify.py::_reaplicar_correcoes_manuais`).
 - **`refresh_log`**: histórico de cada rodada do pipeline semanal (`src/refresh.py`).
-- **`cvm_oferta_distribuicao_raw`**/**`operations_primario`**/**`refresh_primario_log`**: staging
-  + tabela unificada + log do Radar de Crédito Primário (CVM) — ver seção própria "Radar de
-  Crédito Primário — Pipeline CVM" mais abaixo.
+- **`cvm_oferta_distribuicao_raw`**/**`cvm_oferta_resolucao_160_raw`**/**`operations_primario`**/
+  **`refresh_primario_log`**: DUAS staging tables (uma por CSV/fonte CVM) + UMA tabela unificada
+  + log do Radar de Crédito Primário (CVM) — ver seção própria "Radar de Crédito Primário —
+  Pipeline CVM" mais abaixo.
 
 ## Pipeline de dados (operações BNDES/FINEP)
 
@@ -1165,10 +1168,17 @@ FIDC, que tecnicamente financiam recebíveis mas são "fundo", não um título d
 BDR, warrants (incl. "WARRANTS AGROPECUÁRIOS"), certificado de investimento audiovisual. As 3
 linhas com `Tipo_Ativo = "CERTIFICADOS DE RECEBÍVEIS"` (sem qualificador IMOBILIÁRIOS/
 AGRONEGÓCIO) ficam de fora de propósito — não dá para saber se é CRI ou CRA sem inventar, e a
-regra de ouro deste projeto (ver seção "Linhas Incentivadas") é nunca inferir. **CPR-F** (Cédula
-de Produto Rural Financeira) foi pedido explicitamente como fora de escopo por falta de fonte
-aberta — nem precisou de exclusão manual: CPR não é valor mobiliário registrado na CVM (é
-título de crédito rural fora da competência dela), então nunca apareceria neste dataset.
+regra de ouro deste projeto (ver seção "Linhas Incentivadas") é nunca inferir.
+
+**CORREÇÃO REAL (2026-09-16, sessão de integração do `oferta_resolucao_160.csv` abaixo)**: a
+entrada original desta seção dizia que **CPR-F** (Cédula de Produto Rural Financeira) tinha
+sido excluído por falta de fonte aberta, e que "CPR não é valor mobiliário registrado na CVM".
+**Isso estava ERRADO.** CPR-F *é* um valor mobiliário registrado na CVM — só não aparece neste
+arquivo (`oferta_distribuicao.csv`, confirmado: 0 ocorrências de "PRODUTO RURAL"/"CPR" em
+`Tipo_Ativo`) porque esse instrumento passa pelo rito automático (Resolução CVM 160), reportado
+no SEGUNDO CSV do mesmo zip. Corrigido: 18 linhas reais de CPR-F (Klabin, Suzano, Duratex,
+Adami, Eldorado Brasil Celulose, Agropecuária Maggi etc.) agora entram via
+`cvm_oferta_resolucao_160_raw` — ver seção "Segunda fonte CVM" abaixo.
 
 ### `cvm_oferta_distribuicao_raw` (staging, quase 1:1 com o CSV oficial)
 
@@ -1309,20 +1319,22 @@ existe uma coluna `setor_origem` — o estado "pendente" é só `setor_emissor I
   não bug deste pipeline (um caso extremo mediu -35.429 dias, quase 97 anos "ao contrário").
   Essas 44 linhas ficam com `prazo_dias`/`prazo_meses` `NULL` de propósito — nunca um prazo
   negativo/zero, que quebraria qualquer comparação/gráfico no frontend depois.
-- **Carência: NÃO existe nesta fonte, confirmado contra os DOIS dicionários de dados da CVM**
-  (`meta_oferta_distribuicao.txt` E `meta_oferta_resolucao_160.txt`, o segundo arquivo dentro do
-  mesmo zip — dataset relacionado mas de schema DIFERENTE, focado no rito RCVM 160/automático
-  pós-2023, fora do escopo geral deste pedido) — nenhum dos dois tem um campo equivalente a
-  `prazo_carencia_meses` do BNDES. Diferente do BNDES (que declara carência explicitamente na
-  própria planilha), carência de um título de dívida privado normalmente só consta na
-  escritura/prospecto do papel, não neste registro estruturado da CVM. **Deliberadamente não
-  extraído de texto livre** (não há um campo de referência que sirva de âncora, ao contrário de
-  indexador/taxa que pelo menos partem de `Juros`/`Atualização_Monetária` — tentar inferir
-  carência de descrição livre sem estrutura nenhuma seria risco alto de dado errado) — mesma
-  regra de ouro do resto do projeto: sem fonte estruturada, sem campo. Se `oferta_resolucao_160`
-  um dia for integrado como fonte própria (schema bem diferente, tem `Descricao_garantias`/
-  `Agente_fiduciario`/`Titulo_incentivado` — não avaliado a fundo, fora do escopo deste pedido),
-  vale reconferir se carência aparece lá antes de assumir que nunca vai existir.
+- **Carência: NÃO existe em NENHUMA das duas fontes CVM, confirmado contra os DOIS dicionários
+  de dados** (`meta_oferta_distribuicao.txt` E `meta_oferta_resolucao_160.txt`) — nenhum dos
+  dois tem um campo equivalente a `prazo_carencia_meses` do BNDES. Diferente do BNDES (que
+  declara carência explicitamente na própria planilha), carência de um título de dívida privado
+  normalmente só consta na escritura/prospecto do papel, não em nenhum destes registros
+  estruturados da CVM. **Deliberadamente não extraído de texto livre** (não há um campo de
+  referência que sirva de âncora, ao contrário de indexador/taxa que pelo menos partem de
+  `Juros`/`Atualização_Monetária` — tentar inferir carência de descrição livre sem estrutura
+  nenhuma seria risco alto de dado errado) — mesma regra de ouro do resto do projeto: sem fonte
+  estruturada, sem campo. **Atualização (2026-09-16)**: `oferta_resolucao_160.csv` foi
+  integrado (ver seção "Segunda fonte CVM: rito automático/Resolução 160" abaixo) — suas 47
+  colunas relevantes foram conferidas uma a uma contra as 71 colunas oficiais do dataset, e
+  nenhuma delas descreve carência (o schema é focado em ESTRUTURA/garantia da oferta —
+  `Descricao_garantias`/`Agente_fiduciario`/`Titulo_incentivado`/`Tipo_lastro`/`Custodiante` —
+  não em condições financeiras do título). Confirmado, não é mais uma suposição: carência
+  continua indisponível em ambas as fontes CVM deste pipeline.
 
 Rodando pela primeira vez (2026-09-16) contra produção (Aiven, mesmo `DATABASE_URL` de sempre):
 12.232 linhas inseridas em `operations_primario` (1:1 com o staging, nenhuma linha rejeitada),
@@ -1332,19 +1344,116 @@ não estava em `cnpj_cnae`), reduzido para **1.242 CNPJs distintos** a resolver 
 `enrich_cnae.py::enrich_pendentes_via_api` (BrasilAPI, mesmo mecanismo/rate-limit já usado pela
 FINEP — ~0,6s por CNPJ).
 
+### Segunda fonte CVM: rito automático / Resolução 160 (`oferta_resolucao_160.csv`)
+
+**Achado real do coordenador (2026-09-16), DEPOIS que a integração acima já tinha rodado uma
+vez**: o MESMO zip oficial (`oferta_distribuicao.zip`) contém um SEGUNDO CSV,
+`oferta_resolucao_160.csv` — dataset relacionado mas de **schema DIFERENTE**, focado no rito
+automático da Resolução CVM 160 (sucessora da ICVM 400/476 para a maior parte das emissões
+modernas). Achado crítico: esse segundo arquivo tem **14.493 linhas cobrindo EXATAMENTE
+2023–2026**, contra só **7 linhas** de `cvm_oferta_distribuicao_raw` nesse mesmo período — sem
+integrar este arquivo, o radar ficava praticamente cego para a atividade de mercado mais
+recente (exatamente o que mais importa para um "radar"). Integrado na mesma sessão que
+corrigiu a exclusão indevida do CPR-F (ver acima).
+
+- **`src/download_cvm.py`**: `download_all()` agora baixa o zip principal e o de metadados
+  **cada um UMA vez só** e extrai os DOIS membros de cada (antes só extraía
+  `oferta_distribuicao.csv`/`meta_oferta_distribuicao.txt` e descartava o resto) — evita baixar
+  os mesmos ~5.3MB duas vezes. Novos caminhos: `RESOLUCAO160_CSV_PATH`/`RESOLUCAO160_META_PATH`.
+- **`cvm_oferta_resolucao_160_raw`** (staging nova, `src/parse_cvm_resolucao160.py`): MESMO
+  padrão de `cvm_oferta_distribuicao_raw` — encoding latin-1, delimitador `;`, incremental por
+  `row_hash` (não por chave natural), colunas de composição de investidores excluídas (aqui:
+  ~24 colunas `Num_Invest_*`/`Qtde_VM_*`, mesmo critério). **Diferença real encontrada**:
+  `Numero_Requerimento` **É confirmado único e não-nulo** nas 14.493 linhas (ao contrário de
+  `numero_registro_oferta` no arquivo principal, 76% nulo) — mesmo assim, mantido como coluna
+  INFORMATIVA, não como chave de upsert, por consistência com o resto do pipeline (o dataset
+  também é republicado por inteiro a cada atualização, não incremental na origem).
+- **Escopo de instrumentos**: reaproveita a MESMA regex de `parse_cvm.py`
+  (`ESCOPO_REGEX_DIVIDA`, exportada — antes privada `_ESCOPO_REGEX`), estendida com o termo do
+  CPR-F (`PRODUTO RURAL FINANCEIRA|\bCPR-F\b`) — inofensivo para o arquivo principal (confirmado
+  ao vivo: 0 ocorrências desse termo em `Tipo_Ativo`). Contagem real (CSV de 2026-09-16, campo
+  `Valor_Mobiliario` — nomenclatura **diferente** da de `Tipo_Ativo` para o MESMO instrumento,
+  ex: "Debêntures" em vez de "DEBÊNTURES SIMPLES", sem sufixo "- CRI"/"- CRA"/"- CDCA", exigiu
+  chaves novas em `unify_primario.py::INSTRUMENTO_PADRONIZADO_MAP`): Debêntures 1.938 +
+  Debêntures Conversíveis 1, Certificados de Recebíveis Imobiliários 1.868, Notas Comerciais
+  770, Certificados de Recebíveis do Agronegócio 587, **Cédula de Produto Rural Financeira
+  (CPR-F) 18**, Certificado de Direitos Creditórios do Agronegócio 4, Notas Promissórias 2 —
+  **5.188 linhas em escopo** de 14.493 totais (9.305 fora de escopo: majoritariamente Cotas de
+  FIDC/FII/FIF/FIP/FIAGRO, Ações, "Outros títulos de securitização" — ambíguo demais, mesmo
+  critério de nunca inventar que já exclui "Certificados de Recebíveis" sem qualificador no
+  arquivo principal — e as 3 linhas ambíguas "Certificados de Recebíveis").
+- **Checagem de DUPLICIDADE entre os dois arquivos (item 5 do pedido, verificado ao vivo)**:
+  **ZERO overlap de `Numero_Processo`** entre os dois CSVs (14.493 processos distintos no
+  segundo arquivo, nenhum aparece no principal). Uma coincidência de `(CNPJ_Emissor, Emissao)`
+  apareceu em 312 combinações, mas inspecionar várias mostrou que são operações DIFERENTES do
+  MESMO emissor reaproveitando o número de emissão em programas distintos (ex: um emissor
+  serial de securitização com "Emissão 96" de CRI num arquivo e "Emissão 96" de CRA totalmente
+  diferente no outro — valores e datas não batem). **Conclusão: os dois arquivos são conjuntos
+  DISJUNTOS na prática** — nenhuma lógica de dedup entre eles foi necessária.
+- **Campos que este arquivo NÃO tem** (confirmado contra as 71 colunas oficiais):
+  `Data_Emissao`/`Data_Vencimento`/`Juros`/`Atualização_Monetária`/`Serie`/`Classe_Ativo`/
+  `Especie_Ativo`/`Forma_Ativo`. Por isso, para linhas com `raw_table =
+  'cvm_oferta_resolucao_160_raw'`: **`data_emissao`/`data_vencimento`/`prazo_dias`/
+  `prazo_meses`/`indexador_padronizado`/`taxa_valor`/`taxa_tipo`/`juros`/
+  `atualizacao_monetaria`/`serie`/`classe_ativo`/`especie_ativo`/`forma_ativo` ficam SEMPRE
+  `NULL`** (nunca inferidos — em especial, prazo NUNCA foi aproximado a partir das datas de
+  PROCESSO deste arquivo, que são conceitos diferentes de vencimento do título). Isso é
+  **esperado, documentado, não é bug** — resolve o problema de VOLUME/RECÊNCIA, não o de
+  remuneração/prazo do título.
+- **`data_referencia` (fallback próprio, `unify_primario.py::_data_referencia_r160`)**: usa os
+  campos de data que ESTE arquivo realmente tem, em ordem de preferência: `data_registro` →
+  `data_encerramento` → `data_deliberacao_aprovou_oferta` → `data_requerimento` (último recurso,
+  mas o ÚNICO campo sem nenhum nulo no dataset inteiro — garante `data_referencia` preenchida
+  para praticamente 100% das linhas).
+- **6 colunas novas em `operations_primario`** (sempre `NULL` para linhas de
+  `cvm_oferta_distribuicao_raw`, que não tem equivalente a nenhuma): `numero_requerimento`
+  (traçabilidade — namespace DIFERENTE de `numero_registro_oferta`, nunca confundidos),
+  `status_requerimento`, `tipo_lastro` (`'Pulverizado'`/`'Concentrado'`), `agente_fiduciario`,
+  `custodiante`, `descricao_garantias`. `titulo_incentivado`/`regime_fiduciario` do arquivo NÃO
+  viraram colunas novas — mapeados para as colunas booleanas JÁ existentes `incentivada`/
+  `regime_fiduciario` (mesmo significado econômico, Lei 12.431/regime fiduciário).
+- **`status_requerimento`: decisão deliberada de NUNCA filtrar silenciosamente.** ~1,1% das
+  linhas em escopo (57 de 5.188) têm um status que indica que o requerimento NÃO chegou a virar
+  uma oferta efetivamente concluída (`'Oferta Revogada'` 24, `'Requerimento Expirado'` 17,
+  `'Registro Caducado'` 15, `'Oferta Suspensa'` 1) — mantidas em `operations_primario` (nunca
+  descartadas), mas com o status EXPOSTO nesta coluna nova para quem for construir rotas/
+  frontend (fora do escopo desta sessão) poder filtrar se quiser. A maioria é `'Oferta
+  Encerrada'` (4.877) ou `'Registro Concedido'`/`'Aguardando Bookbuilding'` (254, em processo
+  mas já registrados).
+- **Resultado da integração** (rodado ao vivo em produção, 2026-09-16, DEPOIS da primeira
+  rodada documentada acima): **5.188 linhas novas** inseridas em `operations_primario` (0
+  rejeitadas), total da tabela sobe de 12.232 para **17.420**. Cobertura 2023–2026 sobe de 7
+  para **5.193 linhas** (7 do arquivo principal + 5.186 deste novo, 2 linhas do novo arquivo
+  ficaram fora da janela por `data_referencia` cair fora dela). Por `instrumento_padronizado`
+  na tabela inteira (as duas fontes somadas) depois da integração: Debênture 7.099, CRI 5.873,
+  Nota Comercial 2.692, CRA 1.607, Letra Financeira 115, **CPR-F 18**, CDCA 15, CCB 1.
+  **Enriquecimento de emissor rodado até o fim nesta sessão** (não deixado para depois): **792
+  CNPJs distintos** pendentes resolvidos via `enrich_cnae.py::enrich_pendentes_via_api`
+  (BrasilAPI, mesmo mecanismo já usado pela FINEP) — **791/792 resolvidos** (1 não encontrado
+  na BrasilAPI, tratado como falha isolada de CNPJ, não interrompe o restante — mesmo
+  comportamento já documentado da função), **1.169 linhas reclassificadas** (pendente →
+  resolvido; mais que 792 porque um mesmo CNPJ emissor aparece em várias operações). Estado
+  final: de 17.420 linhas totais, **1.473 seguem pendentes** — **1.472 delas por não terem
+  `cnpj_emissor` na própria oferta** (dado ausente na fonte, nunca vai resolver, não é bug) e
+  **1 por CNPJ ainda não resolvido** (o único miss da BrasilAPI nesta rodada).
+
 ### Pipeline (`src/refresh_primario.py`)
 
 Orquestrador PRÓPRIO e SEPARADO de `refresh.py` (BNDES/FINEP) — fonte, staging e tabela final
 são completamente independentes, só compartilham o cache `cnpj_cnae` (por design, já pensado
-para múltiplas fontes). Sequência: `download_cvm.download_all()` → `parse_cvm.parse_cvm()` →
-`unify_primario.build_operations_primario()` → se sobrar emissor pendente,
-`enrich_cnae.enrich_pendentes_via_api()` (BrasilAPI, mesma função já usada pelo refresh semanal
-da FINEP, só que alvo = CNPJs de `operations_primario`) →
-`unify_primario.reclassificar_emissores_pendentes()`. Log em `refresh_primario_log` (mesmo
-formato de `refresh_log`/`refresh_editais_log`). **NÃO roda** o job pesado mensal de
-`enrich_cnae.py::enrich()`/`enrich_empresas()` (bulk RFB, vários GB) — o volume de emissores da
-CVM (milhares, não dezenas de milhares) é resolvido inteiramente pelo caminho leve via
-BrasilAPI, sem precisar do job pesado. Automação: `.github/workflows/refresh-primario.yml`,
+para múltiplas fontes). Sequência: `download_cvm.download_all()` (baixa AMBOS os CSVs, ver
+seção acima) → `parse_cvm.parse_cvm()` (arquivo principal) →
+`parse_cvm_resolucao160.parse_cvm_resolucao160()` (segundo arquivo, rito automático) →
+`unify_primario.build_operations_primario()` (processa as DUAS raw tables, cada uma
+incrementalmente por `raw_table`+`raw_id` própria, inserindo na MESMA `operations_primario`) →
+se sobrar emissor pendente, `enrich_cnae.enrich_pendentes_via_api()` (BrasilAPI, mesma função já
+usada pelo refresh semanal da FINEP, só que alvo = CNPJs de `operations_primario`, de QUALQUER
+uma das duas fontes) → `unify_primario.reclassificar_emissores_pendentes()`. Log em
+`refresh_primario_log` (mesmo formato de `refresh_log`/`refresh_editais_log`;
+`cvm_raw_rows` agora soma as linhas novas das DUAS staging tables). **NÃO roda** o job pesado
+mensal de `enrich_cnae.py::enrich()`/`enrich_empresas()` (bulk RFB, vários GB) — o volume de
+emissores da CVM (milhares, não dezenas de milhares) é resolvido inteiramente pelo caminho leve
+via BrasilAPI, sem precisar do job pesado. Automação: `.github/workflows/refresh-primario.yml`,
 diário (09:00 UTC, 1h depois do refresh de editais — mesmo secret `DATABASE_URL`), com
 `workflow_dispatch` para rodar manualmente.
 
@@ -1355,7 +1464,11 @@ enriquecimento de emissor), deliberadamente sem tocar em: rotas `/api/primario/*
 motor de busca, frontend/abas novas. O schema de `operations_primario` já está estável o
 suficiente para outra sessão começar a codificar contra ele em paralelo, mesmo antes do
 enriquecimento de 100% dos emissores pendentes terminar (o campo `setor_emissor`/`uf_emissor`
-IS NULL é um estado normal e esperado, não um bug a esperar sumir).
+IS NULL é um estado normal e esperado, não um bug a esperar sumir). **A integração do segundo
+arquivo CVM (`oferta_resolucao_160.csv`, ver seção própria acima) foi feita por uma sessão
+SEGUINTE, no mesmo dia** — mesmo espírito: só camada de dados, nenhuma rota/busca/frontend
+tocada, schema aditivo (6 colunas novas, todas nullable, nenhuma coluna existente removida ou
+renomeada) para não quebrar quem já estivesse codificando contra o schema anterior em paralelo.
 
 ## Onde procurar o quê (mapa rápido)
 
@@ -1368,7 +1481,7 @@ IS NULL é um estado normal e esperado, não um bug a esperar sumir).
 | Motor de busca (IA, opcional) | `src/search.py`, `src/embeddings.py` |
 | Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
-| Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/unify_primario.py`, `src/refresh_primario.py` |
+| Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/parse_cvm_resolucao160.py` (2ª fonte, rito automático), `src/unify_primario.py`, `src/refresh_primario.py` |
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |

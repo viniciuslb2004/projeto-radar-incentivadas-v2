@@ -664,6 +664,81 @@ CREATE TABLE IF NOT EXISTS cvm_oferta_distribuicao_raw (
 CREATE INDEX IF NOT EXISTS idx_cvm_oferta_distribuicao_hash ON cvm_oferta_distribuicao_raw(row_hash);
 CREATE INDEX IF NOT EXISTS idx_cvm_oferta_distribuicao_cnpj_emissor ON cvm_oferta_distribuicao_raw(cnpj_emissor);
 
+-- ============ Radar de Credito Primario: staging CVM "oferta_resolucao_160.csv"
+-- ============ SEGUNDO CSV do MESMO zip de cvm_oferta_distribuicao_raw acima --
+-- achado real do coordenador (2026-09-16), DEPOIS que o pipeline inicial ja tinha
+-- rodado: schema DIFERENTE, foco no rito automatico (Resolucao CVM 160, sucessora
+-- da ICVM 400/476 para a maior parte das emissoes modernas) -- ver
+-- src/download_cvm.py, src/parse_cvm_resolucao160.py, CLAUDE.md secao propria.
+-- Cobre EXATAMENTE 2023-2026 (o rito automatico so existe desde entao) -- e o que
+-- resolve o "radar cego pra atividade recente" (so 7 linhas de
+-- cvm_oferta_distribuicao_raw caem nesse periodo).
+-- Deliberadamente SEM as MESMAS ~24 colunas de composicao de investidores do CSV
+-- oficial (Num_Invest_Pessoa_Natural, Qtde_VM_Fundos_Investimento etc.) -- mesmo
+-- criterio de exclusao usado em cvm_oferta_distribuicao_raw (ver
+-- parse_cvm_resolucao160.py::R160_COLUMNS). Diferente do arquivo principal, NAO tem
+-- Data_Vencimento/Juros/Atualizacao_Monetaria (schema focado em ESTRUTURA da oferta,
+-- nao em remuneracao do titulo) -- confirmado contra as 71 colunas oficiais.
+-- row_hash: MESMO padrao de cvm_oferta_distribuicao_raw -- Numero_Requerimento
+-- CONFIRMADO unico e nao-nulo nas 14.493 linhas do snapshot de 2026-09-16
+-- (diferente de numero_registro_oferta no arquivo principal, que e nulo em 76%
+-- das linhas) -- mas mantido como coluna INFORMATIVA, nao como chave de upsert,
+-- pela mesma razao de consistencia com o resto do pipeline (dataset republicado
+-- por inteiro a cada atualizacao, nao incremental na origem).
+CREATE TABLE IF NOT EXISTS cvm_oferta_resolucao_160_raw (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    row_hash TEXT,
+    numero_requerimento TEXT,            -- CONFIRMADO unico/nao-nulo neste dataset -- so informativo aqui, ver comentario acima
+    rito_requerimento TEXT,              -- sempre 'Automatico' neste dataset (a propria razao dele existir)
+    numero_processo TEXT,
+    data_requerimento TEXT,              -- unico campo de data SEM nenhum nulo (0 de 14.493) -- base do fallback de data_referencia
+    data_registro TEXT,
+    data_encerramento TEXT,
+    status_requerimento TEXT,            -- 'Oferta Encerrada'|'Registro Concedido'|'Registro Caducado'|'Oferta Revogada'|'Aguardando Bookbuilding'|'Requerimento Expirado'|'Oferta Suspensa' -- ver unify_primario.py sobre como isso e tratado (nao filtrado, so exposto)
+    valor_mobiliario TEXT,               -- equivalente a Tipo_Ativo do arquivo principal -- strings DIFERENTES pro mesmo instrumento (ex: "Debêntures" aqui vs "DEBÊNTURES SIMPLES" no outro) -- ver unify_primario.py::INSTRUMENTO_PADRONIZADO_MAP
+    tipo_requerimento TEXT,               -- granularidade de publico-alvo/bookbuilding (ex: "OPD Aut Profissional - sem bookbuilding") -- informativo
+    bookbuilding TEXT,
+    cnpj_emissor TEXT,
+    nome_emissor TEXT,
+    cnpj_lider TEXT,
+    nome_lider TEXT,
+    grupo_coordenador TEXT,
+    tipo_oferta TEXT,                    -- Primaria | Secundaria | Mista
+    emissao TEXT,
+    qtde_total_registrada REAL,
+    valor_total_registrado REAL,
+    oferta_inicial TEXT,
+    oferta_vasos_comunicantes TEXT,
+    publico_alvo TEXT,
+    reabertura_serie TEXT,
+    titulo_classificado_como_sustentavel TEXT,
+    titulo_padronizado TEXT,
+    destinacao_recursos TEXT,
+    data_deliberacao_aprovou_oferta TEXT,
+    mercado_negociacao TEXT,
+    tipo_lastro TEXT,                    -- 'Pulverizado' | 'Concentrado' (relevante p/ CRI/CRA)
+    regime_fiduciario TEXT,
+    ativos_alvo TEXT,
+    descricao_garantias TEXT,
+    descricao_lastro TEXT,
+    identificacao_devedores_coobrigados TEXT,
+    possibilidade_revolvencia TEXT,
+    fidc_nao_padronizado TEXT,
+    titulo_incentivado TEXT,             -- Lei 12.431/11 -- equivalente a Oferta_Incentivo_Fiscal do arquivo principal
+    regime_distribuicao TEXT,
+    tipo_societario TEXT,
+    administrador TEXT,
+    gestor TEXT,
+    agente_fiduciario TEXT,
+    escriturador TEXT,
+    custodiante TEXT,
+    avaliador_risco TEXT,
+    processo_sei TEXT,
+    endereco_emissor_rede_mundial_computadores TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cvm_oferta_resolucao_160_hash ON cvm_oferta_resolucao_160_raw(row_hash);
+CREATE INDEX IF NOT EXISTS idx_cvm_oferta_resolucao_160_cnpj_emissor ON cvm_oferta_resolucao_160_raw(cnpj_emissor);
+
 -- ============ Radar de Credito Primario: tabela unificada `operations_primario`
 -- ============ Mesmo espirito de `operations` (BNDES+FINEP): so insere para
 -- raw_id novos (ver src/unify_primario.py::build_operations_primario, dedup por
@@ -718,6 +793,16 @@ CREATE TABLE IF NOT EXISTS operations_primario (
     taxa_tipo TEXT,                      -- 'spread' (aditivo, ex: "+2,5%" sobre o indexador) | 'percentual_indexador' (multiplicativo, ex: "108% do CDI") | 'taxa_fixa' (prefixado puro) | NULL
     juros TEXT,                          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
     atualizacao_monetaria TEXT,          -- texto cru da CVM (fonte do indexador_padronizado/taxa_valor -- SEMPRE mantido, nunca escondido atras do campo extraido)
+    -- Colunas abaixo: SO existem na fonte oferta_resolucao_160.csv (ver
+    -- src/parse_cvm_resolucao160.py/CLAUDE.md) -- sempre NULL para linhas com
+    -- raw_table = 'cvm_oferta_distribuicao_raw' (o arquivo principal nao tem
+    -- equivalente a nenhuma delas).
+    numero_requerimento TEXT,            -- numero de rastreio do requerimento no rito automatico (CONFIRMADO unico -- ver staging) -- NAO confundir com numero_registro_oferta (namespace diferente, arquivo principal)
+    status_requerimento TEXT,            -- 'Oferta Encerrada'|'Registro Concedido'|... -- ver unify_primario.py sobre a decisao de manter TODAS as linhas mas expor este campo (nunca filtrado silenciosamente)
+    tipo_lastro TEXT,                    -- 'Pulverizado'|'Concentrado' -- relevante p/ CRI/CRA
+    agente_fiduciario TEXT,
+    custodiante TEXT,
+    descricao_garantias TEXT,
     raw_table TEXT NOT NULL,
     raw_id INTEGER NOT NULL
 );
@@ -815,6 +900,19 @@ MIGRACOES_COLUNAS = [
     # explicito (tabela ja criada em producao antes deste pedido).
     ("operations_primario", "prazo_dias", "INTEGER"),
     ("operations_primario", "prazo_meses", "REAL"),
+    # Integracao do SEGUNDO CSV do zip da CVM (oferta_resolucao_160.csv, rito
+    # automatico -- ver src/parse_cvm_resolucao160.py e CLAUDE.md), achado do
+    # coordenador (2026-09-16) DEPOIS que operations_primario ja existia em
+    # producao com as linhas do arquivo principal -- por isso ALTER TABLE
+    # explicito, mesmo padrao das colunas acima. Todas NULL para linhas com
+    # raw_table = 'cvm_oferta_distribuicao_raw' (o arquivo principal nao tem
+    # equivalente a nenhuma destas).
+    ("operations_primario", "numero_requerimento", "TEXT"),
+    ("operations_primario", "status_requerimento", "TEXT"),
+    ("operations_primario", "tipo_lastro", "TEXT"),
+    ("operations_primario", "agente_fiduciario", "TEXT"),
+    ("operations_primario", "custodiante", "TEXT"),
+    ("operations_primario", "descricao_garantias", "TEXT"),
 ]
 
 
