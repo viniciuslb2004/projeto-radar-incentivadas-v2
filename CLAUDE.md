@@ -66,6 +66,18 @@ Postgres via `DATABASE_URL`.
 - **Deploy**: Vercel. `vercel.json` define `outputDirectory: webapp/static` (front servido
   direto pela CDN) + rewrite de `/api/*` para `api/index.py` (function serverless Python que só
   faz `from webapp.main import app`). Ver `DEPLOY.md` para o passo a passo já feito.
+  **`data/embeddings.npz` excluído do bundle da function (2026-09-17, achado real: "Functions
+  storage" da Vercel quase estourando)**: esse arquivo tem ~64MB (de longe o maior arquivo
+  versionado do repo — o segundo maior, `brasil-uf.svg`, tem ~350KB) e estava sendo empacotado
+  em TODA function serverless mesmo nunca sendo lido em produção — `np.load(EMB_PATH)`
+  (`src/embeddings.py`) só roda dentro do caminho `MOTOR_BUSCA_IA=1` (ver seção "Motor de
+  busca" acima), que fica desligado por padrão e não está habilitado em produção. Adicionado a
+  `functions.api/index.py.excludeFiles` em `vercel.json` — o arquivo continua no repo (o
+  pipeline semanal ainda lê/escreve nele normalmente via `src/embeddings.py`/`src/refresh.py`),
+  só para de ser copiado pro artefato da function. **Se um dia `MOTOR_BUSCA_IA=1` for
+  religado em produção**: essa exclusão precisa ser revertida primeiro, senão a function sobe
+  sem o arquivo e as rotas de busca por IA quebram com `FileNotFoundError` (nunca testado esse
+  cenário específico, mas é a consequência direta e esperada da exclusão).
   **Serviço Render (`radar-credito-backend`) É LIXO/LEGADO, confirmado com o usuário
   (2026-09-16)**: antes da Vercel, o deploy era Render (backend) + Vercel (frontend) — ver
   `RESUME.md` (nota antiga de 2026-09-03), que já dizia "depois de confirmar o deploy da
