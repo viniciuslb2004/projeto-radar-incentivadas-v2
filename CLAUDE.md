@@ -1466,6 +1466,125 @@ numérico sem 8 dígitos (`abc123nada` → 0 resultados na tier 1, confirma que 
 falso-positivo já documentada pro motor BNDES/FINEP também vale aqui). `EXPLAIN ANALYZE` na
 tier 3 confirmou `Bitmap Index Scan` no GIN (não seq scan).
 
+### Rotas completadas (reconciliação com o frontend, 2026-09-16)
+
+Duas sessões paralelas construíram no mesmo dia (1) só as 5 rotas acima e (2) todo o
+frontend do modo Primário (ver seção "Radar de Crédito Primário — Frontend" abaixo) —
+mas o frontend foi escrito assumindo um contrato de API bem mais completo (tabela
+"Todos os endpoints `/api/primario/*` assumidos por este frontend" na seção Frontend),
+já que as duas sessões nunca se viram. Esta sessão (reconciliação) implementou as 14
+rotas que faltavam em `webapp/primario/routes.py` (nenhum arquivo novo, nenhuma mudança
+em `src/search_fts_primario.py` foi necessária — todas as agregações novas cabem em SQL
+direto, mesmo padrão das 5 rotas que já existiam):
+
+- **`GET /api/primario/status`** -- espelha `/api/status`. `setores_pendentes` é a
+  contagem de `setor_emissor IS NULL` (não existe `setor_origem` em
+  `operations_primario`, ver seção Pipeline CVM). `busca_ia_ativa` é sempre `False`
+  (não existe motor de embeddings pro Primário, só FTS).
+- **`GET /api/primario/serie_temporal`** -- espelha `/api/serie_temporal`, trocando o
+  agrupamento por `agencia` (não existe neste mercado) por `instrumento_padronizado` --
+  `instrumento` continua funcionando também como filtro (mesma dualidade do original
+  com `agencia`).
+- **`GET /api/primario/instrumentos`** -- mesmo formato de `/api/setores`, agrupando por
+  `instrumento_padronizado`.
+- **`GET /api/primario/uf`** -- espelha `/api/uf`, via `uf_emissor`. Decisão tomada após
+  reler a seção "Frontend: roteamento e abas" (o tratamento especial de `IE` do motor
+  BNDES/FINEP): `IE` é uma categoria REAL da planilha do BNDES (abrangência nacional,
+  ex: Petrobras) sem equivalente na CVM -- **não replicado aqui**, seria inventar um
+  conceito que a fonte não tem. `uf_emissor` só tem 2 estados (UF real resolvida via
+  CNPJ, ou NULL) -- o NULL usa o mesmo sentinela `NI` do motor original.
+- **`GET /api/primario/porte`** -- espelha `/api/porte`, via `porte_emissor`. Decisão:
+  **não usa `PORTE_NORMALIZADO_SQL`** (`src/search_fts.py`) -- aquele CASE existe pra
+  unificar o vocabulário heterogêneo de `porte_cliente` (BNDES nativo + FINEP via RFB,
+  misturando `MICRO`/`PEQUENA`/`GRANDE`/`MÉDIA` com `"Micro Empresa"`/`"Empresa de
+  Pequeno Porte"`). `porte_emissor` vem de UMA SÓ fonte (sempre `cnpj_cnae` via
+  BrasilAPI/RFB, ver `enrich_cnae.py::PORTE_EMPRESA_RFB`) com vocabulário próprio já
+  homogêneo (`Micro Empresa`/`Empresa de Pequeno Porte`/`Demais`/`Não informado pela
+  fonte`/NULL) -- aplicar aquele CASE aqui só devolveria `'Não informado'` pra tudo, e
+  não existe distinção `GRANDE`/`MÉDIA` nesse layout simplificado da RFB pra inventar.
+- **`GET /api/primario/operacoes/{id}/grupo-economico`** -- espelha o equivalente em
+  `webapp/main.py`, agrupando por raiz de `cnpj_emissor` (8 primeiros dígitos). Chaves
+  de resposta (`emissor`/`instrumento`/`valor_emissao`) escolhidas pra bater direto no
+  fallback que `common.js::openOperacaoDetalhe` já tinha escrito
+  (`o.cliente ?? o.emissor`, `o.agencia ?? o.instrumento`,
+  `o.valor_contratado ?? o.valor_emissao`) -- não precisou mudar o frontend.
+- **`GET /api/primario/tendencias/{setores,subsetores,segmentos}`** -- espelham os
+  equivalentes em `webapp/main.py` (`_ranking_variacao`/`_periodo_anterior`,
+  reimplementados como `_ranking_variacao_primario`/`_periodo_anterior_primario` sobre
+  `operations_primario`/`data_referencia`), mesmo formato exato (`comparavel`,
+  `periodo_atual`/`periodo_anterior`, `variacao_pp`, `participacao_atual_pct`/
+  `participacao_anterior_pct`). **Achado de design**: o parâmetro `setor` aqui precisa
+  ser um filtro EXATO (é o PAI de quem se quer o detalhe -- ex: ranking de subsetores
+  DENTRO de um setor escolhido), nunca o `OR` combinado (setor OU subsetor) que
+  `_filters_clause_primario` usa pro dropdown compartilhado -- criada uma segunda
+  função de filtro, `_filters_clause_primario_exato`, só pra este caso (mesma
+  distinção que já existe em `webapp/main.py` entre `_filters_clause`/tendências e o
+  `OR` combinado exclusivo do motor de busca).
+- **`GET /api/primario/tendencias/indexadores`** -- endpoint NOVO (não espelha nome
+  nenhum do motor original), agrupa por `indexador_padronizado`, mesmo shape simples
+  `[{indexador, valor_total}]` de `/api/tendencias/produtos` (sem ranking de variação --
+  só composição atual, conforme `tendencias.js::loadProdutos`).
+- **`GET /api/primario/subsetores`/`segmentos`** (nível superior, distintos de
+  `/tendencias/*`) -- espelham `/api/subsetores`/`/api/segmentos`, usando a MESMA
+  `_filters_clause_primario_exato` (o `setor`/`subsetor` vem do mesmo select próprio
+  de drill-down do `tendencias.js`, nunca do dropdown compartilhado).
+- **`GET /api/primario/graficos/taxas`** e **`/graficos/prazos`** -- os dois endpoints
+  NOVOS pedidos como foco central desta reconciliação. Implementados com
+  `percentile_cont(0.5) WITHIN GROUP` (mediana real, não média) sobre `taxa_valor`/
+  `prazo_meses`, `cobertura_pct` sempre calculada a partir de contagens reais (nunca
+  chumbada). `/graficos/taxas` exclui `taxa_tipo='percentual_indexador'` do
+  agrupamento (multiplicativo, unidade diferente de `spread`/`taxa_fixa` -- ver seção
+  Pipeline CVM).
+
+**Bug real encontrado e corrigido nesta sessão, fora da lista original de 14 (mas no
+mesmo arquivo, `webapp/primario/routes.py`)**: `GET /api/primario/kpis` já existia (de
+uma sessão anterior) mas devolvia `valor_total_total` (chave que nenhum consumidor lê)
+em vez de `valor_contratado_total` (a chave que `consolidado.js::loadKPIs` de fato lê,
+com fallback pra `valor_total`), e nunca calculava `n_emissores_distintos` -- os cards
+"Volume total emitido" e "Emissores distintos" apareciam vazios (`-`) na tela,
+confirmado ao vivo pelo Browser pane ANTES da correção. Corrigido adicionando
+`COUNT(DISTINCT cnpj_emissor)` e renomeando/duplicando a chave de valor total pro nome
+que o contrato documentado (tabela da seção Frontend) e o frontend já esperavam.
+
+**Achado paralelo, fora do escopo desta sessão (não corrigido, só registrado)**:
+`GET /api/primario/instrumentos`/`/filtros` devolvem `"CPR-F"` como um
+`instrumento_padronizado` real na base -- a seção "Instrumentos em escopo" deste mesmo
+arquivo documenta CPR-F como explicitamente FORA de escopo ("CPR não é valor
+mobiliário registrado na CVM... nunca apareceria neste dataset"). Como isso é claramente
+verdade sobre a fonte oficial da CVM, a presença de linhas `CPR-F` sugere ou (a) a CVM
+passou a listar esse instrumento desde a redação daquele trecho, ou (b) um bug de
+classificação em `src/parse_cvm.py`/`unify_primario.py::INSTRUMENTO_PADRONIZADO_MAP`.
+Investigação e eventual correção são trabalho da camada de pipeline de dados
+(`src/parse_cvm.py`/`src/unify_primario.py`), fora do escopo desta sessão (só
+`webapp/primario/routes.py`) -- não foi possível confirmar qual das duas hipóteses é a
+correta sem ler o CSV de origem mais recente.
+
+**Testado ao vivo nesta sessão (2026-09-16, contra produção/Aiven)**: as 14 rotas novas
++ o fix de `kpis` foram testadas por 2 caminhos: (1) via `curl`/`urllib` direto, com uma
+conta de teste temporária criada e apagada depois (mesmo procedimento documentado em
+"Coisas a saber antes de mexer") -- todas devolveram `200` com dados reais, incluindo
+os parâmetros exatos que o frontend manda (`data_inicio`/`data_fim`/`granularidade`,
+filtros combinados `uf`+`instrumento`, `setor` exato pra tendências/subsetores/
+segmentos, erro `422` esperado quando `setor` obrigatório falta em
+`/tendencias/subsetores`); (2) **end-to-end pelo Browser pane**, logado de verdade
+(`fetch('/api/login', ...)`, mesmo caminho documentado em "Coisas a saber antes de
+mexer"), servindo `webapp/static/` via `uvicorn` local contra o MESMO banco de
+produção: cliquei no toggle de mercado (`#brand-toggle`), confirmei visualmente que o
+Consolidado do modo Primário carrega KPIs/gráficos reais (incluindo os 2 dashboards
+novos "Taxas por indexador" -- amostra 371/17.420, 2,1% -- e "Prazos por instrumento" --
+1.859/17.420, 10,7%), e abri a aba Tendências & Insights confirmando que a exceção JS
+relatada pelo coordenador (`Cannot read properties of undefined (reading 'filter')` em
+`tendencias.js`, por causa de `/api/primario/tendencias/setores` 404) **não ocorre
+mais** -- a aba renderiza corretamente (`Setores do emissor em alta/queda`, `Detalhe
+por subsetor/segmento`), confirmado tanto visualmente (screenshot) quanto via
+`read_network_requests` (todas as chamadas `/api/primario/tendencias/*` retornando
+`200`). Conta de teste e sessão apagadas ao final (ver "Coisas a saber antes de mexer").
+**Não testado**: comportamento de favoritar/histórico de busca no modo Primário (já
+documentado como limitação conhecida na seção Frontend, não faz parte desta
+reconciliação) e o formato exato que o frontend de fato RENDERIZA nos gráficos de
+Chart.js pixel a pixel (só confirmado que os elementos aparecem com dado real, sem
+exceção JS -- não uma inspeção visual detalhada de cada gráfico).
+
 ## Radar de Crédito Primário — Frontend
 
 Construído em 2026-09-16, em cima do schema de `operations_primario` (ver seção "Radar de
