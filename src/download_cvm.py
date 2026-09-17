@@ -9,6 +9,15 @@ original ja dizia "vem dentro de um .zip", so a extensao na URL escrita estava
 errada). Corrigido aqui: CVM_URL/META_URL usam .zip; o CSV/TXT extraidos ficam com
 os nomes originais dentro do zip.
 
+ACHADO REAL #2 (2026-09-16, mesmo dia, achado pelo coordenador DEPOIS que o pipeline
+inicial ja tinha rodado): o zip contem DOIS CSVs (idem o zip do dicionario de dados,
+DOIS TXTs) -- "oferta_distribuicao.csv" (dataset original deste pipeline) E
+"oferta_resolucao_160.csv" (dataset RELACIONADO mas de schema DIFERENTE -- rito
+automatico da Resolucao CVM 160, sucessora da ICVM 400/476 para a maior parte das
+emissoes modernas -- ver src/parse_cvm_resolucao160.py e CLAUDE.md). Os DOIS agora
+sao baixados/extraidos do MESMO zip (evita baixar o mesmo arquivo de ~5.3MB duas
+vezes so pra pegar o segundo membro).
+
 Licenca ODbL, mantido pela SRE/CVM, atualizado diariamente (confirmado: o mesmo link
 sempre aponta para o snapshot mais recente, sem versionamento por data na URL)."""
 import datetime
@@ -29,22 +38,31 @@ META_URL = "https://dados.cvm.gov.br/dados/OFERTA/DISTRIB/META/meta_oferta_distr
 CVM_CSV_PATH = RAW_DIR / "cvm_oferta_distribuicao.csv"
 CVM_META_PATH = RAW_DIR / "cvm_meta_oferta_distribuicao.txt"
 
+# Segundo membro do MESMO zip (ver ACHADO REAL #2 acima) -- Resolucao CVM 160, rito
+# automatico. Nome de arquivo proprio (nunca confundir com o staging/tabela final,
+# que usa o sufixo "_resolucao_160" por extenso).
+RESOLUCAO160_CSV_PATH = RAW_DIR / "cvm_oferta_resolucao_160.csv"
+RESOLUCAO160_META_PATH = RAW_DIR / "cvm_meta_oferta_resolucao_160.txt"
 
-def _download_and_extract(url: str, dest: Path, nome_preferido_contem: str, timeout: int = 180) -> Path:
-    """Baixa um .zip inteiro em memoria (arquivos pequenos, poucos MB -- ver tamanhos
-    reais confirmados: ~5.3MB o CSV zipado, ~3KB o dicionario de dados) e extrai o
-    arquivo interno cujo nome contem `nome_preferido_contem` para `dest`.
+
+def _baixar_zip(url: str, timeout: int = 180) -> bytes:
+    print(f"Baixando {url}")
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
+
+def _extrair_membro(zip_bytes: bytes, dest: Path, nome_preferido_contem: str) -> Path:
+    """Extrai do zip (ja em memoria) o arquivo interno cujo nome contem
+    `nome_preferido_contem`, para `dest`.
 
     ACHADO REAL (2026-09-16): o zip da CVM NAO contem um unico arquivo -- tem DOIS
     (ex: "oferta_distribuicao.csv" E "oferta_resolucao_160.csv", esta ultima um
     dataset relacionado mas DIFERENTE -- RCVM 160, sucessora da ICVM 400/476 para o
-    rito de oferta, ver Rito_Oferta no dicionario de dados -- fora do escopo deste
-    pedido). Selecionar por nome (nao por indice/posicao no zip) evita depender da
-    ordem interna do arquivo, que a CVM nao documenta nem garante estavel."""
-    print(f"Baixando {url} -> {dest}")
-    resp = requests.get(url, timeout=timeout)
-    resp.raise_for_status()
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+    rito de oferta, ver Rito_Oferta/Rito_Requerimento no dicionario de dados).
+    Selecionar por nome (nao por indice/posicao no zip) evita depender da ordem
+    interna do arquivo, que a CVM nao documenta nem garante estavel."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         nomes = zf.namelist()
         candidatos = [n for n in nomes if nome_preferido_contem in n]
         if len(nomes) != 1:
@@ -63,11 +81,17 @@ def _download_and_extract(url: str, dest: Path, nome_preferido_contem: str, time
 
 
 def download_all():
-    _download_and_extract(CVM_URL, CVM_CSV_PATH, "oferta_distribuicao.csv")
-    _download_and_extract(META_URL, CVM_META_PATH, "meta_oferta_distribuicao.txt")
+    dados_zip = _baixar_zip(CVM_URL)
+    _extrair_membro(dados_zip, CVM_CSV_PATH, "oferta_distribuicao.csv")
+    _extrair_membro(dados_zip, RESOLUCAO160_CSV_PATH, "oferta_resolucao_160.csv")
+
+    meta_zip = _baixar_zip(META_URL)
+    _extrair_membro(meta_zip, CVM_META_PATH, "meta_oferta_distribuicao.txt")
+    _extrair_membro(meta_zip, RESOLUCAO160_META_PATH, "meta_oferta_resolucao_160.txt")
+
     stamp = RAW_DIR / "last_download_cvm.txt"
     stamp.write_text(datetime.datetime.now(datetime.timezone.utc).isoformat())
-    return CVM_CSV_PATH, CVM_META_PATH
+    return CVM_CSV_PATH, CVM_META_PATH, RESOLUCAO160_CSV_PATH, RESOLUCAO160_META_PATH
 
 
 if __name__ == "__main__":

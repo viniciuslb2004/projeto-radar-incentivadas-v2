@@ -1,11 +1,16 @@
 """Constroi a tabela unificada `operations_primario` (CVM -- Radar de Credito
-Primario) a partir de `cvm_oferta_distribuicao_raw`.
+Primario) a partir de DUAS staging tables: `cvm_oferta_distribuicao_raw` (arquivo
+principal, ver _build_primario_ops) E `cvm_oferta_resolucao_160_raw` (rito
+automatico/Resolucao CVM 160, integrado depois -- ver _build_primario_ops_r160 e
+CLAUDE.md, secao "Segunda fonte CVM"). As duas sao independentes (fonte, escopo de
+colunas e regras de preenchimento diferentes) mas alimentam a MESMA tabela final,
+nunca uma tabela paralela.
 
 Mesmo padrao incremental de unify.py::build_operations() (BNDES/FINEP): so processa
-linhas de `cvm_oferta_distribuicao_raw` que ainda NAO tem uma linha correspondente em
-`operations_primario` (raw_table + raw_id), e re-classifica emissores que ficaram sem
-setor resolvido assim que o CNPJ deles for enriquecido (mesmo mecanismo do
-enrich_cnae.py::enrich_pendentes_via_api ja usado pela FINEP).
+linhas de cada staging table que ainda NAO tem uma linha correspondente em
+`operations_primario` (raw_table + raw_id, proprio por fonte), e re-classifica
+emissores que ficaram sem setor resolvido assim que o CNPJ deles for enriquecido
+(mesmo mecanismo do enrich_cnae.py::enrich_pendentes_via_api ja usado pela FINEP).
 
 Diferente de `operations` (BNDES=nativo / FINEP=enriquecido ou pendente), aqui so
 existem DOIS estados possiveis por linha: setor_emissor resolvido, ou NULL (ainda
@@ -43,6 +48,23 @@ INSTRUMENTO_PADRONIZADO_MAP = {
     "LETRAS FINANCEIRAS": "Letra Financeira",
     "CERTIFICADOS DE DIREITOS CREDITORIOS DO AGRONEGOCIO - CDCA": "CDCA",
     "CEDULAS DE CREDITO BANCARIO - CCB": "CCB",
+    # Chaves abaixo: valores REAIS de `Valor_Mobiliario` no segundo CSV da CVM
+    # (oferta_resolucao_160.csv, rito automatico -- ver
+    # src/parse_cvm_resolucao160.py e CLAUDE.md) -- strings DIFERENTES das de
+    # `Tipo_Ativo` acima para o MESMO instrumento (ex: "Debêntures" em vez de
+    # "DEBÊNTURES SIMPLES", sem o sufixo "- CRI"/"- CRA"/"- CDCA") -- confirmado
+    # ao vivo contra as 14.493 linhas do CSV de 2026-09-16.
+    "DEBENTURES": "Debênture",
+    "CERTIFICADOS DE RECEBIVEIS IMOBILIARIOS": "CRI",
+    "CERTIFICADOS DE RECEBIVEIS DO AGRONEGOCIO": "CRA",
+    "CERTIFICADO DE DIREITOS CREDITORIOS DO AGRONEGOCIO": "CDCA",
+    # CPR-F (Cedula de Produto Rural Financeira): CORRECAO REAL (2026-09-16) --
+    # documentado antes como fora de escopo por falta de fonte aberta, mas o
+    # coordenador achou 18 linhas reais neste segundo CSV (Klabin, Suzano,
+    # Duratex etc.) -- ver comentario em parse_cvm.py::ESCOPO_REGEX_DIVIDA e
+    # CLAUDE.md. Nunca aparece em Tipo_Ativo do arquivo principal (confirmado:
+    # 0 ocorrencias), so em Valor_Mobiliario deste segundo arquivo.
+    "CEDULA DE PRODUTO RURAL FINANCEIRA": "CPR-F",
 }
 
 
@@ -206,6 +228,12 @@ OPERATIONS_PRIMARIO_COLS = [
     "valor_total", "quantidade_total", "preco_unitario",
     "incentivada", "regime_fiduciario", "oferta_inicial",
     "indexador_padronizado", "taxa_valor", "taxa_tipo", "juros", "atualizacao_monetaria",
+    # Colunas abaixo: SO preenchidas para linhas vindas de
+    # cvm_oferta_resolucao_160_raw (ver _build_primario_ops_r160) -- sempre NULL
+    # para linhas de cvm_oferta_distribuicao_raw (arquivo principal nao tem
+    # equivalente a nenhuma delas). Ver CLAUDE.md.
+    "numero_requerimento", "status_requerimento", "tipo_lastro",
+    "agente_fiduciario", "custodiante", "descricao_garantias",
     "raw_table", "raw_id",
 ]
 
@@ -341,7 +369,128 @@ def _build_primario_ops(conn, emissor_lookup: pd.DataFrame) -> pd.DataFrame:
         "taxa_tipo": [t[1] for t in taxas],
         "juros": df["juros"],
         "atualizacao_monetaria": df["atualizacao_monetaria"],
+        # Campos exclusivos de cvm_oferta_resolucao_160_raw -- arquivo principal
+        # nao tem equivalente a nenhum deles, ver OPERATIONS_PRIMARIO_COLS acima.
+        "numero_requerimento": None,
+        "status_requerimento": None,
+        "tipo_lastro": None,
+        "agente_fiduciario": None,
+        "custodiante": None,
+        "descricao_garantias": None,
         "raw_table": "cvm_oferta_distribuicao_raw",
+        "raw_id": df["id"],
+    })
+    return out
+
+
+# ============ oferta_resolucao_160.csv -> operations_primario ============
+def _data_referencia_r160(df: pd.DataFrame) -> pd.Series:
+    """Equivalente a _data_referencia() acima, mas usando os campos de data que
+    ESTE arquivo realmente tem (nao tem data_emissao/data_vencimento -- ver
+    CLAUDE.md). Ordem de preferencia (mais "definitivo"/economicamente
+    significativo primeiro):
+    1. data_registro (quando a CVM concedeu o registro -- analogo a
+       data_registro_oferta no arquivo principal)
+    2. data_encerramento (fechamento do requerimento/oferta)
+    3. data_deliberacao_aprovou_oferta (deliberacao societaria que aprovou a oferta)
+    4. data_requerimento (ULTIMO recurso, mas o UNICO campo sem nenhum nulo neste
+       dataset -- garante data_referencia preenchida para praticamente 100% das
+       linhas, mesmo quando os 3 campos mais "definitivos" acima faltam)
+    NUNCA inventada -- mesma regra do resto do pipeline."""
+    return (
+        df["data_registro"]
+        .fillna(df["data_encerramento"])
+        .fillna(df["data_deliberacao_aprovou_oferta"])
+        .fillna(df["data_requerimento"])
+    )
+
+
+def _build_primario_ops_r160(conn, emissor_lookup: pd.DataFrame) -> pd.DataFrame:
+    """Constroi linhas de operations_primario a partir de
+    cvm_oferta_resolucao_160_raw -- MESMO padrao incremental de
+    _build_primario_ops (so raw_id ainda nao presente em operations_primario para
+    esta raw_table).
+
+    Diferencas deliberadas em relacao a _build_primario_ops (arquivo principal),
+    todas documentadas em CLAUDE.md:
+    - data_emissao/data_vencimento/prazo_dias/prazo_meses SEMPRE None -- esta
+      fonte nao tem essas datas (schema focado em ESTRUTURA da oferta, nao em
+      remuneracao/vencimento do titulo). NUNCA inferir prazo a partir de datas de
+      PROCESSO (data_requerimento/data_registro) -- seriam conceitos diferentes.
+    - indexador_padronizado/taxa_valor/taxa_tipo/juros/atualizacao_monetaria
+      SEMPRE None pelo mesmo motivo (sem Juros/Atualizacao_Monetaria na fonte).
+    - status_requerimento: linha e mantida MESMO quando o requerimento nao
+      chegou a virar uma oferta de fato ('Registro Caducado'/'Oferta Revogada'/
+      'Requerimento Expirado'/'Oferta Suspensa', ~4% das linhas em escopo) --
+      decisao deliberada de NUNCA esconder dado real (mesma regra de ouro do
+      resto do projeto), so EXPOR o status para quem for consumir depois (rotas/
+      frontend, fora do escopo desta sessao) poder filtrar se quiser.
+    """
+    df = pd.read_sql(
+        "SELECT * FROM cvm_oferta_resolucao_160_raw WHERE id NOT IN "
+        "(SELECT raw_id FROM operations_primario WHERE raw_table = 'cvm_oferta_resolucao_160_raw')",
+        get_engine(),
+    )
+    if df.empty:
+        return df
+
+    df = df.merge(emissor_lookup, left_on="cnpj_emissor", right_on="cnpj", how="left")
+
+    data_ref = _data_referencia_r160(df)
+    dt = pd.to_datetime(data_ref, errors="coerce")
+
+    out = pd.DataFrame({
+        "instrumento": df["valor_mobiliario"],
+        "instrumento_padronizado": df["valor_mobiliario"].map(_instrumento_padronizado),
+        "numero_processo": df["numero_processo"],
+        "numero_registro_oferta": None,       # namespace diferente de numero_requerimento -- ver comentario na coluna
+        "tipo_oferta": df["tipo_oferta"],
+        "rito_oferta": df["rito_requerimento"],  # sempre 'Automatico' nesta fonte
+        "modalidade_oferta": df["tipo_requerimento"],
+        "cnpj_emissor": df["cnpj_emissor"],
+        "nome_emissor": df["nome_emissor"],
+        "razao_social_oficial_emissor": df["razao_social_oficial"],
+        "setor_emissor": df["setor_bndes_mapeado"],
+        "subsetor_emissor": df["subsetor_bndes_mapeado"],
+        "segmento_emissor": df["cnae_descricao"],
+        "porte_emissor": df["porte_empresa"],
+        "natureza_juridica_emissor": df["natureza_juridica"],
+        "uf_emissor": df["uf"],
+        "municipio_emissor": df["municipio"],
+        "cnpj_lider": df["cnpj_lider"],
+        "nome_lider": df["nome_lider"],
+        "emissao": df["emissao"],
+        "serie": None,          # fonte nao tem campo de serie (uma linha = um requerimento, nao uma serie)
+        "classe_ativo": None,
+        "especie_ativo": None,
+        "forma_ativo": None,
+        "data_emissao": None,             # NUNCA inferida -- fonte nao tem esse campo, ver docstring
+        "data_vencimento": None,          # idem
+        "data_registro_oferta": df["data_registro"],
+        "data_encerramento_oferta": df["data_encerramento"],
+        "data_referencia": data_ref,
+        "ano": dt.dt.year,
+        "trimestre": dt.dt.quarter,
+        "prazo_dias": None,               # NUNCA inferido de datas de PROCESSO -- ver docstring
+        "prazo_meses": None,
+        "valor_total": df["valor_total_registrado"],
+        "quantidade_total": df["qtde_total_registrada"],
+        "preco_unitario": None,           # fonte nao tem preco unitario
+        "incentivada": _sim_nao_para_bool(df["titulo_incentivado"]),
+        "regime_fiduciario": _sim_nao_para_bool(df["regime_fiduciario"]),
+        "oferta_inicial": _sim_nao_para_bool(df["oferta_inicial"]),
+        "indexador_padronizado": None,     # fonte nao tem Juros/Atualizacao_Monetaria
+        "taxa_valor": None,
+        "taxa_tipo": None,
+        "juros": None,
+        "atualizacao_monetaria": None,
+        "numero_requerimento": df["numero_requerimento"],
+        "status_requerimento": df["status_requerimento"],
+        "tipo_lastro": df["tipo_lastro"],
+        "agente_fiduciario": df["agente_fiduciario"],
+        "custodiante": df["custodiante"],
+        "descricao_garantias": df["descricao_garantias"],
+        "raw_table": "cvm_oferta_resolucao_160_raw",
         "raw_id": df["id"],
     })
     return out
@@ -566,25 +715,45 @@ def backfill_busca_primario(conn=None, tamanho_lote: int = 2000) -> int:
 
 
 def build_operations_primario() -> dict:
+    """Integra as DUAS fontes CVM em operations_primario -- cvm_oferta_distribuicao_raw
+    (arquivo principal) E cvm_oferta_resolucao_160_raw (rito automatico, ver
+    _build_primario_ops_r160 acima e CLAUDE.md). Cada fonte e incremental
+    independentemente (raw_table+raw_id proprios), inserida na MESMA tabela final --
+    nunca uma tabela paralela."""
     conn = get_connection()
     try:
         emissor_lookup = _load_emissor_lookup(conn)
-        novas = _build_primario_ops(conn, emissor_lookup)
+        novas_dist = _build_primario_ops(conn, emissor_lookup)
+        novas_r160 = _build_primario_ops_r160(conn, emissor_lookup)
 
+        # Recupera os ids autoincrement recem-atribuidos de CADA fonte por raw_id
+        # (raw_table difere por fonte -- 'cvm_oferta_distribuicao_raw' vs.
+        # 'cvm_oferta_resolucao_160_raw', ver OPERATIONS_PRIMARIO_COLS) -- precisa dos
+        # dois lados pra alimentar o motor de busca (_atualizar_busca_primario) tambem
+        # nas linhas novas do segundo arquivo, nao so do principal.
         novos_ids = []
-        if not novas.empty:
-            insert_new_rows(conn, "operations_primario", novas, OPERATIONS_PRIMARIO_COLS)
-            conn.commit()
-            # recupera os ids autoincrement recem-atribuidos, por raw_id (raw_table e
-            # sempre 'cvm_oferta_distribuicao_raw' aqui -- ver OPERATIONS_PRIMARIO_COLS)
-            raw_ids = novas["raw_id"].astype(int).tolist()
+
+        def _ids_recem_inseridos(raw_table: str, raw_ids: list) -> list:
             placeholders = ", ".join("?" * len(raw_ids))
             rows = conn.execute(
-                f"SELECT id FROM operations_primario WHERE raw_table = 'cvm_oferta_distribuicao_raw' "
-                f"AND raw_id IN ({placeholders})",
-                raw_ids,
+                f"SELECT id FROM operations_primario WHERE raw_table = ? AND raw_id IN ({placeholders})",
+                [raw_table] + raw_ids,
             ).fetchall()
-            novos_ids = [r[0] for r in rows]
+            return [r[0] for r in rows]
+
+        if not novas_dist.empty:
+            insert_new_rows(conn, "operations_primario", novas_dist, OPERATIONS_PRIMARIO_COLS)
+            conn.commit()
+            novos_ids += _ids_recem_inseridos(
+                "cvm_oferta_distribuicao_raw", novas_dist["raw_id"].astype(int).tolist()
+            )
+        if not novas_r160.empty:
+            insert_new_rows(conn, "operations_primario", novas_r160, OPERATIONS_PRIMARIO_COLS)
+            conn.commit()
+            novos_ids += _ids_recem_inseridos(
+                "cvm_oferta_resolucao_160_raw", novas_r160["raw_id"].astype(int).tolist()
+            )
+        if novos_ids:
             _atualizar_busca_primario(conn, novos_ids)
 
         reclassificados_ids = _reclassificar_emissores_pendentes(conn, emissor_lookup)
@@ -602,13 +771,19 @@ def build_operations_primario() -> dict:
     finally:
         conn.close()
 
-    n_novas = len(novas) if not novas.empty else 0
+    n_novas_dist = len(novas_dist) if not novas_dist.empty else 0
+    n_novas_r160 = len(novas_r160) if not novas_r160.empty else 0
+    n_novas = n_novas_dist + n_novas_r160
     print(
-        f"operations_primario: {n_novas} linhas novas, {len(reclassificados_ids)} emissores reclassificados "
-        f"(pendente -> resolvido), {total_ops} no total ({n_pendentes} emissores ainda pendentes de enriquecimento)."
+        f"operations_primario: {n_novas} linhas novas ({n_novas_dist} de cvm_oferta_distribuicao_raw, "
+        f"{n_novas_r160} de cvm_oferta_resolucao_160_raw), {len(reclassificados_ids)} emissores "
+        f"reclassificados (pendente -> resolvido), {total_ops} no total "
+        f"({n_pendentes} emissores ainda pendentes de enriquecimento)."
     )
     return {
         "novas": n_novas,
+        "novas_dist": n_novas_dist,
+        "novas_r160": n_novas_r160,
         "total": total_ops,
         "pendentes": n_pendentes,
         "reclassificados_ids": reclassificados_ids,

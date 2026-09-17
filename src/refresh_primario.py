@@ -16,6 +16,7 @@ import traceback
 from db import get_connection, init_db
 import download_cvm
 import parse_cvm
+import parse_cvm_resolucao160
 import unify_primario
 import enrich_cnae
 from sector_taxonomy import build_divisao_map
@@ -60,7 +61,9 @@ def run_refresh_primario() -> str:
 
     try:
         download_cvm.download_all()
-        _, cvm_raw_rows = parse_cvm.parse_cvm()
+        _, cvm_raw_rows_dist = parse_cvm.parse_cvm()
+        _, cvm_raw_rows_r160 = parse_cvm_resolucao160.parse_cvm_resolucao160()
+        cvm_raw_rows = cvm_raw_rows_dist + cvm_raw_rows_r160
         resultado_unify = unify_primario.build_operations_primario()
         ops_rows = resultado_unify["total"]
         pendentes = resultado_unify["pendentes"]

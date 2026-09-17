@@ -96,19 +96,34 @@ DATE_COLS = [
 CVM_HASH_COLS = list(CVM_COLUMNS.values())
 
 # Instrumentos de DIVIDA em escopo (item 2 do pedido) -- regex com \b (word boundary)
-# sobre o texto MAIUSCULO/SEM ACENTO de Tipo_Ativo, para casar tanto o nome por
-# extenso quanto a sigla (ex: "CERTIFICADOS DE RECEBIVEIS IMOBILIARIOS - CRI" E
-# "CERTIFICADO DE RECEBIVEIS IMOBILIARIOS" precisam bater, mas SEM abrir mao de \b
-# nas siglas curtas -- CRI/CRA/CCB/CDCA sao 3-4 letras, um match por substring cru
-# arriscaria falso-positivo). Confirmado contra os 38 valores distintos reais de
-# Tipo_Ativo no CSV (ver CLAUDE.md): esta regex bate exatamente os 14 valores de
-# divida esperados, nem mais nem menos -- incluindo os 3 casos "TOKENS
-# REPRESENTATIVOS DE DEBENTURES (SANDBOX REGULATORIO)" (token e representativo de
-# uma debenture de verdade, mesma natureza de credito) e excluindo de proposito
-# WARRANTS/WARRANTS AGROPECUARIOS (nao sao instrumento de divida) e as 3 linhas
-# ambiguas "CERTIFICADOS DE RECEBIVEIS" (sem qualificador IMOBILIARIOS/AGRONEGOCIO,
-# nao da pra saber se e CRI ou CRA sem inventar).
-_ESCOPO_REGEX = re.compile(
+# sobre o texto MAIUSCULO/SEM ACENTO de Tipo_Ativo (aqui) OU Valor_Mobiliario (em
+# parse_cvm_resolucao160.py -- MESMA regex, reaproveitada, ver ESCOPO_REGEX_DIVIDA
+# abaixo), para casar tanto o nome por extenso quanto a sigla (ex: "CERTIFICADOS DE
+# RECEBIVEIS IMOBILIARIOS - CRI" E "CERTIFICADO DE RECEBIVEIS IMOBILIARIOS" precisam
+# bater, mas SEM abrir mao de \b nas siglas curtas -- CRI/CRA/CCB/CDCA sao 3-4
+# letras, um match por substring cru arriscaria falso-positivo). Confirmado contra
+# os 38 valores distintos reais de Tipo_Ativo no CSV (ver CLAUDE.md): esta regex
+# bate exatamente os 14 valores de divida esperados, nem mais nem menos -- incluindo
+# os 3 casos "TOKENS REPRESENTATIVOS DE DEBENTURES (SANDBOX REGULATORIO)" (token e
+# representativo de uma debenture de verdade, mesma natureza de credito) e excluindo
+# de proposito WARRANTS/WARRANTS AGROPECUARIOS (nao sao instrumento de divida) e as
+# 3 linhas ambiguas "CERTIFICADOS DE RECEBIVEIS" (sem qualificador IMOBILIARIOS/
+# AGRONEGOCIO, nao da pra saber se e CRI ou CRA sem inventar).
+#
+# CORRECAO REAL (2026-09-16, achado do coordenador DEPOIS que este pipeline ja
+# tinha rodado pela primeira vez): a exclusao de CPR-F documentada abaixo (e no
+# CLAUDE.md, ate esta correcao) estava ERRADA -- CPR-F *e* um valor mobiliario
+# registrado na CVM, so nao aparecia no dataset "oferta_distribuicao.csv" porque
+# esse instrumento e tratado pelo rito automatico (Resolucao CVM 160), reportado no
+# segundo CSV do MESMO zip ("oferta_resolucao_160.csv", ver
+# src/parse_cvm_resolucao160.py) -- 18 linhas reais confirmadas la (Klabin, Suzano,
+# Duratex etc.). Termo adicionado aqui (\bCPR-F\b|PRODUTO RURAL FINANCEIRA) mesmo
+# este arquivo (oferta_distribuicao.csv) nunca tendo tido nenhuma linha com esse
+# termo (confirmado ao vivo: 0 ocorrencias de "PRODUTO RURAL"/"CPR" em Tipo_Ativo) --
+# adicionar aqui e inofensivo para ESTE arquivo e garante que os dois parsers
+# (parse_cvm.py e parse_cvm_resolucao160.py) compartilham a MESMA definicao de
+# escopo, sem risco de duas regras divergirem com o tempo.
+ESCOPO_REGEX_DIVIDA = re.compile(
     r"DEBENTURE"
     r"|RECEBIVEIS IMOBILIARIOS|\bCRI\b"
     r"|RECEBIVEIS DO AGRONEGOCIO|\bCRA\b"
@@ -116,15 +131,13 @@ _ESCOPO_REGEX = re.compile(
     r"|NOTAS COMERCIAIS"
     r"|LETRAS FINANCEIRAS"
     r"|DIREITOS CREDITORIOS DO AGRONEGOCIO|\bCDCA\b"
-    r"|CREDITO BANCARIO|\bCCB\b",
+    r"|CREDITO BANCARIO|\bCCB\b"
+    r"|PRODUTO RURAL FINANCEIRA|\bCPR-F\b",
     re.IGNORECASE,
 )
-
-# CPR-F (Cedula de Produto Rural Financeira) foi pedido explicitamente como FORA de
-# escopo (sem fonte aberta disponivel) -- nem sequer aparece como valor de Tipo_Ativo
-# neste dataset da CVM (CPR nao e um valor mobiliario registrado na CVM, e um titulo
-# de credito rural fora da competencia dela), entao nao ha nada a excluir aqui: ela
-# simplesmente nunca entraria no dataset de origem.
+# Alias privado (nome usado no resto deste arquivo) -- mantido para nao precisar
+# renomear todos os usos abaixo.
+_ESCOPO_REGEX = ESCOPO_REGEX_DIVIDA
 
 
 def remover_acentos(texto: str) -> str:
