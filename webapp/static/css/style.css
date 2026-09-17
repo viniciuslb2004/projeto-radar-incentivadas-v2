@@ -72,6 +72,29 @@ body.mercado-primario {
    porque ja e o padrao visivel de qualquer elemento normal. */
 [data-mercado-only="primario"] { display: none; }
 
+/* BUG REAL encontrado e corrigido no redesenho de 2026-09-17 (cards novos
+   "Estrutura da oferta"/"Por tipo de lastro" do Consolidado Primario): a
+   regra generica acima (`[data-mercado-only="primario"] {display:none}`)
+   so ficava "vencida" de verdade em elementos que JA tinham sua propria
+   regra de `display` competindo por ordem de cascata (ex: `.grid-2 {
+   display:grid}`, definida DEPOIS da regra acima no arquivo, ganha o
+   empate de especificidade por ordem de fonte) -- e o mecanismo em JS
+   (`_aplicarIdentidadeMercado`) so faz `el.style.display = "" ` pro caso
+   "deveria mostrar" (limpa o inline, nao forca um valor), contando com
+   essa cascata pra "revelar" o elemento. Um `.card` normal NUNCA teve
+   regra de `display` propria (usa o bloco padrao do navegador), entao
+   nesse caso NADA vencia a regra generica de escondido, e o card ficava
+   invisivel mesmo no mercado certo -- confirmado ao vivo (Browser pane,
+   `getComputedStyle` retornando "none" com o inline ja limpo). Corrigido
+   com uma regra mais especifica, gatilhada pela MESMA classe que
+   `_aplicarIdentidadeMercado` já aplica ao <body> (`body.mercado-primario`,
+   toggled independente do loop por elemento) -- specificity subindo pra
+   (0,3,1), vence tanto a regra generica quanto qualquer possivel regra de
+   `.card` no meio do caminho. Nao precisou mudar `_aplicarIdentidadeMercado`
+   em si (continua so limpando o inline pro caso "mostrar"), nem afeta o
+   caso `.grid-2` que ja funcionava (a regra abaixo so mira `.card`). */
+body.mercado-primario .card[data-mercado-only="primario"] { display: block; }
+
 * { box-sizing: border-box; }
 
 /* ============ Tela de carregamento inicial ============

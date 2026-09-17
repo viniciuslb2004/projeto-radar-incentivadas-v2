@@ -784,6 +784,149 @@ def graficos_taxas(instrumento: str = None, uf: str = None, setor: str = None, d
         conn.close()
 
 
+@router.get("/serie_temporal_incentivada")
+def serie_temporal_incentivada(
+    instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None,
+    data_fim: str = None, granularidade: str = "trimestral",
+):
+    """ENDPOINT NOVO -- redesenho do Consolidado/Tendencias pra emissao primaria
+    (ver CLAUDE.md, secao Frontend, tabela de decisoes card-a-card). Espelha
+    `/serie_temporal`, trocando o agrupamento por `instrumento_padronizado`
+    por `incentivada` (Lei 12.431, mapeado pra 'Sim'/'Não'/'Não informado') --
+    complementa o donut estatico "Estrutura da oferta" (`/estrutura_mercado`,
+    so a composicao ATUAL) com a dimensao de TEMPO: como a participação de
+    emissões incentivadas evoluiu.
+
+    **Por que este endpoint existe e não um equivalente para `indexador_padronizado`**:
+    a primeira versão desta reconciliação tentou uma série temporal por
+    indexador, mas os dados reais mostraram um problema de fundo, não um
+    detalhe de implementação -- `indexador_padronizado` só vem do arquivo
+    principal da CVM (`cvm_oferta_distribuicao_raw`), que praticamente para de
+    contribuir linhas a partir de 2023 (a atividade recente é quase toda via
+    `cvm_oferta_resolucao_160_raw`, que NUNCA tem indexador -- ver CLAUDE.md,
+    seção "Segunda fonte CVM"). Um gráfico de evolução por indexador cairia a
+    zero exatamente nos anos mais recentes (2023-2026), o que pareceria "o
+    mercado indexado sumiu" quando na verdade é só um artefato de qual
+    arquivo CVM cobre qual período -- enganoso demais pra publicar. `incentivada`
+    não tem esse problema: é populada a partir de AMBOS os arquivos CVM
+    (`oferta_incentivo_fiscal`/`titulo_incentivado`, ver `unify_primario.py`),
+    com cobertura real e contínua 2010-2026 (confirmado ao vivo, 2026-09-17)."""
+    if granularidade not in GRANULARIDADES_SERIE_PRIMARIO:
+        granularidade = "trimestral"
+    periodo_expr = GRANULARIDADES_SERIE_PRIMARIO[granularidade]
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT ano, {periodo_expr} AS periodo,
+                   CASE incentivada WHEN TRUE THEN 'Sim' WHEN FALSE THEN 'Não' ELSE 'Não informado' END,
+                   COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            {"AND" if where else "WHERE"} ano IS NOT NULL
+            GROUP BY ano, periodo, CASE incentivada WHEN TRUE THEN 'Sim' WHEN FALSE THEN 'Não' ELSE 'Não informado' END
+            ORDER BY ano, periodo
+            """,
+            params,
+        ).fetchall()
+        return [
+            {"ano": r[0], "periodo": r[1], "incentivada": r[2], "n_operacoes": r[3], "valor_total": r[4] or 0}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+# Mesmo padrao de "nunca filtrar/esconder silenciosamente" ja usado em
+# status_requerimento (ver CLAUDE.md, secao Pipeline CVM) -- COALESCE NULL
+# como rotulo explicito em vez de excluir a linha da contagem.
+_LIMIT_RANKING_ESTRUTURA = 10
+
+
+def _ranking_texto_com_cobertura(cur, where, params, coluna, limit=_LIMIT_RANKING_ESTRUTURA):
+    """Ranking generico top-N de uma coluna de texto esparsa (agente_fiduciario/
+    custodiante -- so preenchidas para linhas vindas de cvm_oferta_resolucao_160_raw,
+    ver CLAUDE.md) + cobertura real (nunca um numero fixo, mesmo padrao de
+    /graficos/taxas e /graficos/prazos)."""
+    n_total = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where}", params).fetchone()[0] or 0
+    where_col = where + (" AND " if where else "WHERE ") + f"{coluna} IS NOT NULL"
+    n_com_dado = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where_col}", params).fetchone()[0] or 0
+    rows = cur.execute(
+        f"""
+        SELECT {coluna}, COUNT(*), SUM(valor_total)
+        FROM operations_primario {where_col}
+        GROUP BY {coluna}
+        ORDER BY SUM(valor_total) DESC
+        LIMIT ?
+        """,
+        params + [limit],
+    ).fetchall()
+    return {
+        "n_total": n_total,
+        "n_com_dado": n_com_dado,
+        "cobertura_pct": (n_com_dado / n_total * 100) if n_total else 0,
+        "linhas": [{"nome": r[0], "n": r[1], "valor_total": r[2] or 0} for r in rows],
+    }
+
+
+@router.get("/estrutura_mercado")
+def estrutura_mercado(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """ENDPOINT NOVO -- redesenho do Consolidado/Tendencias (ver CLAUDE.md,
+    secao Frontend). Reune 3 dimensoes de ESTRUTURA da oferta que nunca
+    tinham nenhum card, deliberadamente num UNICO endpoint (mesmo espirito de
+    `/kpis` bundlar varias agregacoes pequenas): `incentivada` (Lei 12.431) e
+    `regime_fiduciario` (booleanos, alimentam o card "Estrutura da oferta" do
+    Consolidado) + `agentes_fiduciarios`/`custodiantes` (ranking top-10,
+    alimentam o card "Principais agentes fiduciários e custodiantes" de
+    Tendencias) + `tipo_lastro` (Pulverizado/Concentrado, mesmo card de
+    Consolidado). `incentivada`/`regime_fiduciario` sao S/N na fonte CVM mas
+    podem ser NULL (campo vazio) -- SEMPRE as 3 categorias (sim/nao/
+    nao_informado) na resposta, nunca só 2, pra nunca esconder uma fatia
+    real dos dados atras de um booleano que assume sempre preenchido."""
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        n_total = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where}", params).fetchone()[0] or 0
+
+        def bool_breakdown(coluna):
+            rows = cur.execute(
+                f"SELECT {coluna}, COUNT(*), SUM(valor_total) FROM operations_primario {where} GROUP BY {coluna}",
+                params,
+            ).fetchall()
+            out = {
+                "sim": {"n": 0, "valor_total": 0},
+                "nao": {"n": 0, "valor_total": 0},
+                "nao_informado": {"n": 0, "valor_total": 0},
+            }
+            for valor, n, soma in rows:
+                chave = "sim" if valor is True else ("nao" if valor is False else "nao_informado")
+                out[chave] = {"n": n, "valor_total": soma or 0}
+            return out
+
+        tipo_lastro_rows = cur.execute(
+            f"""
+            SELECT COALESCE(tipo_lastro, 'Não informado'), COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            GROUP BY COALESCE(tipo_lastro, 'Não informado')
+            ORDER BY SUM(valor_total) DESC
+            """,
+            params,
+        ).fetchall()
+
+        return {
+            "n_total": n_total,
+            "incentivada": bool_breakdown("incentivada"),
+            "regime_fiduciario": bool_breakdown("regime_fiduciario"),
+            "tipo_lastro": [{"tipo_lastro": r[0], "n": r[1], "valor_total": r[2] or 0} for r in tipo_lastro_rows],
+            "agentes_fiduciarios": _ranking_texto_com_cobertura(cur, where, params, "agente_fiduciario"),
+            "custodiantes": _ranking_texto_com_cobertura(cur, where, params, "custodiante"),
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/graficos/prazos")
 def graficos_prazos(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
     """ENDPOINT NOVO -- ver CLAUDE.md, secao Frontend, "Dashboards novos".

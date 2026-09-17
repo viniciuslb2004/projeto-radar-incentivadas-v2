@@ -1,8 +1,9 @@
 // Aba Tendencias & Insights: setores em alta/queda, subsetores, produtos, maiores operacoes.
 
-let chartProdutos, chartSubsetores, chartSegmentos;
+let chartProdutos, chartSubsetores, chartSegmentos, chartIncentivadaEvolucao, chartEstruturaRanking;
 let subsetorSelectInicializado = false;
 let segmentoSelectInicializado = false;
+let _ultimaEstruturaMercado = null; // cache da ultima /estrutura_mercado, reaproveitada pelo toggle sem refetch
 
 function fmtPeriodo(periodo) {
   if (!periodo) return "";
@@ -197,8 +198,22 @@ async function loadSegmentos(filters) {
 // redundante: mostra a composicao ATUAL por indexador, enquanto o
 // Consolidado mostra volume por instrumento. Suposicao de contrato: GET
 // /api/primario/tendencias/indexadores devolve [{indexador, valor_total}].
+// No modo Primario, indexador_padronizado tem cobertura real de só ~1,7%
+// (medido ao vivo, 2026-09-17 -- ver CLAUDE.md, seção Frontend): a maioria
+// das ofertas vem do rito automático/Resolução CVM 160, que NUNCA populate
+// esse campo (ver "Segunda fonte CVM"). A resposta de
+// `/tendencias/indexadores` inclui uma linha "Não informado" que sozinha
+// somava ~98% do total -- deixar essa fatia no gráfico o tornava
+// essencialmente ilegível (uma barra gigante + traços quase invisíveis).
+// Reformulado (mantendo o endpoint como está): filtra "Não informado" do
+// desenho e mostra a cobertura real como aviso explícito, mesmo padrão de
+// #chart-taxas-aviso/#chart-prazos-aviso. No Incentivado, produto/instrumento
+// tem cobertura tipicamente completa -- o aviso nunca aparece nesse caso.
 async function loadProdutos(filters) {
   const endpoint = _mercadoAtivo === "primario" ? "/api/primario/tendencias/indexadores" : "/api/tendencias/produtos";
+  const campo = _mercadoAtivo === "primario" ? "indexador" : "produto";
+  const aviso = document.getElementById("chart-produtos-aviso");
+  const vazio = document.getElementById("chart-produtos-vazio");
   let data;
   try {
     data = await fetchJSON(endpoint + "?" + qs(filters));
@@ -206,13 +221,39 @@ async function loadProdutos(filters) {
     data = [];
   }
   if (!Array.isArray(data)) data = [];
-  const campo = _mercadoAtivo === "primario" ? "indexador" : "produto";
+
+  let linhas = data;
+  if (_mercadoAtivo === "primario") {
+    const naoInformado = data.find((d) => d[campo] === "Não informado");
+    linhas = data.filter((d) => d[campo] !== "Não informado");
+    if (aviso) {
+      const totalOps = data.reduce((acc, d) => acc + (d.n_operacoes || 0), 0);
+      const nInformado = totalOps - (naoInformado ? naoInformado.n_operacoes || 0 : 0);
+      if (totalOps > 0) {
+        const pct = ((nInformado / totalOps) * 100).toFixed(1).replace(".", ",");
+        aviso.textContent = `⚠ Amostra parcial: indexador identificado em ${fmtNum(nInformado)} de ${fmtNum(totalOps)} operações (${pct}%) — a maior parte da atividade recente (2023+) vem do rito automático da CVM, que não registra esse campo.`;
+        aviso.style.display = "block";
+      } else {
+        aviso.style.display = "none";
+      }
+    }
+  } else if (aviso) {
+    aviso.style.display = "none";
+  }
+
+  if (!linhas.length) {
+    if (vazio) vazio.style.display = "block";
+    if (chartProdutos) { chartProdutos.destroy(); chartProdutos = null; }
+    return;
+  }
+  if (vazio) vazio.style.display = "none";
+
   if (chartProdutos) chartProdutos.destroy();
   chartProdutos = new Chart(document.getElementById("chart-produtos"), {
     type: "bar",
     data: {
-      labels: data.map((d) => d[campo]),
-      datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: AZUL_TONS[1] }],
+      labels: linhas.map((d) => d[campo]),
+      datasets: [{ data: linhas.map((d) => d.valor_total), backgroundColor: AZUL_TONS[1] }],
     },
     options: {
       indexAxis: "y",
@@ -222,6 +263,142 @@ async function loadProdutos(filters) {
       scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
     },
   });
+}
+
+// ---- Evolução da participação Lei 12.431 (incentivada) -- novo, só Primário ----
+// Complementa o donut "Estrutura da oferta" do Consolidado (composição
+// ATUAL) com a dimensão de TEMPO -- ver CLAUDE.md, seção Frontend, redesenho
+// 2026-09-17. Reaproveita `_sequenciaCompletaPeriodos`/`_rotuloPeriodoSerie`
+// (definidas em consolidado.js, carregado ANTES deste arquivo -- ver
+// <script> em index.html -- funções globais de script plano, não módulo).
+// Granularidade fixa em trimestral (Tendências não tem seletor de
+// granularidade próprio, diferente do Consolidado).
+//
+// Por que `incentivada` e não `indexador_padronizado`: uma primeira versão
+// tentou uma série por indexador, mas medido ao vivo contra produção esse
+// campo só vem do arquivo CVM principal, que praticamente para de
+// contribuir linhas a partir de 2023 -- o gráfico cairia a zero justo nos
+// anos mais recentes, sugerindo (de forma enganosa) que o mercado indexado
+// tivesse sumido, quando é só um artefato de qual arquivo CVM cobre qual
+// período (ver CLAUDE.md, seção "Segunda fonte CVM"). `incentivada` vem dos
+// DOIS arquivos CVM, com cobertura real contínua 2010-2026.
+async function loadIncentivadaEvolucao(filters) {
+  if (_mercadoAtivo !== "primario") {
+    if (chartIncentivadaEvolucao) { chartIncentivadaEvolucao.destroy(); chartIncentivadaEvolucao = null; }
+    return;
+  }
+  let data;
+  try {
+    data = await fetchJSON("/api/primario/serie_temporal_incentivada?" + qs({ ...filters, granularidade: "trimestral" }));
+  } catch (e) {
+    data = [];
+  }
+  if (!Array.isArray(data)) data = [];
+  const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
+  const periodos = _sequenciaCompletaPeriodos("trimestral", paresUnicos).map((s) => s.label);
+  // Ordem fixa (nao alfabetica/descoberta) pra cor ficar estavel entre
+  // filtros -- "Não informado" sempre por ultimo/cinza, nunca escondido
+  // (mesmo espirito dos donuts de Incentivada/Regime fiduciario).
+  const categorias = ["Sim", "Não", "Não informado"];
+  const cores = { "Sim": AZUL_TONS[0], "Não": AZUL_TONS[4], "Não informado": "#D9D9D9" };
+  const datasets = categorias
+    .filter((cat) => data.some((d) => d.incentivada === cat))
+    .map((cat) => ({
+      label: cat,
+      backgroundColor: cores[cat],
+      data: periodos.map((p) => {
+        const row = data.find((d) => _rotuloPeriodoSerie("trimestral", d.ano, d.periodo) === p && d.incentivada === cat);
+        return row ? row.valor_total : 0;
+      }),
+    }));
+  if (chartIncentivadaEvolucao) chartIncentivadaEvolucao.destroy();
+  const canvas = document.getElementById("chart-incentivada-evolucao");
+  if (!canvas) return;
+  chartIncentivadaEvolucao = new Chart(canvas, {
+    type: "bar",
+    data: { labels: periodos, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => fmtBRL(v) } } },
+      plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtBRLFull(ctx.raw)}` } } },
+    },
+  });
+}
+
+// ---- Principais agentes fiduciários e custodiantes (novo, só Primário) ----
+// "Quem estrutura as ofertas" -- dimensão de mercado de capitais sem
+// equivalente nenhum no crédito de fomento (BNDES/FINEP não tem conceito de
+// agente fiduciário/custodiante). Cobertura PARCIAL e conhecida (só linhas
+// vindas do rito automático/Resolução CVM 160 têm esses campos, ver
+// CLAUDE.md, seção Pipeline CVM) -- aviso sempre construído a partir da
+// resposta real da API (nunca um número fixo), mesmo padrão de
+// #chart-taxas-aviso/#chart-prazos-aviso no Consolidado. Os dois rankings
+// (agente fiduciário / custodiante) vêm do MESMO fetch (`/estrutura_mercado`,
+// que também alimenta os donuts de Incentivada/Regime fiduciário no
+// Consolidado) -- o select troca só qual bloco é desenhado, sem refetch.
+function _renderEstruturaRanking() {
+  const select = document.getElementById("estrutura-dimensao-select");
+  const aviso = document.getElementById("estrutura-ranking-aviso");
+  const vazio = document.getElementById("estrutura-ranking-vazio");
+  if (!select) return;
+  const dimensao = select.value; // "agentes_fiduciarios" | "custodiantes"
+  const bloco = _ultimaEstruturaMercado ? _ultimaEstruturaMercado[dimensao] : null;
+  const linhas = bloco && Array.isArray(bloco.linhas) ? bloco.linhas : [];
+
+  if (aviso) {
+    if (bloco && typeof bloco.n_total === "number") {
+      const rotulo = dimensao === "agentes_fiduciarios" ? "agente fiduciário" : "custodiante";
+      const pct = bloco.cobertura_pct != null ? bloco.cobertura_pct.toFixed(1).replace(".", ",") : "0,0";
+      aviso.textContent = `⚠ Amostra parcial: ${rotulo} identificado em ${fmtNum(bloco.n_com_dado)} de ${fmtNum(bloco.n_total)} operações (${pct}%) — só o rito automático (Resolução CVM 160) registra esse dado.`;
+      aviso.style.display = "block";
+    } else {
+      aviso.style.display = "none";
+    }
+  }
+
+  if (!linhas.length) {
+    if (vazio) vazio.style.display = "block";
+    if (chartEstruturaRanking) { chartEstruturaRanking.destroy(); chartEstruturaRanking = null; }
+    return;
+  }
+  if (vazio) vazio.style.display = "none";
+
+  if (chartEstruturaRanking) chartEstruturaRanking.destroy();
+  const canvas = document.getElementById("chart-estrutura-ranking");
+  if (!canvas) return;
+  chartEstruturaRanking = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: linhas.map((l) => l.nome),
+      datasets: [{ data: linhas.map((l) => l.valor_total), backgroundColor: AZUL_TONS[1] }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: { label: (ctx) => `${fmtBRLFull(ctx.raw)} (n=${fmtNum(linhas[ctx.dataIndex].n || 0)})` },
+        },
+      },
+      scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
+    },
+  });
+}
+
+async function loadEstruturaRanking(filters) {
+  if (_mercadoAtivo !== "primario") {
+    if (chartEstruturaRanking) { chartEstruturaRanking.destroy(); chartEstruturaRanking = null; }
+    return;
+  }
+  try {
+    _ultimaEstruturaMercado = await fetchJSON("/api/primario/estrutura_mercado?" + qs(filters));
+  } catch (e) {
+    _ultimaEstruturaMercado = null;
+  }
+  _renderEstruturaRanking();
 }
 
 let _ultimasMaioresOperacoes = [];
@@ -320,6 +497,8 @@ async function refreshTendencias(filters) {
     loadTendenciasSetores(filters),
     loadProdutos(filters),
     loadMaioresOperacoes(filters),
+    loadIncentivadaEvolucao(filters),
+    loadEstruturaRanking(filters),
   ]);
   await popularSeletorSubsetor(setoresRanking, filters);
   await popularSeletorSegmento(setoresRanking);
@@ -330,6 +509,11 @@ document.addEventListener("DOMContentLoaded", () => {
   onFiltersChange(refreshTendencias);
   document.getElementById("maiores-ordenar").addEventListener("change", () => loadMaioresOperacoes(currentFilters()));
   document.getElementById("maiores-exportar-btn").addEventListener("click", exportarMaioresOperacoesCSV);
+  // Toggle Agente fiduciário / Custodiante -- reusa o MESMO fetch já feito
+  // por loadEstruturaRanking (cache em _ultimaEstruturaMercado), nunca
+  // refaz a chamada à API só por causa da troca de dimensão.
+  const estruturaSelect = document.getElementById("estrutura-dimensao-select");
+  if (estruturaSelect) estruturaSelect.addEventListener("change", _renderEstruturaRanking);
   // Espera o filterbar compartilhado (agencia/setor/UF/data -- ver common.js)
   // estar de fato pronto, incluindo os valores vindos de um link com filtro na
   // URL, antes do fetch inicial -- ver comentario de filtrosProntosPromise em

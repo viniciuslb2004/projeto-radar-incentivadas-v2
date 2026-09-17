@@ -3,7 +3,7 @@
 // de Credito Primario -- Frontend" documenta TODOS os endpoints /api/primario/*
 // assumidos aqui (ainda nao construidos/testados contra um backend real).
 
-let chartSerie, chartSetores, chartPorte, chartTaxas, chartPrazos;
+let chartSerie, chartSetores, chartPorte, chartTaxas, chartPrazos, chartIncentivada, chartRegimeFiduciario, chartTipoLastro;
 
 function kpiCard(label, value, sub) {
   return `<div class="kpi-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
@@ -323,9 +323,16 @@ async function loadUF(filters) {
 }
 
 async function loadPorte(filters) {
-  // porte_emissor (Primario) usa o MESMO cache/vocabulario de porte que
-  // porte_cliente (cnpj_cnae, ver CLAUDE.md) -- suposicao de contrato:
-  // /api/primario/porte devolve o MESMO formato de /api/porte.
+  // So no Incentivado -- ver index.html/CLAUDE.md, seção Frontend: medido ao
+  // vivo que porte_emissor é ~99,85% "Demais" (nenhum poder discriminante
+  // pra emissores de mercado de capitais), então este card foi REMOVIDO do
+  // modo Primario (substituído por "Por tipo de lastro", ver loadTipoLastro
+  // abaixo) -- sai cedo (e limpa qualquer grafico antigo) quando o mercado
+  // ativo é Primario, mesmo padrão de loadTaxas/loadPrazos.
+  if (_mercadoAtivo === "primario") {
+    if (chartPorte) { chartPorte.destroy(); chartPorte = null; }
+    return;
+  }
   let data;
   try {
     data = await fetchJSON(apiMercado("/api/porte") + "?" + qs(filters));
@@ -494,6 +501,99 @@ async function loadPrazos(filters) {
   });
 }
 
+// ---- Estrutura da oferta (Incentivada Lei 12.431 / Regime fiduciário) ----
+// Substitui o antigo "Ranking por instrumento" no Consolidado -- ver
+// index.html e CLAUDE.md, seção Frontend, redesenho de 2026-09-17:
+// aquele card era redundante com a série temporal empilhada por instrumento
+// (acima) + o texto por_instrumento já mostrado no KPI de volume total, e
+// nunca tinha sido de fato REPENSADO pro contexto de renda fixa (só um
+// relabel do "Ranking de setores" do Incentivado). `incentivada` (Lei
+// 12.431) é o cross-link temático mais óbvio com o resto do site ("Radar de
+// Crédito INCENTIVADO") e nunca tinha aparecido em nenhum card até aqui.
+// `incentivada`/`regime_fiduciario` podem ser NULL (campo S/N vazio na
+// fonte CVM) -- SEMPRE as 3 fatias (Sim/Não/Não informado) desenhadas,
+// nunca só 2, pra nunca esconder uma parte real dos dados atrás de um
+// booleano que assume sempre preenchido.
+function _donutBooleano(canvasId, breakdown) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return null;
+  const chaves = ["sim", "nao", "nao_informado"];
+  const labels = ["Sim", "Não", "Não informado"];
+  const valores = chaves.map((c) => (breakdown && breakdown[c] ? breakdown[c].valor_total : 0));
+  const ns = chaves.map((c) => (breakdown && breakdown[c] ? breakdown[c].n : 0));
+  if (!valores.some((v) => v > 0) && !ns.some((n) => n > 0)) return null;
+  return new Chart(canvas, {
+    type: "doughnut",
+    data: { labels, datasets: [{ data: valores, backgroundColor: [AZUL_TONS[0], AZUL_TONS[4], "#D9D9D9"] }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)} (${fmtNum(ns[ctx.dataIndex])} op.)`,
+          },
+        },
+      },
+    },
+  });
+}
+
+// Tipo de lastro (Pulverizado/Concentrado) -- reusa o MESMO fetch de
+// /estrutura_mercado (nao e outro round-trip de rede), so desenhado como
+// donut separado por ficar num CARD diferente (substitui "Por porte do
+// emissor" no grid UF/porte, ver index.html). Sempre inclui "Não informado"
+// como fatia (83,7% medido ao vivo -- so linhas do rito automatico/
+// Resolucao 160 tem esse campo, ver CLAUDE.md) -- mesma logica de nunca
+// esconder a fatia desconhecida atras de um grafico que parece 100%
+// resolvido.
+function _donutCategorico(canvasId, linhas, chaveLabel) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !Array.isArray(linhas) || !linhas.length) return null;
+  return new Chart(canvas, {
+    type: "doughnut",
+    data: {
+      labels: linhas.map((l) => l[chaveLabel]),
+      datasets: [{ data: linhas.map((l) => l.valor_total), backgroundColor: AZUL_TONS.slice(0, linhas.length) }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)} (${fmtNum(linhas[ctx.dataIndex].n || 0)} op.)`,
+          },
+        },
+      },
+    },
+  });
+}
+
+async function loadEstruturaOferta(filters) {
+  if (_mercadoAtivo !== "primario") {
+    if (chartIncentivada) { chartIncentivada.destroy(); chartIncentivada = null; }
+    if (chartRegimeFiduciario) { chartRegimeFiduciario.destroy(); chartRegimeFiduciario = null; }
+    if (chartTipoLastro) { chartTipoLastro.destroy(); chartTipoLastro = null; }
+    return;
+  }
+  let data = null;
+  try {
+    data = await fetchJSON("/api/primario/estrutura_mercado?" + qs(filters));
+  } catch (e) {
+    data = null;
+  }
+  if (chartIncentivada) { chartIncentivada.destroy(); chartIncentivada = null; }
+  if (chartRegimeFiduciario) { chartRegimeFiduciario.destroy(); chartRegimeFiduciario = null; }
+  if (chartTipoLastro) { chartTipoLastro.destroy(); chartTipoLastro = null; }
+  if (!data) return;
+  chartIncentivada = _donutBooleano("chart-incentivada", data.incentivada);
+  chartRegimeFiduciario = _donutBooleano("chart-regime-fiduciario", data.regime_fiduciario);
+  chartTipoLastro = _donutCategorico("chart-tipo-lastro", data.tipo_lastro, "tipo_lastro");
+}
+
 // Rotulos/hints dos cards do Consolidado que trocam de significado por
 // mercado -- chamada por common.js::_aplicarIdentidadeMercado() (via
 // `typeof` check, nunca o inverso, pra common.js nao depender de detalhe de
@@ -506,9 +606,17 @@ function _aplicarRotulosMercadoConsolidado() {
   };
   set("chart-serie-titulo", primario ? "Evolução temporal — por instrumento" : "Evolução temporal — BNDES x FINEP");
   set("chart-serie-hint", primario ? "R$ emitido por período" : "R$ contratado por período");
-  set("chart-setores-titulo", primario ? "Ranking por instrumento" : "Ranking de setores");
+  // "chart-setores-titulo" (Ranking de setores) so existe mais no card
+  // Incentivado (ver index.html, data-mercado-only="incentivado") -- o slot
+  // Primario virou "Estrutura da oferta" (titulo estatico, sem troca por
+  // JS), entao nao ha mais uma variante primario deste rotulo pra aplicar.
   set("chart-uf-titulo", primario ? "Por UF do emissor" : "Por UF");
-  set("chart-porte-titulo", primario ? "Por porte do emissor" : "Por porte do cliente");
+  // "chart-porte-titulo" (Por porte do cliente) so existe mais no card
+  // Incentivado (ver index.html, data-mercado-only="incentivado") -- o slot
+  // Primario virou "Por tipo de lastro" (titulo estatico) depois de medir
+  // ao vivo que porte_emissor e ~99,85% "Demais" (sem poder discriminante
+  // nenhum pra emissores de mercado de capitais, ver comentario no
+  // index.html) -- nao ha mais uma variante primario deste rotulo.
 }
 
 async function refreshConsolidado(filters) {
@@ -521,6 +629,7 @@ async function refreshConsolidado(filters) {
     loadPorte(filters),
     loadTaxas(filters),
     loadPrazos(filters),
+    loadEstruturaOferta(filters),
   ]);
 }
 
