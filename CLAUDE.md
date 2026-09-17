@@ -2022,6 +2022,175 @@ sessão real contra o Aiven de produção, fora do escopo de um teste rápido de
 frontend — ver CLAUDE.md, seção "Coisas a saber antes de mexer", sobre como logar de verdade
 se precisar testar isso depois).
 
+## Radar de Crédito Primário — Redesenho Consolidado/Tendências (2026-09-17)
+
+Sessão pedida explicitamente pelo usuário para **repensar de verdade** os cards de
+Consolidado/Tendências no modo Primário — até aqui (ver seções anteriores) eles eram, em boa
+parte, um reaproveitamento/relabel direto dos cards do crédito incentivado (BNDES/FINEP), nunca
+desenhados a partir do zero pro contexto de emissão de dívida em mercado de capitais. Escopo
+desta sessão: só `webapp/static/*` e `webapp/primario/routes.py` — **`src/*` e
+`webapp/main.py` não foram tocados** (uma sessão paralela mexe no pipeline de dados ao mesmo
+tempo; todo número de cobertura abaixo foi medido AO VIVO contra produção nesta data, mas pode
+mudar com o próximo refresh diário — nada aqui assume uma contagem fixa no código, os avisos de
+amostra parcial são sempre calculados a partir da resposta real da API).
+
+**Cobertura medida ao vivo (2026-09-17, `operations_primario`, já com o corte 2010+ em vigor)**:
+total 15.076 linhas, `data_referencia` 2010-01-15 a 2026-12-03. `incentivada`: 1.444 Sim / 9.203
+Não / 4.429 Não informado. `regime_fiduciario`: 2.906 Sim / 38 Não / 12.132 Não informado.
+`setor_emissor`/`porte_emissor` NULL só em 19 linhas (99,87% resolvido). `uf_emissor` NULL em
+5.483 linhas (36,4% — ver nota sobre `cnpj_cnae` legado abaixo). `taxa_valor` não-nulo em 239
+linhas (1,6%). `prazo_meses` não-nulo em 534 linhas (3,5%). `indexador_padronizado` não-nulo em
+254 linhas (1,7%, concentradas quase todas em 2010-2022 — só 2 linhas de 2023 em diante, ZERO
+em 2024-2026). `agente_fiduciario` não-nulo em 5.200 linhas (34,5%), `custodiante` em 2.453
+(16,3%) — ambos só vêm de `cvm_oferta_resolucao_160_raw` (2022+). `porte_emissor`: 15.054 de
+15.076 (99,85%!) são `'Demais'`, só 3 são `'Empresa de Pequeno Porte'`, nenhuma `'Micro
+Empresa'`. **Achado real que já muda a análise de cobertura antiga do CLAUDE.md**: os números
+de cobertura de taxa/prazo documentados na sessão anterior (~4,2%/~15,2%) caíram bastante
+(~1,6%/~3,5%) depois do corte 2010+ e da integração do 2º arquivo CVM (resolução 160, que NUNCA
+tem taxa/prazo/indexador) — o denominador cresceu bem mais que o numerador. Isso não invalida
+os cards (ver decisão abaixo), só significa que o texto de aviso de amostra parcial (sempre
+calculado ao vivo, nunca chumbado) hoje mostra um percentual menor do que quando foi escrito.
+
+### Auditoria card a card — Consolidado
+
+| Card | Decisão | Motivo |
+|---|---|---|
+| KPI row (nº operações, volume, emissores distintos, ticket médio) | **(a) mantém** | Já bem adaptado (KPI "emissores distintos" e "volume emitido" fazem sentido genuíno pro mercado de capitais, sem inventar "desembolso parcelado" que não existe numa oferta pública). |
+| Série temporal por instrumento (stacked bar) | **(a) mantém** | `instrumento_padronizado` tem cobertura de 100% e boa distribuição temporal 2010-2026 — mostra a evolução real do mix de instrumentos, o pedido nº 2 da tarefa ("composição por instrumento ao longo do tempo") já estava bem servido aqui. |
+| **"Ranking por instrumento" (bar chart)** | **(c) REMOVIDO** | Redundante DENTRO do próprio Consolidado: a mesma informação (volume por instrumento) já aparece na série temporal empilhada logo acima E no texto `por_instrumento` do KPI de volume total — um terceiro gráfico mostrando exatamente a mesma soma, sem dimensão nova (tempo ou drill-down), não agregava nada. Era também o card mais "cru" — um relabel 1:1 do "Ranking de setores" do Incentivado, nunca repensado. |
+| **NOVO: "Estrutura da oferta"** (2 donuts: Incentivada Lei 12.431 + Regime fiduciário) | Substitui o card acima | Pedido explícito da tarefa: `incentivada` nunca tinha aparecido em NENHUM card, apesar de ser o cross-link temático mais óbvio com o resto do site ("Radar de Crédito INCENTIVADO"). Cobertura real (1.444 Sim/9.203 Não/4.429 Não informado — nenhum dos 3 baldes é desprezível) confirma que vale a pena mostrar. `regime_fiduciario` entra no mesmo card por ser a mesma categoria de "atributo estrutural binário da oferta", mesmo fetch (`/estrutura_mercado`), sem custo adicional de rede. |
+| Por UF do emissor (mapa) | **(a) mantém** | Geografia do emissor é uma pergunta real de mercado de capitais. `uf_emissor` tem 36,4% de NULL — mais alto que `setor_emissor` (0,1%) pelo MESMO CNPJ, porque `cnpj_cnae` tem entradas antigas (herdadas do enriquecimento BNDES/FINEP, antes de `uf`/`municipio` existirem naquela tabela — ver seção Pipeline CVM) sem esses 2 campos preenchidos; o mecanismo `IE`/`NI` do mapa já trata esse caso com uma legenda textual honesta, sem esconder o volume. |
+| Por porte do emissor (donut) | **(c) REMOVIDO** | **Achado real medido ao vivo**: 15.054 de 15.076 linhas (99,85%!) caem no MESMO balde `'Demais'` — só 3 linhas são `'Empresa de Pequeno Porte'`, nenhuma `'Micro Empresa'`. Faz sentido (empresas que emitem dívida em mercado de capitais público são, por definição, de grande porte — diferente do crédito de fomento, que atinge micro/pequenas), mas isso torna o donut um círculo de uma cor só, sem NENHUM poder discriminante. Exatamente o tipo de card que a tarefa pediu pra remover ("não está sendo usado direito"). |
+| **NOVO: "Por tipo de lastro"** (donut Pulverizado/Concentrado/Não informado) | Substitui o card acima | Dimensão real de risco de estruturas securitizadas (CRI/CRA) que nunca tinha aparecido em nenhum card — 1.970 Concentrado / 489 Pulverizado / 12.617 Não informado (83,7%, só linhas do 2º arquivo CVM têm esse campo). Mesmo fetch de `/estrutura_mercado` (nenhum round-trip novo). |
+| **"Taxas por indexador"** / **"Prazos por instrumento"** (já existiam) | **(a) mantém, cobertura reavaliada** | Cobertura caiu pra ~1,6%/~3,5% (ver nota acima) — mesmo assim, mantidos: o aviso de amostra parcial já é honesto e calculado ao vivo (nunca escondido), e o dado que existe continua sendo real/verificável. Cortar um card só porque a cobertura caiu, sem que ele tenha ficado ENGANOSO, seria descartar sinal real. |
+
+### Auditoria card a card — Tendências & Insights
+
+| Card | Decisão | Motivo |
+|---|---|---|
+| Setores do emissor em alta/queda | **(a) mantém** | Cobertura excelente (99,87% resolvido) e o ranking de variação é um sinal real de tendência de mercado. |
+| Detalhe por subsetor / Detalhe por segmento (CNAE) | **(a) mantém** | Mesma taxonomia/cobertura de setor, reaproveitada sem duplicar lógica — já testado ao vivo em sessão anterior. |
+| "Distribuição por indexador" (`loadProdutos`) | **(b) REFORMULADO** | **Achado real**: a resposta de `/tendencias/indexadores` tem uma linha `"Não informado"` que sozinha somava ~98,3% do total (indexador só vem do arquivo CVM principal, que praticamente para de contribuir a partir de 2023 — ver nota abaixo) — deixar essa fatia no gráfico tornava o card ilegível (uma barra gigante + traços quase invisíveis pros valores reais). Reformulado pra excluir "Não informado" do desenho e mostrar a cobertura real como aviso explícito (`#chart-produtos-aviso`), mesmo padrão de `#chart-taxas-aviso`/`#chart-prazos-aviso`. O endpoint em si (`/api/primario/tendencias/indexadores`) NÃO mudou — a reformulação é 100% frontend (`tendencias.js::loadProdutos`). |
+| Operações do período (tabela) | **(a) mantém** | Útil como está, colunas já corretamente renomeadas (Emissor/Instrumento) numa sessão anterior. |
+| **NOVO: "Evolução da participação Lei 12.431"** (stacked bar Sim/Não/Não informado por trimestre) | Novo card | Complementa o donut "Estrutura da oferta" (composição atual) com a dimensão de TEMPO. |
+| **NOVO: "Principais agentes fiduciários e custodiantes"** (ranking com toggle) | Novo card | "Quem estrutura as ofertas" — dimensão de mercado de capitais sem equivalente no crédito de fomento. Cobertura parcial (34,5%/16,3%) mas concentrada e honesta (só 2022+, aviso explica o porquê). |
+
+**Por que NÃO virou um card "Evolução do mix por indexador ao longo do tempo"** (a ideia
+original desta sessão, descartada DEPOIS de medir os dados reais, antes de publicar): uma
+primeira versão tentou uma série temporal por `indexador_padronizado` — mas
+`indexador_padronizado` só vem do arquivo CVM principal (`cvm_oferta_distribuicao_raw`), que
+**praticamente para de contribuir linhas a partir de 2023** (ver seção "Segunda fonte CVM"
+acima); medido ao vivo, `indexador_padronizado` tem exatamente **0 linhas não-nulas em 2024,
+2025 e 2026** (a atividade recente é quase toda via `cvm_oferta_resolucao_160_raw`, que NUNCA
+tem esse campo). Um gráfico de evolução por indexador cairia a zero justo nos anos mais
+recentes — pareceria (de forma enganosa) que "o mercado indexado sumiu em 2023", quando na
+verdade é só um artefato de qual arquivo CVM cobre qual período, não um sinal de mercado real.
+Isso violaria a regra de ouro do projeto (nunca mostrar um gráfico que sugira algo que o dado
+não sustenta) — trocado por `incentivada` (populada pelos DOIS arquivos CVM, cobertura real
+contínua 2010-2026, confirmado ao vivo por ano) como a série temporal nova de Tendências.
+
+**Achado de qualidade de dado, observado mas NÃO corrigido (fora do escopo — é dado
+`agente_fiduciario`/`custodiante`, texto livre da CVM, não teria como normalizar sem tocar
+`src/*`)**: o ranking de "Principais agentes fiduciários e custodiantes" mostra o MESMO agente
+real (ex: "Pentágono S.A. Distribuidora de Títulos e Valores Mobiliários") em várias variantes
+de capitalização/pontuação (`PENTÁGONO S.A. ...` maiúsculo, `Pentágono S.A. ...` mixed case, com
+e sem ponto final) como linhas SEPARADAS do ranking — o texto vem cru da CVM
+(`cvm_oferta_resolucao_160_raw`), sem normalização. Isso dilui a posição de cada agente no
+ranking (nenhum bug de agregação do lado deste redesenho — `GROUP BY agente_fiduciario` está
+correto, é a fonte que tem múltiplas grafias). Se um dia isso incomodar, normalizar essas
+strings (upper+trim+remover pontuação) é trabalho de pipeline (`src/unify_primario.py`), fora
+do escopo desta sessão (que não toca `src/*`).
+
+### Rotas novas em `webapp/primario/routes.py`
+
+- **`GET /serie_temporal_incentivada`**: espelha `/serie_temporal`, trocando o agrupamento por
+  `instrumento_padronizado` por `incentivada` (mapeado pra `'Sim'/'Não'/'Não informado'` via
+  `CASE`). Alimenta o card novo de Tendências.
+- **`GET /estrutura_mercado`**: bundla 3 dimensões nunca expostas em nenhum card
+  (`incentivada`, `regime_fiduciario`, `tipo_lastro`) + ranking top-10 de `agente_fiduciario`/
+  `custodiante` com cobertura real, num ÚNICO endpoint (mesmo espírito de `/kpis` bundlar
+  várias agregações pequenas) — alimenta os 2 donuts + o donut de tipo de lastro no Consolidado
+  E o ranking de agentes/custodiantes em Tendências (o frontend faz UM fetch só, reaproveitado
+  nos dois lugares/páginas). `_ranking_texto_com_cobertura()` (helper novo, reaproveitado pelos
+  2 rankings) segue o mesmo padrão de `/graficos/taxas`/`/graficos/prazos`: cobertura sempre
+  calculada a partir de contagens reais, nunca um número fixo.
+
+### BUG REAL de CSS encontrado e corrigido durante o teste ao vivo desta sessão
+
+`webapp/static/css/style.css` tinha, desde a construção original do toggle de mercado, uma
+regra genérica `[data-mercado-only="primario"] { display: none; }` (esconde por padrão,
+evitando flash de conteúdo errado antes do JS decidir) — `_aplicarIdentidadeMercado()` (em
+`common.js`, NÃO tocado nesta sessão) então faz `el.style.display = "" ` (limpa o inline) pro
+caso "deveria mostrar", contando com a cascata CSS pra "revelar" o elemento. Isso só funcionava
+por acidente pros usos ORIGINAIS desse atributo (sempre em `<div class="grid-2" ...>`, que já
+tem sua PRÓPRIA regra `display:grid` definida MAIS ABAIXO no arquivo — em caso de empate de
+especificidade, a regra que vem depois no arquivo vence, então `.grid-2` sempre vencia a regra
+genérica de escondido). Os 2 cards novos desta sessão ("Estrutura da oferta"/"Por tipo de
+lastro") usam `data-mercado-only="primario"` diretamente num `<div class="card">` — e `.card`
+NUNCA teve uma regra de `display` própria (usa o bloco padrão do navegador), então nada vencia
+a regra genérica de escondido, e os cards ficavam **invisíveis mesmo no mercado certo**
+(confirmado ao vivo: `getComputedStyle` retornava `"none"` com o `style.display` inline já
+limpo pelo JS). **Corrigido** adicionando uma regra mais específica, gatilhada pela MESMA
+classe que `_aplicarIdentidadeMercado()` já aplica ao `<body>`
+(`body.mercado-primario .card[data-mercado-only="primario"] { display: block; }`) — não
+precisou mudar `_aplicarIdentidadeMercado()` em si nem afeta o caso `.grid-2` que já
+funcionava. **Lição pra qualquer card novo que use `data-mercado-only` diretamente num `.card`
+(em vez de um `.grid-2` inteiro)**: conferir que existe uma regra CSS específica o suficiente
+pra vencer o escondido-por-padrão quando o JS só limpa o inline — não basta confiar que "";
+funciona igual em todo elemento.
+
+### Testado ao vivo vs. suposto (2026-09-17)
+
+**Testado ao vivo**, contra produção (Aiven), com uma conta de teste temporária criada e
+apagada depois (mesmo procedimento de "Coisas a saber antes de mexer" — login via
+`fetch('/api/login', {credentials:'include'})`, sessão real). **Achado de infraestrutura desta
+sessão**: navegar (`navigate`/`location.href`) no Browser pane deste ambiente **não preserva o
+cookie de sessão** entre a página que fez o login e a página seguinte (confirmado: login via
+`fetch` funciona e uma chamada `/api/status` na MESMA página/mesmo documento (sem navegar)
+retorna 200, mas qualquer navegação subsequente — inclusive `location.href` disparado de dentro
+da própria página — volta a dar 401). Contornado testando tudo dentro do MESMO carregamento de
+página via `javascript_tool` (login + `initFiltersAndTabs()` + `alternarMercado()` +
+`refreshConsolidado()`/`refreshTendencias()` chamados manualmente, sem nenhuma navegação real
+depois do login) — suficiente pra confirmar renderização real com dado de produção, mas **não
+foi testado o fluxo normal de login pela UI (usuário digitando usuário/senha e clicando
+Entrar)**, só o caminho fetch direto; não há razão pra crer que seja diferente (mesmo endpoint,
+mesmo cookie), mas fica registrado como não testado neste formato específico.
+
+Confirmado visualmente e via inspeção de `Chart.js` (`chart.data`) com dado REAL: os 2 donuts
+de "Estrutura da oferta" (Incentivada/Regime fiduciário) e o donut "Por tipo de lastro"
+renderizam com as proporções certas; "Evolução da participação Lei 12.431" mostra as 3 séries
+(Sim/Não/Não informado) por trimestre 2010-2026 com os mesmos totais medidos diretamente no
+banco; "Principais agentes fiduciários e custodiantes" mostra o ranking real (Pentágono/
+Oliveira Trust/Vórtx no topo) e o toggle Agente fiduciório↔Custodiante troca o gráfico sem
+refazer a chamada de rede (conferido: um único fetch de `/estrutura_mercado`, reaproveitado);
+"Distribuição por indexador" reformulado mostra só CDI/IPCA+/Outro/Prefixado (sem "Não
+informado") com o aviso de cobertura real (1,7%). Nenhuma exceção JS nova introduzida por este
+redesenho (os erros 401 que aparecem no console são só do carregamento inicial da página, antes
+do login manual de teste — esperado neste ambiente de teste, não um bug). **Sanity check
+final**: `python -c "import ast; ast.parse(...)"` em `routes.py` e contagem de chaves
+balanceadas nos 2 arquivos JS editados, sem erro.
+
+**NÃO testado**: o fluxo de login real pela UI (só via fetch direto, ver acima); o botão
+"Buscar de novo"/filtros da aba Busca no modo Primário (fora do escopo desta tarefa, que pediu
+só Consolidado/Tendências); comportamento em mobile/telas estreitas dos 2 mini-donuts lado a
+lado no card "Estrutura da oferta" (só testado em desktop).
+
+**Servidor local usado pro teste**: `uvicorn` iniciado manualmente (`python -m uvicorn
+webapp.main:app`) a partir DESTE worktree, numa porta própria (8010) — **achado de
+infraestrutura**: o mecanismo `preview_start` por nome deste ambiente resolveu pro
+`.claude/launch.json` do repo PRINCIPAL (fora do worktree, `name: "radar-webapp"`, porta 8000),
+não pro `.claude/launch.json` criado dentro deste worktree — ficou servindo os arquivos
+ANTIGOS (do repo principal, sem as edições desta sessão) mesmo pedindo o nome do config do
+worktree. Contornado subindo o `uvicorn` manualmente via Bash a partir do worktree, numa porta
+diferente, e abrindo essa URL direto no Browser pane (`navigate`) em vez de `preview_start` por
+nome — se uma sessão futura precisar testar ao vivo dentro de um worktree, valide primeiro que
+o arquivo servido bate com o do disco (`curl localhost:<porta>/js/arquivo.js | grep <trecho
+novo>`) antes de gastar tempo depurando um "bug" que na verdade é cache/arquivo errado.
+**Processo encerrado ao final do teste** (a pedido do coordenador, que reportou esgotamento de
+conexões do Aiven em produção durante esta sessão — `uvicorn` local + `preview_stop` do
+servidor do Browser pane, confirmado via `Get-NetTCPConnection` que nenhuma conexão restante
+apontava pro host do Aiven).
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |
