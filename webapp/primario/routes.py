@@ -10,6 +10,8 @@ global `_verificar_acesso` (ver webapp/main.py) ja cobre qualquer rota sob `/api
 
 Sem frontend/toggle de mercado/Transacoes Salvas aqui -- isso e trabalho de outra
 sessao, construida em cima destas rotas (ver CLAUDE.md)."""
+import datetime
+
 from fastapi import APIRouter, Query
 
 from db import get_connection
@@ -69,6 +71,169 @@ def _filters_clause_primario(instrumento=None, uf=None, setor=None, data_inicio=
     return where, params
 
 
+def _filters_clause_primario_exato(instrumento=None, uf=None, setor=None, subsetor=None, data_inicio=None, data_fim=None):
+    """Variante de `_filters_clause_primario` com `setor`/`subsetor` como filtros
+    EXATOS e SEPARADOS (nunca OR combinados) -- usada pelas rotas de
+    tendencias/subsetores/segmentos (tanto o ranking de variacao quanto a versao
+    "simples"), onde `setor` e o PAI de quem se quer o detalhe (ex: ranking de
+    subsetores DENTRO de um setor escolhido num select proprio -- ver
+    `tendencias.js::subsetor-setor-select`, populado com valores EXATOS do
+    ranking, nunca o dropdown compartilhado que combina setor+subsetor numa so
+    lista). Mesmo papel que setor/subsetor tem em
+    `webapp/main.py::_filters_clause`/`_ranking_variacao` (BNDES/FINEP) --
+    distinto do uso combinado em `_filters_clause_primario` acima, que serve o
+    filtro UNICO do dropdown compartilhado (Consolidado/Tendencias/Busca)."""
+    if data_inicio and data_fim and data_inicio > data_fim:
+        data_inicio, data_fim = data_fim, data_inicio
+    clauses = []
+    params = []
+    if instrumento and instrumento != "Todos":
+        clauses.append("instrumento_padronizado = ?")
+        params.append(instrumento)
+    if uf and uf != "Todas":
+        clauses.append("uf_emissor = ?")
+        params.append(uf)
+    if setor and setor != "Todos":
+        clauses.append("setor_emissor = ?")
+        params.append(setor)
+    if subsetor and subsetor != "Todos":
+        clauses.append("subsetor_emissor = ?")
+        params.append(subsetor)
+    if data_inicio:
+        clauses.append("data_referencia >= ?")
+        params.append(data_inicio)
+    if data_fim:
+        clauses.append("data_referencia < ?")
+        params.append(data_fim)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+# Mesma janela padrao (365 dias) usada por webapp/main.py::JANELA_TENDENCIA_MAX_DIAS
+# -- so vale quando NENHum filtro de data e passado (ver _periodo_anterior_primario).
+JANELA_TENDENCIA_MAX_DIAS_PRIMARIO = 365
+
+
+def _periodo_anterior_primario(data_inicio: str, data_fim: str, conn):
+    """Espelha `webapp/main.py::_periodo_anterior`, trocando `operations`/
+    `data_contratacao` por `operations_primario`/`data_referencia` -- mesma
+    semantica: periodo anterior SEMPRE do MESMO TAMANHO EXATO do periodo atual,
+    nunca um teto fixo de 365 dias quando o usuario escolheu datas explicitas."""
+    cur = conn.cursor()
+    if data_inicio and data_fim and data_inicio > data_fim:
+        data_inicio, data_fim = data_fim, data_inicio
+    if not data_inicio or not data_fim:
+        max_data = cur.execute("SELECT MAX(data_referencia) FROM operations_primario").fetchone()[0]
+        if not max_data:
+            hoje = datetime.date.today()
+        else:
+            hoje = datetime.date.fromisoformat(max_data[:10]) + datetime.timedelta(days=1)
+        data_fim = hoje.isoformat()
+        data_inicio = (hoje - datetime.timedelta(days=JANELA_TENDENCIA_MAX_DIAS_PRIMARIO)).isoformat()
+
+    inicio_selecionado = datetime.date.fromisoformat(data_inicio[:10])
+    fim = datetime.date.fromisoformat(data_fim[:10])
+    delta = fim - inicio_selecionado
+    if delta.days <= 0:
+        delta = datetime.timedelta(days=JANELA_TENDENCIA_MAX_DIAS_PRIMARIO)
+
+    anterior_fim = inicio_selecionado
+    anterior_inicio = inicio_selecionado - delta
+    return data_inicio, data_fim, anterior_inicio.isoformat(), anterior_fim.isoformat()
+
+
+def _ranking_variacao_primario(conn, group_col: str, instrumento, uf, setor_pai, data_inicio, data_fim, subsetor_pai=None):
+    """Espelha `webapp/main.py::_ranking_variacao`, sem o conceito de `agencia`
+    (nao existe neste mercado -- ver CLAUDE.md). Ranking generico de variacao de
+    participacao entre periodo atual e anterior, respeitando filtros."""
+    data_inicio, data_fim, ant_inicio, ant_fim = _periodo_anterior_primario(data_inicio, data_fim, conn)
+    where_base, params_base = _filters_clause_primario_exato(instrumento, uf, setor_pai, subsetor_pai, None, None)
+    cur = conn.cursor()
+
+    def valor_por_grupo(d_ini, d_fim):
+        where = where_base + (" AND " if where_base else "WHERE ") + "data_referencia >= ? AND data_referencia < ?"
+        rows = cur.execute(
+            f"SELECT COALESCE({group_col}, 'Nao classificado'), SUM(valor_total), COUNT(*) "
+            f"FROM operations_primario {where} GROUP BY {group_col}",
+            params_base + [d_ini, d_fim],
+        ).fetchall()
+        total = sum(r[1] or 0 for r in rows)
+        return {r[0]: {"valor": r[1] or 0, "n": r[2], "part": (r[1] or 0) / total if total else 0} for r in rows}, total
+
+    atual, total_atual = valor_por_grupo(data_inicio, data_fim)
+    anterior, total_anterior = valor_por_grupo(ant_inicio, ant_fim)
+
+    # Mesma guarda documentada em webapp/main.py::_ranking_variacao -- so compara
+    # de verdade se o periodo anterior INTEIRO estiver dentro da cobertura real
+    # da base (min(data_referencia)), senao a variacao fica None (nunca uma
+    # comparacao fabricada contra "nada"/cobertura incompleta).
+    min_data_base = cur.execute("SELECT MIN(data_referencia) FROM operations_primario").fetchone()[0]
+    comparavel = total_anterior > 0 and (not min_data_base or ant_inicio >= min_data_base)
+
+    grupos = set(atual) | set(anterior)
+    out = []
+    for g in grupos:
+        a = atual.get(g, {"valor": 0, "n": 0, "part": 0})
+        p = anterior.get(g, {"valor": 0, "n": 0, "part": 0})
+        out.append({
+            "grupo": g,
+            "participacao_atual_pct": a["part"] * 100,
+            "participacao_anterior_pct": (p["part"] * 100) if comparavel else None,
+            "variacao_pp": ((a["part"] - p["part"]) * 100) if comparavel else None,
+            "valor_atual": a["valor"],
+            "n_operacoes_atual": a["n"],
+        })
+    out.sort(key=lambda r: (r["variacao_pp"] if comparavel else r["valor_atual"]), reverse=True)
+    return {
+        "data_inicio": data_inicio, "data_fim": data_fim,
+        "data_inicio_anterior": ant_inicio, "data_fim_anterior": ant_fim,
+        "comparavel": comparavel,
+        "grupos": out,
+    }
+
+
+GRANULARIDADES_SERIE_PRIMARIO = {
+    # Mesma logica de webapp/main.py::GRANULARIDADES_SERIE, trocando
+    # data_contratacao por data_referencia (ja normalizada AAAA-MM-DD, ver
+    # unify_primario.py::_data_referencia).
+    "mensal": "CAST(SUBSTRING(data_referencia FROM 6 FOR 2) AS INTEGER)",
+    "trimestral": "trimestre",
+    "semestral": "CASE WHEN trimestre <= 2 THEN 1 ELSE 2 END",
+    "anual": "1",
+}
+
+
+@router.get("/status")
+def status():
+    """Espelha `GET /api/status` (BNDES/FINEP, ver webapp/main.py::status()).
+    `setores_pendentes` aqui e a contagem de `setor_emissor IS NULL` -- nao existe
+    coluna `setor_origem` em `operations_primario` (ver CLAUDE.md, secao Pipeline
+    CVM: "o estado pendente e so setor_emissor IS NULL"). `busca_ia_ativa` e
+    SEMPRE False -- nao existe motor de embeddings pro Radar de Credito Primario
+    (so FTS sem IA, ver src/search_fts_primario.py), diferente do MOTOR_BUSCA_IA
+    opcional do motor BNDES/FINEP."""
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        n_ops = cur.execute("SELECT COUNT(*) FROM operations_primario").fetchone()[0]
+        n_pendente = cur.execute("SELECT COUNT(*) FROM operations_primario WHERE setor_emissor IS NULL").fetchone()[0]
+        min_max = cur.execute("SELECT MIN(data_referencia), MAX(data_referencia) FROM operations_primario").fetchone()
+        last = cur.execute(
+            "SELECT started_at, finished_at, status FROM refresh_primario_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return {
+            "n_operacoes": n_ops,
+            "setores_pendentes": n_pendente,
+            "data_min": min_max[0],
+            "data_max": min_max[1],
+            "ultimo_refresh": {"started_at": last[0], "finished_at": last[1], "status": last[2]} if last else None,
+            "hospedado": True,
+            "busca_ia_ativa": False,
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/filtros")
 def filtros():
     """Valores distintos para popular selects -- espelha `GET /api/filtros` (BNDES/
@@ -104,13 +269,31 @@ def filtros():
 def kpis(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
     """Agregados basicos -- espelha `GET /api/kpis`, trocando `por_agencia` (nao existe
     neste mercado) por `por_instrumento` (debenture/CRI/CRA/etc, o agrupamento
-    equivalente mais natural aqui)."""
+    equivalente mais natural aqui) e `valor_desembolsado_total` (nao existe
+    "desembolso" parcelado numa oferta de mercado de capitais, ver CLAUDE.md) por
+    `n_emissores_distintos` -- mais informativo aqui.
+
+    BUG REAL encontrado e corrigido nesta reconciliacao (2026-09-16), testado ao
+    vivo com o frontend de verdade (Consolidado, modo Primario): esta rota ja
+    existia de uma sessao anterior, mas devolvia `valor_total_total` (nunca lido
+    por nenhum consumidor) em vez de `valor_contratado_total` (a chave que
+    `consolidado.js::loadKPIs` de fato le, com fallback pra `valor_total`) e
+    nunca calculava `n_emissores_distintos` -- os cards "Volume total emitido" e
+    "Emissores distintos" apareciam vazios ("-") na tela. Corrigido para bater
+    com o contrato documentado no CLAUDE.md (secao Frontend, tabela de
+    endpoints) -- `valor_total` mantido tambem, por completude/consistencia com
+    `por_instrumento`, mas `valor_contratado_total` e a chave que o frontend
+    realmente le primeiro."""
     where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         total = cur.execute(
-            f"SELECT COUNT(*), SUM(valor_total), AVG(valor_total) FROM operations_primario {where}",
+            f"""
+            SELECT COUNT(*), SUM(valor_total), AVG(valor_total),
+                   COUNT(DISTINCT cnpj_emissor)
+            FROM operations_primario {where}
+            """,
             params,
         ).fetchone()
         por_instrumento = cur.execute(
@@ -124,13 +307,145 @@ def kpis(instrumento: str = None, uf: str = None, setor: str = None, data_inicio
         ).fetchall()
         return {
             "n_operacoes": total[0] or 0,
-            "valor_total_total": total[1] or 0,
+            "valor_contratado_total": total[1] or 0,
+            "valor_total": total[1] or 0,
+            "n_emissores_distintos": total[3] or 0,
             "cheque_medio": total[2] or 0,
             "por_instrumento": [
                 {"instrumento": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "cheque_medio": r[3] or 0}
                 for r in por_instrumento
             ],
         }
+    finally:
+        conn.close()
+
+
+@router.get("/serie_temporal")
+def serie_temporal(
+    instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None,
+    data_fim: str = None, granularidade: str = "trimestral",
+):
+    """Espelha `GET /api/serie_temporal`, trocando o agrupamento por `agencia`
+    (nao existe neste mercado) por `instrumento_padronizado` -- mesma dualidade
+    do original: `instrumento` funciona tanto como FILTRO estruturado quanto
+    como coluna de agrupamento (selecionar um instrumento especifico no filtro
+    compartilhado mostra so a linha daquele instrumento na serie, mesmo
+    comportamento de filtrar `agencia=BNDES` no motor original)."""
+    if granularidade not in GRANULARIDADES_SERIE_PRIMARIO:
+        granularidade = "trimestral"
+    periodo_expr = GRANULARIDADES_SERIE_PRIMARIO[granularidade]
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT ano, {periodo_expr} AS periodo, instrumento_padronizado, COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            {"AND" if where else "WHERE"} ano IS NOT NULL
+            GROUP BY ano, periodo, instrumento_padronizado
+            ORDER BY ano, periodo
+            """,
+            params,
+        ).fetchall()
+        return [
+            {"ano": r[0], "periodo": r[1], "instrumento": r[2], "n_operacoes": r[3], "valor_total": r[4] or 0}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@router.get("/instrumentos")
+def instrumentos(uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """Mesmo formato de `GET /api/setores` (BNDES/FINEP), agrupando por
+    `instrumento_padronizado` em vez de `setor_bndes` -- a dimensao mais
+    distintiva de renda fixa neste mercado (ver CLAUDE.md, secao Frontend,
+    tabela de labels). Nao aceita `instrumento` como filtro (e a propria
+    dimensao agrupada), mesmo padrao de `/api/setores` nao aceitar `setor`."""
+    where, params = _filters_clause_primario(None, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(instrumento_padronizado, 'Nao classificado'), COUNT(*), SUM(valor_total), AVG(valor_total)
+            FROM operations_primario {where}
+            GROUP BY instrumento_padronizado
+            ORDER BY SUM(valor_total) DESC
+            """,
+            params,
+        ).fetchall()
+        return [
+            {"instrumento": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "cheque_medio": r[3] or 0}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@router.get("/uf")
+def uf_breakdown(instrumento: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """Espelha `GET /api/uf`, via `uf_emissor` -- SEM o tratamento especial de
+    `IE` que o motor BNDES/FINEP tem (ver CLAUDE.md, secao "Frontend:
+    roteamento e abas"): `IE` e uma categoria REAL da planilha do BNDES
+    (operacoes de abrangencia nacional/interestadual, ex: Petrobras) que nao
+    tem equivalente no dataset da CVM -- inventar essa categoria aqui seria
+    alucinar um conceito que a fonte nao tem. `uf_emissor` so tem 2 estados
+    possiveis: uma UF de verdade (resolvida via CNPJ->cnpj_cnae) ou NULL
+    (emissor ainda pendente/sem CNPJ na oferta, ver CLAUDE.md secao Pipeline
+    CVM) -- o segundo caso usa o MESMO sentinela `NI` que o motor original usa
+    pra UF nao informada (`COALESCE(uf, 'NI')`), unico rotulo fora dos 27
+    estados que este endpoint pode devolver."""
+    where, params = _filters_clause_primario(instrumento, None, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(uf_emissor, 'NI'), COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            GROUP BY uf_emissor
+            ORDER BY SUM(valor_total) DESC
+            """,
+            params,
+        ).fetchall()
+        return [{"uf": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0} for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/porte")
+def porte_breakdown(setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
+    """Espelha `GET /api/porte`, via `porte_emissor` (mesmo cache `cnpj_cnae`
+    usado pra enriquecer a FINEP) -- mesma assinatura do original (que tambem
+    nao aceita filtro `instrumento`, so agencia/setor/uf/data). SEM
+    `PORTE_NORMALIZADO_SQL` (ver src/search_fts.py): aquela normalizacao existe
+    pra unificar o vocabulario HETEROGENEO de `porte_cliente` (BNDES nativo +
+    FINEP enriquecido via 2 fontes diferentes, MICRO/PEQUENA/GRANDE/MÉDIA
+    misturado com "Micro Empresa"/"Empresa de Pequeno Porte"). Aqui
+    `porte_emissor` vem de UMA SO fonte (cnpj_cnae, sempre via BrasilAPI/RFB,
+    ver src/enrich_cnae.py::PORTE_EMPRESA_RFB) com um vocabulario proprio e ja
+    homogeneo (`Micro Empresa`/`Empresa de Pequeno Porte`/`Demais`/`Não
+    informado pela fonte`/NULL) -- aplicar aquele CASE aqui so devolveria
+    'Não informado' pra tudo (nenhum desses rotulos bate as chaves daquele
+    CASE), entao agrupar direto pelo valor cru (com COALESCE so pro NULL) e o
+    correto, sem inventar uma categoria 'GRANDE'/'MÉDIA' que a RFB nao
+    distingue neste layout simplificado."""
+    where, params = _filters_clause_primario(None, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(porte_emissor, 'Não informado'), COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            GROUP BY porte_emissor
+            ORDER BY SUM(valor_total) DESC
+            """,
+            params,
+        ).fetchall()
+        return [{"porte": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0} for r in rows]
     finally:
         conn.close()
 
@@ -242,5 +557,267 @@ def operacao_detalhe(op_id: int):
                 ))
 
         return {"operacao": operacao, "raw_extra": raw_extra, "empresa": empresa}
+    finally:
+        conn.close()
+
+
+@router.get("/operacoes/{op_id}/grupo-economico")
+def operacao_grupo_economico(op_id: int):
+    """Espelha `GET /api/operacoes/{op_id}/grupo-economico` (BNDES/FINEP),
+    agrupando por RAIZ de `cnpj_emissor` (8 primeiros digitos -- identifica a
+    EMPRESA, matriz+filiais compartilham a raiz) em vez de `cnpj`. Chaves de
+    resposta (`emissor`/`instrumento`/`valor_emissao`) escolhidas para bater
+    direto no fallback ja escrito em `common.js::openOperacaoDetalhe`
+    (`o.cliente ?? o.emissor`, `o.agencia ?? o.instrumento`,
+    `o.valor_contratado ?? o.valor_emissao`) -- nunca precisou mudar o
+    frontend, so nomear os campos do jeito que ele ja espera."""
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT left(regexp_replace(cnpj_emissor, '\\D', '', 'g'), 8) FROM operations_primario WHERE id = ?",
+            (op_id,),
+        ).fetchone()
+        if not row or not row[0] or len(row[0]) < 8:
+            return {"resultados": []}
+        raiz = row[0]
+        rows = cur.execute(
+            "SELECT id, nome_emissor, instrumento_padronizado, data_referencia, valor_total FROM operations_primario "
+            "WHERE left(regexp_replace(cnpj_emissor, '\\D', '', 'g'), 8) = ? AND id != ? "
+            "ORDER BY data_referencia DESC LIMIT 20",
+            (raiz, op_id),
+        ).fetchall()
+        cols = ["id", "emissor", "instrumento", "data_referencia", "valor_emissao"]
+        return {"resultados": [dict(zip(cols, r)) for r in rows]}
+    finally:
+        conn.close()
+
+
+@router.get("/tendencias/setores")
+def tendencias_setores(instrumento: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
+    """Ranking de `setor_emissor` por variacao de participacao entre o periodo
+    selecionado e o periodo anterior equivalente -- espelha
+    `GET /api/tendencias/setores` (BNDES/FINEP)."""
+    conn = get_connection(pooled=True)
+    try:
+        r = _ranking_variacao_primario(conn, "setor_emissor", instrumento, uf, None, data_inicio, data_fim)
+        return {
+            "periodo_atual": [r["data_inicio"], r["data_fim"]],
+            "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
+            "setores": [{**g, "setor": g["grupo"]} for g in r["grupos"]],
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/tendencias/subsetores")
+def tendencias_subsetores(setor: str = Query(...), instrumento: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
+    """Ranking de `subsetor_emissor` (dentro de um `setor_emissor`) por variacao
+    de participacao -- espelha `GET /api/tendencias/subsetores`."""
+    conn = get_connection(pooled=True)
+    try:
+        r = _ranking_variacao_primario(conn, "subsetor_emissor", instrumento, uf, setor, data_inicio, data_fim)
+        return {
+            "setor": setor,
+            "periodo_atual": [r["data_inicio"], r["data_fim"]],
+            "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
+            "subsetores": [{**g, "subsetor": g["grupo"]} for g in r["grupos"]],
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/tendencias/segmentos")
+def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, instrumento: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
+    """Ranking de `segmento_emissor` (CNAE, granularidade fina) dentro de um
+    setor, por variacao de participacao -- espelha
+    `GET /api/tendencias/segmentos`."""
+    conn = get_connection(pooled=True)
+    try:
+        r = _ranking_variacao_primario(conn, "segmento_emissor", instrumento, uf, setor, data_inicio, data_fim, subsetor_pai=subsetor)
+        return {
+            "setor": setor,
+            "subsetor": subsetor,
+            "periodo_atual": [r["data_inicio"], r["data_fim"]],
+            "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
+            "comparavel": r["comparavel"],
+            "segmentos": [{**g, "segmento": g["grupo"]} for g in r["grupos"]],
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/tendencias/indexadores")
+def tendencias_indexadores(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """ENDPOINT NOVO (nao espelha nome nenhum do motor BNDES/FINEP) -- pedido
+    pelo frontend (`tendencias.js::loadProdutos`) como substituto de
+    "Destinação de recursos" no modo Primario: distribuicao por
+    `indexador_padronizado` (CDI/IPCA+/SELIC/Prefixado/Outro/Nao informado),
+    mesmo shape geral `[{<dimensao>, valor_total}]` de `GET
+    /api/tendencias/produtos` (sem ranking de variacao -- so a composicao
+    ATUAL, ver CLAUDE.md)."""
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(indexador_padronizado, 'Não informado'), COUNT(*), SUM(valor_total)
+            FROM operations_primario {where}
+            GROUP BY COALESCE(indexador_padronizado, 'Não informado')
+            ORDER BY SUM(valor_total) DESC
+            LIMIT 20
+            """,
+            params,
+        ).fetchall()
+        return [{"indexador": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0} for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/subsetores")
+def subsetores(setor: str = None, instrumento: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
+    """Espelha `GET /api/subsetores` -- usado por `tendencias.js::loadSubsetores`
+    em conjunto com `/tendencias/subsetores` (mesmo `setor` exato de pai, ver
+    `_filters_clause_primario_exato`, nunca o OR combinado do dropdown
+    compartilhado -- o select que alimenta este `setor` e um select PROPRIO,
+    populado com valores exatos do ranking, ver `subsetor-setor-select`)."""
+    where, params = _filters_clause_primario_exato(instrumento, uf, setor, None, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(subsetor_emissor, 'Nao classificado'), COUNT(*), SUM(valor_total), AVG(valor_total)
+            FROM operations_primario {where}
+            GROUP BY subsetor_emissor
+            ORDER BY SUM(valor_total) DESC
+            """,
+            params,
+        ).fetchall()
+        return [
+            {"subsetor": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "cheque_medio": r[3] or 0}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@router.get("/segmentos")
+def segmentos(setor: str = None, subsetor: str = None, instrumento: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, limit: int = 20):
+    """Espelha `GET /api/segmentos` -- usado por `tendencias.js::loadSegmentos`
+    em conjunto com `/tendencias/segmentos` (mesma nota de `setor`/`subsetor`
+    exatos de `subsetores()` acima)."""
+    where, params = _filters_clause_primario_exato(instrumento, uf, setor, subsetor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT COALESCE(segmento_emissor, 'Nao classificado'), COUNT(*), SUM(valor_total), AVG(valor_total)
+            FROM operations_primario {where}
+            GROUP BY segmento_emissor
+            ORDER BY SUM(valor_total) DESC
+            LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+        return [
+            {"segmento": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0, "cheque_medio": r[3] or 0}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+# Taxa_tipo excluido deste grafico -- 'percentual_indexador' e MULTIPLICATIVO
+# (ex: "108% do CDI"), unidade DIFERENTE de 'spread'/'taxa_fixa' (pontos
+# percentuais a.a., aditivos) -- misturar os dois no mesmo eixo seria
+# enganoso (ver CLAUDE.md, secao Pipeline CVM, taxa_tipo). So contado a parte
+# no aviso de cobertura do frontend (chart-taxas-aviso, ver consolidado.js).
+_TAXA_TIPOS_COMPARAVEIS = ("spread", "taxa_fixa")
+
+
+@router.get("/graficos/taxas")
+def graficos_taxas(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """ENDPOINT NOVO -- pedido central desta reconciliacao (ver CLAUDE.md, secao
+    Frontend, "Dashboards novos"). Distribuicao de `taxa_valor` (mediana) por
+    `indexador_padronizado` + `taxa_tipo`, SEM as linhas `percentual_indexador`
+    (ver `_TAXA_TIPOS_COMPARAVEIS` acima). `taxa_mediana` via
+    `percentile_cont(0.5) WITHIN GROUP` (mediana real, nao media -- mais
+    robusta a outliers num campo de melhor-esforco como `taxa_valor`, ver
+    CLAUDE.md). `cobertura_pct` sempre calculada a partir de contagens reais
+    (nunca um numero fixo), pra continuar correta conforme a base
+    crescer/for reenriquecida."""
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        n_total = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where}", params).fetchone()[0] or 0
+        where_taxa = where + (" AND " if where else "WHERE ") + (
+            f"taxa_valor IS NOT NULL AND taxa_tipo IN ({', '.join(['?'] * len(_TAXA_TIPOS_COMPARAVEIS))})"
+        )
+        params_taxa = params + list(_TAXA_TIPOS_COMPARAVEIS)
+        n_com_taxa = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where_taxa}", params_taxa).fetchone()[0] or 0
+        rows = cur.execute(
+            f"""
+            SELECT indexador_padronizado, taxa_tipo, COUNT(*),
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY taxa_valor)
+            FROM operations_primario {where_taxa}
+            GROUP BY indexador_padronizado, taxa_tipo
+            ORDER BY COUNT(*) DESC
+            """,
+            params_taxa,
+        ).fetchall()
+        return {
+            "n_total": n_total,
+            "n_com_taxa": n_com_taxa,
+            "cobertura_pct": (n_com_taxa / n_total * 100) if n_total else 0,
+            "linhas": [
+                {"indexador": r[0], "taxa_tipo": r[1], "n": r[2], "taxa_mediana": r[3]}
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/graficos/prazos")
+def graficos_prazos(instrumento: str = None, uf: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None):
+    """ENDPOINT NOVO -- ver CLAUDE.md, secao Frontend, "Dashboards novos".
+    Distribuicao de `prazo_meses` (mediana) por `instrumento_padronizado`.
+    Diferente de `taxa_valor` (melhor esforco), `prazo_meses` e dado EXATO
+    quando existe (data_vencimento - data_emissao) -- a cobertura parcial vem
+    so de faltar uma das duas datas na fonte (CVM), ja filtrado/documentado em
+    `unify_primario.py::_prazo_dias_e_meses` (nunca precisa refiltrar aqui,
+    `prazo_meses IS NULL` ja e o estado correto pros casos sem dado/invertidos)."""
+    where, params = _filters_clause_primario(instrumento, uf, setor, data_inicio, data_fim)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        n_total = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where}", params).fetchone()[0] or 0
+        where_prazo = where + (" AND " if where else "WHERE ") + "prazo_meses IS NOT NULL"
+        n_com_prazo = cur.execute(f"SELECT COUNT(*) FROM operations_primario {where_prazo}", params).fetchone()[0] or 0
+        rows = cur.execute(
+            f"""
+            SELECT instrumento_padronizado, COUNT(*),
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY prazo_meses)
+            FROM operations_primario {where_prazo}
+            GROUP BY instrumento_padronizado
+            ORDER BY COUNT(*) DESC
+            """,
+            params,
+        ).fetchall()
+        return {
+            "n_total": n_total,
+            "n_com_prazo": n_com_prazo,
+            "cobertura_pct": (n_com_prazo / n_total * 100) if n_total else 0,
+            "linhas": [
+                {"instrumento": r[0], "n": r[1], "prazo_mediano_meses": r[2]}
+                for r in rows
+            ],
+        }
     finally:
         conn.close()

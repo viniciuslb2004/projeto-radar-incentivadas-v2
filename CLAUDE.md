@@ -1579,6 +1579,315 @@ numérico sem 8 dígitos (`abc123nada` → 0 resultados na tier 1, confirma que 
 falso-positivo já documentada pro motor BNDES/FINEP também vale aqui). `EXPLAIN ANALYZE` na
 tier 3 confirmou `Bitmap Index Scan` no GIN (não seq scan).
 
+### Rotas completadas (reconciliação com o frontend, 2026-09-16)
+
+Duas sessões paralelas construíram no mesmo dia (1) só as 5 rotas acima e (2) todo o
+frontend do modo Primário (ver seção "Radar de Crédito Primário — Frontend" abaixo) —
+mas o frontend foi escrito assumindo um contrato de API bem mais completo (tabela
+"Todos os endpoints `/api/primario/*` assumidos por este frontend" na seção Frontend),
+já que as duas sessões nunca se viram. Esta sessão (reconciliação) implementou as 14
+rotas que faltavam em `webapp/primario/routes.py` (nenhum arquivo novo, nenhuma mudança
+em `src/search_fts_primario.py` foi necessária — todas as agregações novas cabem em SQL
+direto, mesmo padrão das 5 rotas que já existiam):
+
+- **`GET /api/primario/status`** -- espelha `/api/status`. `setores_pendentes` é a
+  contagem de `setor_emissor IS NULL` (não existe `setor_origem` em
+  `operations_primario`, ver seção Pipeline CVM). `busca_ia_ativa` é sempre `False`
+  (não existe motor de embeddings pro Primário, só FTS).
+- **`GET /api/primario/serie_temporal`** -- espelha `/api/serie_temporal`, trocando o
+  agrupamento por `agencia` (não existe neste mercado) por `instrumento_padronizado` --
+  `instrumento` continua funcionando também como filtro (mesma dualidade do original
+  com `agencia`).
+- **`GET /api/primario/instrumentos`** -- mesmo formato de `/api/setores`, agrupando por
+  `instrumento_padronizado`.
+- **`GET /api/primario/uf`** -- espelha `/api/uf`, via `uf_emissor`. Decisão tomada após
+  reler a seção "Frontend: roteamento e abas" (o tratamento especial de `IE` do motor
+  BNDES/FINEP): `IE` é uma categoria REAL da planilha do BNDES (abrangência nacional,
+  ex: Petrobras) sem equivalente na CVM -- **não replicado aqui**, seria inventar um
+  conceito que a fonte não tem. `uf_emissor` só tem 2 estados (UF real resolvida via
+  CNPJ, ou NULL) -- o NULL usa o mesmo sentinela `NI` do motor original.
+- **`GET /api/primario/porte`** -- espelha `/api/porte`, via `porte_emissor`. Decisão:
+  **não usa `PORTE_NORMALIZADO_SQL`** (`src/search_fts.py`) -- aquele CASE existe pra
+  unificar o vocabulário heterogêneo de `porte_cliente` (BNDES nativo + FINEP via RFB,
+  misturando `MICRO`/`PEQUENA`/`GRANDE`/`MÉDIA` com `"Micro Empresa"`/`"Empresa de
+  Pequeno Porte"`). `porte_emissor` vem de UMA SÓ fonte (sempre `cnpj_cnae` via
+  BrasilAPI/RFB, ver `enrich_cnae.py::PORTE_EMPRESA_RFB`) com vocabulário próprio já
+  homogêneo (`Micro Empresa`/`Empresa de Pequeno Porte`/`Demais`/`Não informado pela
+  fonte`/NULL) -- aplicar aquele CASE aqui só devolveria `'Não informado'` pra tudo, e
+  não existe distinção `GRANDE`/`MÉDIA` nesse layout simplificado da RFB pra inventar.
+- **`GET /api/primario/operacoes/{id}/grupo-economico`** -- espelha o equivalente em
+  `webapp/main.py`, agrupando por raiz de `cnpj_emissor` (8 primeiros dígitos). Chaves
+  de resposta (`emissor`/`instrumento`/`valor_emissao`) escolhidas pra bater direto no
+  fallback que `common.js::openOperacaoDetalhe` já tinha escrito
+  (`o.cliente ?? o.emissor`, `o.agencia ?? o.instrumento`,
+  `o.valor_contratado ?? o.valor_emissao`) -- não precisou mudar o frontend.
+- **`GET /api/primario/tendencias/{setores,subsetores,segmentos}`** -- espelham os
+  equivalentes em `webapp/main.py` (`_ranking_variacao`/`_periodo_anterior`,
+  reimplementados como `_ranking_variacao_primario`/`_periodo_anterior_primario` sobre
+  `operations_primario`/`data_referencia`), mesmo formato exato (`comparavel`,
+  `periodo_atual`/`periodo_anterior`, `variacao_pp`, `participacao_atual_pct`/
+  `participacao_anterior_pct`). **Achado de design**: o parâmetro `setor` aqui precisa
+  ser um filtro EXATO (é o PAI de quem se quer o detalhe -- ex: ranking de subsetores
+  DENTRO de um setor escolhido), nunca o `OR` combinado (setor OU subsetor) que
+  `_filters_clause_primario` usa pro dropdown compartilhado -- criada uma segunda
+  função de filtro, `_filters_clause_primario_exato`, só pra este caso (mesma
+  distinção que já existe em `webapp/main.py` entre `_filters_clause`/tendências e o
+  `OR` combinado exclusivo do motor de busca).
+- **`GET /api/primario/tendencias/indexadores`** -- endpoint NOVO (não espelha nome
+  nenhum do motor original), agrupa por `indexador_padronizado`, mesmo shape simples
+  `[{indexador, valor_total}]` de `/api/tendencias/produtos` (sem ranking de variação --
+  só composição atual, conforme `tendencias.js::loadProdutos`).
+- **`GET /api/primario/subsetores`/`segmentos`** (nível superior, distintos de
+  `/tendencias/*`) -- espelham `/api/subsetores`/`/api/segmentos`, usando a MESMA
+  `_filters_clause_primario_exato` (o `setor`/`subsetor` vem do mesmo select próprio
+  de drill-down do `tendencias.js`, nunca do dropdown compartilhado).
+- **`GET /api/primario/graficos/taxas`** e **`/graficos/prazos`** -- os dois endpoints
+  NOVOS pedidos como foco central desta reconciliação. Implementados com
+  `percentile_cont(0.5) WITHIN GROUP` (mediana real, não média) sobre `taxa_valor`/
+  `prazo_meses`, `cobertura_pct` sempre calculada a partir de contagens reais (nunca
+  chumbada). `/graficos/taxas` exclui `taxa_tipo='percentual_indexador'` do
+  agrupamento (multiplicativo, unidade diferente de `spread`/`taxa_fixa` -- ver seção
+  Pipeline CVM).
+
+**Bug real encontrado e corrigido nesta sessão, fora da lista original de 14 (mas no
+mesmo arquivo, `webapp/primario/routes.py`)**: `GET /api/primario/kpis` já existia (de
+uma sessão anterior) mas devolvia `valor_total_total` (chave que nenhum consumidor lê)
+em vez de `valor_contratado_total` (a chave que `consolidado.js::loadKPIs` de fato lê,
+com fallback pra `valor_total`), e nunca calculava `n_emissores_distintos` -- os cards
+"Volume total emitido" e "Emissores distintos" apareciam vazios (`-`) na tela,
+confirmado ao vivo pelo Browser pane ANTES da correção. Corrigido adicionando
+`COUNT(DISTINCT cnpj_emissor)` e renomeando/duplicando a chave de valor total pro nome
+que o contrato documentado (tabela da seção Frontend) e o frontend já esperavam.
+
+**Nota do coordenador ao reconciliar esta sessão com outra em paralelo**: esta sessão
+notou (corretamente, no momento em que rodou) que `GET /api/primario/instrumentos`/
+`/filtros` devolvem `"CPR-F"` e flagou isso como possível bug de classificação, porque
+seu worktree tinha sido criado ANTES de uma sessão irmã (rodando ao mesmo tempo, ver
+"Segunda fonte CVM" mais acima) corrigir a exclusão indevida de CPR-F e confirmar as 18
+linhas reais (Klabin, Suzano, Duratex, Adami, Eldorado Brasil Celulose, Agropecuária
+Maggi etc., vindas do segundo arquivo `oferta_resolucao_160.csv`). Não é um bug: CPR-F
+é um instrumento real da base, já documentado em detalhe na seção "Segunda fonte CVM"
+acima — nenhuma ação adicional necessária aqui.
+
+**Testado ao vivo nesta sessão (2026-09-16, contra produção/Aiven)**: as 14 rotas novas
++ o fix de `kpis` foram testadas por 2 caminhos: (1) via `curl`/`urllib` direto, com uma
+conta de teste temporária criada e apagada depois (mesmo procedimento documentado em
+"Coisas a saber antes de mexer") -- todas devolveram `200` com dados reais, incluindo
+os parâmetros exatos que o frontend manda (`data_inicio`/`data_fim`/`granularidade`,
+filtros combinados `uf`+`instrumento`, `setor` exato pra tendências/subsetores/
+segmentos, erro `422` esperado quando `setor` obrigatório falta em
+`/tendencias/subsetores`); (2) **end-to-end pelo Browser pane**, logado de verdade
+(`fetch('/api/login', ...)`, mesmo caminho documentado em "Coisas a saber antes de
+mexer"), servindo `webapp/static/` via `uvicorn` local contra o MESMO banco de
+produção: cliquei no toggle de mercado (`#brand-toggle`), confirmei visualmente que o
+Consolidado do modo Primário carrega KPIs/gráficos reais (incluindo os 2 dashboards
+novos "Taxas por indexador" -- amostra 371/17.420, 2,1% -- e "Prazos por instrumento" --
+1.859/17.420, 10,7%), e abri a aba Tendências & Insights confirmando que a exceção JS
+relatada pelo coordenador (`Cannot read properties of undefined (reading 'filter')` em
+`tendencias.js`, por causa de `/api/primario/tendencias/setores` 404) **não ocorre
+mais** -- a aba renderiza corretamente (`Setores do emissor em alta/queda`, `Detalhe
+por subsetor/segmento`), confirmado tanto visualmente (screenshot) quanto via
+`read_network_requests` (todas as chamadas `/api/primario/tendencias/*` retornando
+`200`). Conta de teste e sessão apagadas ao final (ver "Coisas a saber antes de mexer").
+**Não testado**: comportamento de favoritar/histórico de busca no modo Primário (já
+documentado como limitação conhecida na seção Frontend, não faz parte desta
+reconciliação) e o formato exato que o frontend de fato RENDERIZA nos gráficos de
+Chart.js pixel a pixel (só confirmado que os elementos aparecem com dado real, sem
+exceção JS -- não uma inspeção visual detalhada de cada gráfico).
+
+## Radar de Crédito Primário — Frontend
+
+Construído em 2026-09-16, em cima do schema de `operations_primario` (ver seção "Radar de
+Crédito Primário — Pipeline CVM" acima) — **100% frontend** (`webapp/static/*`), sem tocar em
+`webapp/primario/`, `webapp/main.py`, `src/parse_cvm.py`, `src/unify_primario.py` nem
+`src/db.py` (trabalho de outras duas sessões em paralelo: uma terminando a integração do 2º
+lote de dados 2023-2026, outra construindo `/api/primario/*` + motor de busca). **Consequência
+direta**: TUDO que este frontend espera do backend abaixo é uma **suposição de contrato**,
+não uma integração testada contra rotas reais — nenhuma delas existia em `webapp/main.py` no
+momento em que este frontend foi escrito (confirmado via `grep primario webapp/main.py` →
+vazio). Todo consumo desses endpoints no frontend confere `Array.isArray`/tipo antes de
+desenhar qualquer gráfico e trata 404/formato inesperado como "sem dado ainda" (nunca uma
+exceção JS) — ver `_MERCADOS`/comentário no topo de `webapp/static/js/common.js`.
+
+### Mecânica de troca de mercado
+
+Um único SPA/roteador (nunca duas páginas) — `_mercadoAtivo` (`"incentivado"` | `"primario"`)
+em `common.js` é a fonte da verdade; tudo deriva dela:
+
+- **Gatilho**: clique em `#brand-toggle` (a `.brand` da topbar, ver `index.html`) chama
+  `alternarMercado()` — alterna `_mercadoAtivo`, sempre pousa no Consolidado do mercado de
+  destino (nunca tenta preservar a aba atual se ela não existir lá, ex: saindo de Editais) e
+  cria uma entrada de **histórico nova** (`pushState` via `_ativarView(..., true)`), então
+  "Voltar" no navegador volta pro mercado anterior — testado ao vivo (ver seção "Testado ao
+  vivo" abaixo).
+- **URL**: prefixo `/primario/...` pros 4 slugs visíveis nesse mercado (`/primario`,
+  `/primario/consolidado`, `/primario/tendencias`, `/primario/busca`,
+  `/primario/transacoes-salvas`) — `_mercadoESlugDaURL()` lê o mercado do 1º segmento do path
+  e devolve o slug restante pro `_SLUG_PARA_VIEW` já existente (que não precisou mudar).
+  `_ativarView()` monta o path final prefixando com `_MERCADOS[mercado].prefixoUrl`.
+  `vercel.json` ganhou os rewrites equivalentes (`/primario`, `/primario/consolidado`,
+  `/primario/tendencias`, `/primario/busca`, `/primario/transacoes-salvas` → `/index.html`) —
+  **não** ajustei `webapp/main.py::spa_pagina` (catch-all do modo local `uvicorn`) por estar
+  fora do escopo desta sessão; sem esse ajuste, digitar/recarregar uma URL `/primario/...`
+  direto no `uvicorn` local provavelmente cai no catch-all genérico e funciona igual (serve
+  `index.html`), mas **não testei isso ao vivo** (ver seção de testes) — se a rota local não
+  cobrir esse caso, é um ajuste de uma linha em `spa_pagina`, a cargo de quem tocar
+  `webapp/main.py`.
+- **Abas visíveis** (`_MERCADOS[mercado].abasVisiveis`, também controla quais `.tab-btn`
+  ficam com `display:none`): Incentivado = todas as 6; Primário = Consolidado, Tendências &
+  Insights, Busca, Transações Salvas (Editais e Linhas Incentivadas escondidas — sem
+  equivalente conceitual, decisão já dada pelo usuário). `_ativarView()` também **redireciona**
+  pro Consolidado do mercado ativo se a view pedida não existir lá (testado: sair de Editais
+  incentivado e trocar pro Primário cai em `/primario/consolidado`, nunca deixa uma aba
+  escondida "ativa" por baixo dos panos).
+- **Identidade textual/visual** (`_aplicarIdentidadeMercado()` em `common.js`, chamada antes
+  de qualquer `_ativarView`/gráfico): `document.title`, todo elemento `.brand-texto` (topbar,
+  `#loading-overlay .loading-brand`, título do `#login-card` — **não** o do `#registrar-card**,
+  que continua sempre "Criar conta"), classe `body.mercado-primario` (liga os tokens de cor —
+  ver "Identidade visual" abaixo) e visibilidade de qualquer elemento `[data-mercado-only]`.
+- **Filtro compartilhado (`#f-agencia`)**: mesmo `<select>` físico reaproveitado com
+  significado diferente — "Agência" (BNDES/FINEP) no Incentivado, "Instrumento" (Debênture/
+  CRI/CRA/Nota Comercial/Letra Financeira/CDCA/CCB) no Primário — `currentFilters()`,
+  `_sincronizarFiltrosCompartilhadosNaURL()` e a leitura de filtro-por-URL em
+  `_initFiltersAndTabsImpl` mandam/leem a chave `instrumento` em vez de `agencia` quando
+  `_mercadoAtivo==="primario"`. O rótulo (`#f-agencia-label`) troca junto. As opções do select
+  são repopuladas do zero (`_repopularFiltrosCompartilhados()`, chamada por
+  `alternarMercado()`) a partir de `filtros.instrumentos` em vez de `filtros.agencias` —
+  **suposição de contrato**: `GET /api/primario/filtros` devolve o MESMO formato de
+  `GET /api/filtros` (`agencias`→`instrumentos`, `setores`, `ufs`, `portes`, `anos`,
+  `data_min`/`data_max`), com `setor`/`uf`/datas com o MESMO significado (setor do emissor via
+  `cnpj_cnae`, `uf_emissor`).
+- **Filtro próprio da Busca** (`#bu-f-agencia`/`#bu-f-produto`, grupo separado): mesmos 2
+  selects reaproveitados — "Entidade"→"Instrumento", "Tipo de linha"→"Indexador" (CDI/IPCA+/
+  SELIC/Prefixado/Outro) — chaves de URL/API viram `instrumento`/`indexador` em vez de
+  `agencia`/`produto` (ver `busca.js::_filtrosBusca`/`_sincronizarFiltrosBuscaNaURL`/
+  `_aplicarFiltrosBuscaDaURL`). `_popularFiltrosBusca()` foi tornada segura de chamar de novo
+  (`_limparOpcoesBuscaFiltro`, remove tudo além da 1ª `<option>` antes de repopular) — chamada
+  de novo por `alternarMercado()`.
+- **Cache de filtro por grupo de aba** (`_ultimaQueryPorGrupo`, já existia pra não vazar filtro
+  entre Consolidado/Tendências vs. Busca/Editais/Linhas): passou a ser **também** escopado por
+  mercado (`_chaveCacheGrupo(view)` = `"{mercado}:{grupo}"`) — sem isso, voltar pro Incentivado
+  depois de mexer em filtros no Primário restauraria uma query com `instrumento=Debênture`
+  como se fosse `agencia=Debênture` (bug real que eu mesmo peguei revisando antes de testar).
+
+### Identidade visual (accent color)
+
+Nenhuma duplicação de CSS — 3 variáveis novas (`--accent-900`, `--accent`, `--accent-light`
+em `style.css`) por padrão **iguais** a `--navy-900`/`--navy`/`--steel-2` (Incentivado fica
+visualmente idêntico a antes); `body.mercado-primario` redefine as 3 pra um verde-petróleo
+(`#0E2E27`/`#16463C`/`#1F6656`, mesma luminosidade aproximada da rampa navy, só o matiz muda de
+azul pra verde — mantém o MESMO contraste com texto branco). Só as regras que já usavam
+`--navy`/`--navy-900`/`--steel-2` pra elementos "de marca" foram trocadas pras variáveis
+`--accent*` (`#loading-overlay`, `#login-overlay`, `.topbar`, `.tabs-wrap::before/::after`,
+`.tab-btn.active`, `.kpi-card .value`, `.card-header`) — tipografia/espaçamento/o resto da
+paleta (`--border`, `--bg`, `--card-bg` etc) são 100% compartilhados, nunca duplicados.
+Testado ao vivo (ver abaixo): `getComputedStyle(topbar).backgroundColor` bate com o hex novo
+assim que `body.mercado-primario` é aplicado.
+
+### Labels/nomenclatura própria (Consolidado/Tendências)
+
+Decisões de produto tomadas nesta sessão (não copiado 1:1 do Incentivado):
+
+| Card | Incentivado | Primário | Motivo |
+|---|---|---|---|
+| Série temporal (Consolidado) | "Evolução temporal — BNDES x FINEP", agrupado por `agencia` | "Evolução temporal — por instrumento", agrupado por `instrumento` | Não há "agências" no mercado de capitais; instrumento é a dimensão mais informativa |
+| Ranking (Consolidado) | "Ranking de setores" (`setor_bndes`) | "Ranking por instrumento" (`instrumento_padronizado`) | Pedido explícito do usuário como exemplo; instrumento (Debênture/CRI/CRA/...) é a dimensão mais distintiva de renda fixa |
+| Mapa (Consolidado) | "Por UF" (`uf`) | "Por UF do emissor" (`uf_emissor`) | Mesmo conceito, mantido (mesma decisão que o usuário deixou em aberto: "ou mantendo o de UF se uf_emissor fizer sentido igual") |
+| Doughnut (Consolidado) | "Por porte do cliente" | "Por porte do emissor" | Mesmo vocabulário de porte (`cnpj_cnae`), só troca de quem é classificado |
+| "Destinação de recursos" (Tendências) | produto/instrumento BNDES/FINEP | "Distribuição por indexador" (CDI/IPCA+/SELIC/Prefixado/Outro) | Evita redundância com o ranking por instrumento do Consolidado — mostra a composição por indexador em vez de repetir instrumento |
+| "Setores em alta/queda" (Tendências) | `setor_bndes` | Mesmo card, rótulo "Setores do emissor em alta/queda" (`setor_emissor`) | Setor do EMISSOR (não do "tomador de financiamento") — mesma taxonomia via `cnpj_cnae`, só a entidade classificada muda |
+| Detalhe por subsetor/segmento (Tendências) | mantido | mantido, sem mudança de rótulo | `setor_emissor`/`subsetor_emissor`/`segmento_emissor` espelham a MESMA hierarquia de 3 níveis — reaproveitado sem duplicar lógica, só via `apiMercado()` |
+| KPI "Volume desembolsado/pago" | mantido | substituído por "Emissores distintos" | Não existe desembolso parcelado numa oferta pública (capta de uma vez) — "emissores distintos" é mais informativo |
+| Tabela "Operações do período" | Cliente/Agência | Emissor/Instrumento | Colunas renomeadas via `id` (`#tabela-maiores-th-cliente`/`#tabela-maiores-th-agencia`) |
+| Modal de detalhe/drill-down (`common.js`) | Cliente/Agência/Setor/Valor contratado | Emissor/Instrumento/Setor do emissor/Valor da oferta | Modal compartilhado — rótulos trocam por `_mercadoAtivo`, campos com fallback (ver contrato abaixo) |
+
+### Dashboards novos (taxa/prazo) — o pedido central desta tarefa
+
+Dois cards novos, **só no modo Primário** (`data-mercado-only="primario"`, substituem
+implicitamente o espaço que seria ocupado por mais conteúdo do Consolidado, mantendo mapa de
+UF e porte — decisão: UF/porte continuam fazendo sentido igual, então NÃO foram removidos):
+
+- **"Taxas por indexador"** (`#chart-taxas`): bar chart de `taxa_mediana` por `indexador`, só
+  com `taxa_tipo` **'spread'/'taxa_fixa'** (mesma unidade — pontos percentuais a.a., aditivos)
+  — `taxa_tipo='percentual_indexador'` (ex: "108% do CDI", multiplicativo) é **deliberadamente
+  excluído do gráfico** (misturar as duas unidades no mesmo eixo seria enganoso) e só contado
+  em texto no aviso (`#chart-taxas-aviso`). Aviso de amostra parcial (`n_com_taxa`/`n_total`/
+  `cobertura_pct`, ~4,2% medido no pipeline — ver seção CVM) é construído **a partir do que a
+  API devolver**, nunca um número fixo chumbado no frontend, pra continuar certo conforme a
+  base crescer/for reenriquecida.
+- **"Prazos por instrumento"** (`#chart-prazos`): bar chart horizontal de
+  `prazo_mediano_meses` por `instrumento`. Mesmo padrão de aviso de amostra parcial
+  (`n_com_prazo`/`n_total`, ~15,2% medido no pipeline).
+- As duas funções (`loadTaxas`/`loadPrazos` em `consolidado.js`) saem cedo (e destroem
+  qualquer `Chart` antigo) quando `_mercadoAtivo!=="primario"` — seguro chamar
+  incondicionalmente em `refreshConsolidado()`.
+- **Suposição de contrato (NÃO testado contra backend real)**:
+  - `GET /api/primario/graficos/taxas?<filtros>` → `{ n_total, n_com_taxa, cobertura_pct,
+    linhas: [{ indexador, taxa_tipo, n, taxa_mediana }] }`
+  - `GET /api/primario/graficos/prazos?<filtros>` → `{ n_total, n_com_prazo, cobertura_pct,
+    linhas: [{ instrumento, n, prazo_mediano_meses }] }`
+  - Filtros passados são os mesmos de `currentFilters()` (`instrumento`, `setor`, `uf`,
+    `data_inicio`/`data_fim`).
+
+### Limitação conhecida: favoritar não funciona no modo Primário
+
+`usuario_operacoes_salvas.operation_id` é FK pra `operations(id)` (schema do crédito de
+fomento) — favoritar uma operação de `operations_primario` não tem como funcionar sem estender
+esse schema, **fora do escopo desta sessão** (não mexe em `src/db.py`). Em vez de deixar o
+botão quebrar silenciosamente contra o id errado, o botão do modal (`common.js::
+_configurarBotaoFavoritar`) e a estrelinha mini da Busca (`busca.js::renderListaResultados`)
+ficam **escondidos** quando `_mercadoAtivo==="primario"`. Se um dia isso for resolvido, é
+trabalho novo (estender `usuario_operacoes_salvas` pra aceitar as duas tabelas, ex: coluna
+`mercado`/`tabela_origem` + índice único composto), não uma consequência automática desta
+mudança.
+
+### Todos os endpoints `/api/primario/*` assumidos por este frontend
+
+Nenhum destes existia em `webapp/main.py` no momento em que este frontend foi escrito — lista
+completa pra quem for reconciliar com a sessão que constrói as rotas de verdade:
+
+| Endpoint assumido | Espelha | Formato assumido |
+|---|---|---|
+| `GET /api/primario/status` | `/api/status` | `{ n_operacoes, hospedado, busca_ia_ativa, ... }` |
+| `GET /api/primario/filtros` | `/api/filtros` | `{ instrumentos, indexadores, setores, subsetores, ufs, portes, anos, data_min, data_max }` (troca `agencias`→`instrumentos`, ganha `indexadores`) |
+| `GET /api/primario/kpis` | `/api/kpis` | `{ n_operacoes, valor_contratado_total, n_emissores_distintos, cheque_medio, por_instrumento: [{instrumento, valor_total}] }` |
+| `GET /api/primario/serie_temporal` | `/api/serie_temporal` | linhas `{ ano, periodo, instrumento, valor_total }` (troca `agencia`→`instrumento`) |
+| `GET /api/primario/instrumentos` | `/api/setores` (endpoint NOVO, não um espelho de nome) | `[{ instrumento, valor_total, n_operacoes }]` |
+| `GET /api/primario/uf` | `/api/uf` | `[{ uf, valor_total, n_operacoes }]` (via `uf_emissor`) |
+| `GET /api/primario/porte` | `/api/porte` | `[{ porte, valor_total }]` (via `porte_emissor`) |
+| `GET /api/primario/operacoes` e `/operacoes/{id}` e `/operacoes/{id}/grupo-economico` | idem | mesmo formato — modal/tabela usam fallback (`cliente??emissor`, `agencia??instrumento`, `setor_bndes??setor_emissor`, `data_contratacao??data_referencia`, `valor_contratado??valor_emissao??valor_oferta`) |
+| `GET /api/primario/tendencias/setores`, `/subsetores`, `/segmentos` | idem | mesmo formato (`setor`/`subsetor`/`segmento` = do emissor) |
+| `GET /api/primario/tendencias/indexadores` | `/api/tendencias/produtos` (NOVO nome) | `[{ indexador, valor_total }]` |
+| `GET /api/primario/subsetores`, `/segmentos` | idem | mesmo formato |
+| `GET /api/primario/busca` | `/api/busca` | mesmo formato, campos de resultado com o mesmo fallback do modal acima |
+| `GET /api/primario/graficos/taxas` | endpoint NOVO | ver seção "Dashboards novos" acima |
+| `GET /api/primario/graficos/prazos` | endpoint NOVO | ver seção "Dashboards novos" acima |
+
+### Testado ao vivo vs. suposto
+
+**Testado ao vivo** (servindo `webapp/static/` isolado, sem backend real — ver limitação
+abaixo): clique no brand alterna `_mercadoAtivo`/título/textos/classe do body/cor de destaque
+(`getComputedStyle` confirmado); URL ganha/perde prefixo `/primario/` corretamente ao trocar
+de mercado E ao trocar de aba dentro do mesmo mercado; abas Editais/Linhas somem no Primário
+(`display:none` confirmado) e reaparecem no Incentivado; sair de uma aba só-Incentivado
+(Editais) e trocar pro Primário redireciona pro Consolidado (nunca deixa view inválida
+"ativa"); **histórico do navegador funciona atravessando a fronteira de mercado** (testado com
+`history.back()` duas vezes: `/primario/consolidado` → toggle → `/consolidado` →
+back → volta pro Primário em `/primario/busca` → back → `/primario/consolidado`, com
+título/`_mercadoAtivo` corretos em cada passo); os cards de Taxas/Prazos aparecem só no
+Primário e mostram o estado "sem dado" corretamente quando o endpoint não existe (404 vira
+card vazio, nunca exceção JS); nenhum erro de console além dos 404/401 esperados (sem backend
+real disponível pra testar, ver abaixo).
+
+**NÃO testado** (backend `/api/primario/*` não existe nesta branch — ver aviso no topo do
+arquivo e desta seção): formato real de resposta de qualquer endpoint da tabela acima; se
+`webapp/main.py::spa_pagina` (modo `uvicorn` local) serve corretamente uma URL `/primario/...`
+digitada direto/recarregada (só os rewrites do `vercel.json`, usados em produção/Vercel, foram
+adicionados nesta sessão); comportamento de favoritar/histórico de busca quando logado (exige
+sessão real contra o Aiven de produção, fora do escopo de um teste rápido de mecânica de
+frontend — ver CLAUDE.md, seção "Coisas a saber antes de mexer", sobre como logar de verdade
+se precisar testar isso depois).
+
 ## Onde procurar o quê (mapa rápido)
 
 | Preciso mexer em... | Arquivo |
@@ -1592,6 +1901,7 @@ tier 3 confirmou `Bitmap Index Scan` no GIN (não seq scan).
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
 | Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/parse_cvm_resolucao160.py` (2ª fonte, rito automático), `src/unify_primario.py`, `src/refresh_primario.py` |
 | Radar de Crédito Primário (API/rotas + motor de busca) | `webapp/primario/routes.py`, `src/search_fts_primario.py` |
+| Radar de Crédito Primário (frontend/toggle de mercado) | `webapp/static/js/common.js` (`_MERCADOS`/`alternarMercado`), `consolidado.js`/`tendencias.js`/`busca.js` (rótulos e chamadas `apiMercado()`) — ver CLAUDE.md, seção "Radar de Crédito Primário — Frontend" |
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |
