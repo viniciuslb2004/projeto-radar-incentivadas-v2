@@ -1620,7 +1620,7 @@ def enriquecimento_corrigir(body: dict, request: Request):
 # resolve isso e o rewrite em vercel.json direto na CDN -- estas rotas aqui so
 # importam pro modo local (`uvicorn webapp.main:app`), onde nao existe CDN
 # reescrevendo nada antes de chegar no FastAPI.
-_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "transacoes-salvas"]
+_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "transacoes-salvas", "primario"]
 
 
 @app.get("/{pagina}", include_in_schema=False)
@@ -1635,6 +1635,24 @@ async def spa_pagina(pagina: str):
     if pagina in ("admin", "admin.html"):
         return FileResponse(STATIC_DIR / "admin.html")
     if pagina not in _SPA_PAGINAS:
+        raise HTTPException(status_code=404)
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+# Equivalente a spa_pagina() acima, so que pro prefixo /primario/... (Radar de Credito
+# Primario -- ver CLAUDE.md, secao "Radar de Credito Primario -- Frontend"). Rota
+# SEPARADA (nao da pra reaproveitar o path param unico de spa_pagina) porque
+# "/primario/consolidado" tem DOIS segmentos -- /{pagina} so casa um; o "/primario"
+# bare (um segmento so) ja e coberto por spa_pagina() acima (adicionado a
+# _SPA_PAGINAS). Mesma lista de slugs que os rewrites equivalentes em vercel.json
+# (usados em producao/Vercel); so importa no modo local (`uvicorn`), mesmo motivo do
+# comentario acima.
+_SPA_PAGINAS_PRIMARIO = ["consolidado", "tendencias", "busca", "transacoes-salvas"]
+
+
+@app.get("/primario/{pagina}", include_in_schema=False)
+async def spa_pagina_primario(pagina: str):
+    if pagina not in _SPA_PAGINAS_PRIMARIO:
         raise HTTPException(status_code=404)
     return FileResponse(STATIC_DIR / "index.html")
 
