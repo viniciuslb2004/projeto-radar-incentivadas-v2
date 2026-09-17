@@ -243,6 +243,44 @@ OPERATIONS_PRIMARIO_COLS = [
 # subtracao de datas reais da CVM).
 _DIAS_POR_MES = 30.44
 
+# ============ Corte de escopo temporal (pedido do usuario, 2026-09-16) ============
+# O Radar de Credito Primario passa a focar em operacoes a partir de 2010 --
+# 12.239->2.358 linhas anteriores a essa data ja foram removidas de
+# operations_primario em producao (backup integral em
+# operations_primario_pre2010_backup, criado antes do DELETE, ver CLAUDE.md). Este
+# filtro torna o corte PERMANENTE: sem ele, o proximo refresh reprocessaria
+# cvm_oferta_distribuicao_raw/cvm_oferta_resolucao_160_raw (que continuam com o
+# HISTORICO COMPLETO, nunca truncadas) e ressuscitaria essas linhas via raw_id
+# "ainda nao processado" (o mecanismo incremental de _build_primario_ops/_r160 so
+# olha raw_id ja presente em operations_primario -- uma linha nunca inserida
+# permanece elegivel para reinsercao em toda rodada futura).
+#
+# DECISAO DELIBERADA: linhas com data_referencia NULL (dado real, ver
+# _data_referencia/_data_referencia_r160 acima -- fica NULL quando TODOS os campos
+# de data de origem estao vazios) NUNCA sao cortadas por este filtro, mesmo
+# raciocinio ja aplicado ao backup/DELETE em producao: sem uma data resolvida, nao
+# ha como confirmar que a linha e de fato anterior a 2010 -- excluir essas linhas
+# seria destruir dado real sem justificativa. Na pratica, hoje (2026-09-16) 0
+# linhas de operations_primario tem data_referencia NULL (confirmado ao vivo em
+# producao), mas o filtro preserva esse caso de qualquer forma, ja que e um estado
+# real e esperado do pipeline (ver CLAUDE.md, secao Pipeline CVM).
+DATA_CORTE_MINIMA = "2010-01-01"
+
+
+def _filtrar_corte_temporal(df: pd.DataFrame, origem: str) -> pd.DataFrame:
+    """Remove linhas com data_referencia < DATA_CORTE_MINIMA, preservando linhas
+    com data_referencia NULL. Aplicada dentro dos DOIS builders
+    (_build_primario_ops/_build_primario_ops_r160), logo depois de data_referencia
+    ja ter sido calculada e ANTES do insert em operations_primario -- e o mesmo
+    ponto natural de _data_referencia/_data_referencia_r160, ver CLAUDE.md."""
+    if df.empty:
+        return df
+    mask = df["data_referencia"].isna() | (df["data_referencia"] >= DATA_CORTE_MINIMA)
+    n_descartadas = int((~mask).sum())
+    if n_descartadas:
+        print(f"  (corte temporal 2010+: {n_descartadas} linha(s) de {origem} anteriores a {DATA_CORTE_MINIMA} descartadas antes do insert)")
+    return df[mask].reset_index(drop=True)
+
 
 def _sim_nao_para_bool(series: pd.Series):
     return series.map(lambda v: True if v == "S" else (False if v == "N" else None))
@@ -380,7 +418,7 @@ def _build_primario_ops(conn, emissor_lookup: pd.DataFrame) -> pd.DataFrame:
         "raw_table": "cvm_oferta_distribuicao_raw",
         "raw_id": df["id"],
     })
-    return out
+    return _filtrar_corte_temporal(out, "cvm_oferta_distribuicao_raw")
 
 
 # ============ oferta_resolucao_160.csv -> operations_primario ============
@@ -493,7 +531,7 @@ def _build_primario_ops_r160(conn, emissor_lookup: pd.DataFrame) -> pd.DataFrame
         "raw_table": "cvm_oferta_resolucao_160_raw",
         "raw_id": df["id"],
     })
-    return out
+    return _filtrar_corte_temporal(out, "cvm_oferta_resolucao_160_raw")
 
 
 def _reclassificar_emissores_pendentes(conn, emissor_lookup: pd.DataFrame) -> list:
