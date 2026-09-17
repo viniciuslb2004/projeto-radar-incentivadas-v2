@@ -411,7 +411,16 @@ function qs(params) {
 
 const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
-function notifyFiltersChange() { FILTER_LISTENERS.forEach((fn) => fn(currentFilters())); }
+// Devolve uma Promise que resolve quando TODOS os listeners (refreshConsolidado/
+// refreshTendencias, ambos async) terminarem -- a maioria das chamadas (troca de
+// filtro normal) ignora o retorno, dispara e esquece, exatamente como antes.
+// alternarMercado() abaixo e a UNICA chamada que precisa aguardar de verdade
+// (pra so esconder o loading depois que o dado do mercado novo, nao o antigo,
+// estiver na tela).
+function notifyFiltersChange() {
+  const f = currentFilters();
+  return Promise.all(FILTER_LISTENERS.map((fn) => fn(f)));
+}
 
 // ============ Filtros na URL (query string) ============
 // Cada aba reflete os PROPRIOS filtros na query string (nunca o path, que ja
@@ -618,29 +627,48 @@ function _aplicarIdentidadeMercado() {
 // nova (empilharHistorico=true em _ativarView), entao "Voltar" no navegador
 // volta pro mercado anterior -- mesma convencao ja usada pra troca de aba.
 async function alternarMercado() {
+  // Cobre a troca com o MESMO overlay de carregamento inicial (ver
+  // _esconderLoadingOverlay) -- sem isso, a troca de mercado era "instantanea"
+  // na aparencia (titulo/cor/abas mudam na hora) mas os CARDS continuavam
+  // mostrando os numeros do mercado ANTERIOR por cima de baixo ate os fetches
+  // novos resolverem (perceptivel contra a latencia real do Aiven, ver
+  // CLAUDE.md) -- um "flash" de dado errado, relatado pelo usuario. Mostrado
+  // DEPOIS de _aplicarIdentidadeMercado() abaixo, pra que o proprio overlay ja
+  // exiba a marca/cor do mercado de DESTINO (o mesmo elemento reaproveita
+  // `.brand-texto`, atualizado por _aplicarIdentidadeMercado).
+  const overlay = document.getElementById("loading-overlay");
   _mercadoAtivo = _mercadoAtivo === "primario" ? "incentivado" : "primario";
   _aplicarIdentidadeMercado();
-  _atualizarAbasVisiveisDoMercado();
-  _ativarView("consolidado", true);
+  if (overlay) overlay.classList.remove("hidden");
+  try {
+    _atualizarAbasVisiveisDoMercado();
+    _ativarView("consolidado", true);
 
-  // Filtros compartilhados (agencia/instrumento, setor, uf, datas) dependem
-  // do mercado -- repopula do zero a partir de /api/{primario/}filtros ANTES
-  // de recarregar qualquer dado (funcao definida mais abaixo, junto de
-  // initFiltersAndTabs -- reaproveita a mesma logica da carga inicial).
-  if (typeof _repopularFiltrosCompartilhados === "function") await _repopularFiltrosCompartilhados();
+    // Filtros compartilhados (agencia/instrumento, setor, uf, datas) dependem
+    // do mercado -- repopula do zero a partir de /api/{primario/}filtros ANTES
+    // de recarregar qualquer dado (funcao definida mais abaixo, junto de
+    // initFiltersAndTabs -- reaproveita a mesma logica da carga inicial).
+    if (typeof _repopularFiltrosCompartilhados === "function") await _repopularFiltrosCompartilhados();
 
-  // Busca e Transacoes Salvas nao escutam onFiltersChange (sao grupos
-  // proprios) -- limpa o estado visual delas na hora, pra nunca mostrar um
-  // resultado/lista que pertence ao OUTRO mercado ate o usuario interagir de
-  // novo. Consolidado/Tendencias sao recarregados via notifyFiltersChange()
-  // (os dois ja escutam onFiltersChange desde o carregamento inicial).
-  const buscaInput = document.getElementById("busca-input");
-  const buscaResultado = document.getElementById("busca-resultado");
-  if (buscaInput) buscaInput.value = "";
-  if (buscaResultado) buscaResultado.innerHTML = "";
-  if (typeof _popularFiltrosBusca === "function") await _popularFiltrosBusca();
+    // Busca e Transacoes Salvas nao escutam onFiltersChange (sao grupos
+    // proprios) -- limpa o estado visual delas na hora, pra nunca mostrar um
+    // resultado/lista que pertence ao OUTRO mercado ate o usuario interagir de
+    // novo. Consolidado/Tendencias sao recarregados via notifyFiltersChange()
+    // (os dois ja escutam onFiltersChange desde o carregamento inicial) --
+    // AGUARDADO agora (ver notifyFiltersChange acima), pra so esconder o
+    // overlay depois que o dado do mercado novo ja estiver na tela.
+    const buscaInput = document.getElementById("busca-input");
+    const buscaResultado = document.getElementById("busca-resultado");
+    if (buscaInput) buscaInput.value = "";
+    if (buscaResultado) buscaResultado.innerHTML = "";
+    if (typeof _popularFiltrosBusca === "function") await _popularFiltrosBusca();
 
-  notifyFiltersChange();
+    await notifyFiltersChange();
+  } finally {
+    // Mesmo espirito de _esconderLoadingOverlay() na carga inicial -- nunca
+    // deixar o usuario preso atras do overlay se algum fetch falhar.
+    if (overlay) overlay.classList.add("hidden");
+  }
 }
 
 // Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
