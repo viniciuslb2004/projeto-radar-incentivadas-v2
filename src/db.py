@@ -818,6 +818,7 @@ CREATE INDEX IF NOT EXISTS idx_operations_primario_cnpj_emissor ON operations_pr
 CREATE INDEX IF NOT EXISTS idx_operations_primario_setor ON operations_primario(setor_emissor);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_uf ON operations_primario(uf_emissor);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_ano ON operations_primario(ano);
+CREATE INDEX IF NOT EXISTS idx_operations_primario_data_referencia ON operations_primario(data_referencia);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_instrumento ON operations_primario(instrumento_padronizado);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_search_vector ON operations_primario USING GIN(search_vector);
 CREATE INDEX IF NOT EXISTS idx_operations_primario_nome_trgm ON operations_primario USING GIN(nome_emissor gin_trgm_ops);

@@ -497,15 +497,8 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
   margin-bottom: 16px;
 }
 
-.grid-3 {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
 @media (max-width: 900px) {
-  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
 }
 
 .card {
@@ -669,7 +662,6 @@ table.ops-table th {
 }
 table.ops-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
 table.ops-table tr:hover { background: var(--blue-lightest); cursor: pointer; }
-table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
 
 /* ============ Detalhe amigavel da operacao ============ */
 .detalhe-secoes { display: flex; flex-direction: column; gap: 16px; }
@@ -758,21 +750,6 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
 .chip.chip-limpar { background: none; color: var(--muted, #888); text-decoration: underline; }
 .chip.chip-limpar:hover { background: none; }
 
-.narrativa {
-  background: var(--card-bg);
-  border-left: 4px solid var(--steel-2);
-  border-radius: 8px;
-  padding: 16px 18px;
-  margin-bottom: 18px;
-  line-height: 1.55;
-  box-shadow: var(--shadow);
-}
-
-.narrativa.loading {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
 .confianca-baixa-aviso {
   background: #FFF6E5;
   border-left: 4px solid #C9860A;
@@ -821,13 +798,6 @@ table.ops-table tr.eleg-linha-detalhe:hover { cursor: default; }
   margin-top: 2px;
 }
 
-.progress-track {
-  height: 6px;
-  background: var(--blue-lightest);
-  border-radius: 3px;
-  overflow: hidden;
-  margin-top: 10px;
-}
 .progress-fill {
   height: 100%;
   background: var(--steel-2);

@@ -98,6 +98,35 @@ function apiMercado(caminho) {
   return caminho;
 }
 
+// /api/{primario/}filtros e pedido tanto pelo filterbar compartilhado
+// (common.js::_initFiltersAndTabsImpl/_repopularFiltrosCompartilhados) quanto
+// pelos selects proprios da Busca (busca.js::_popularFiltrosBusca) -- mesmo
+// endpoint, mesma resposta (so a Busca le alguns campos extras dela, ex:
+// produtos/portes/subsetores). Sem cache, isso batia a rede DUAS VEZES em todo
+// carregamento de pagina (os dois listeners de DOMContentLoaded disparam quase
+// juntos) e DUAS VEZES em toda troca de mercado (alternarMercado chama as duas
+// funcoes em sequencia) -- redundante, sem nenhum ganho de "dado mais fresco"
+// (a mesma pagina nunca muda de mercado sem passar por alternarMercado, que ja
+// invalida isso sozinho via a chave abaixo). Cacheado pela PROMISE (nao so o
+// valor resolvido) pra as duas chamadas concorrentes da carga inicial
+// dividirem o MESMO fetch em voo, nao so evitar um fetch depois que o
+// primeiro ja terminou. Chave = mercado ativo no momento da chamada -- ao
+// trocar de mercado a chave muda sozinha, nunca serve filtro do mercado
+// errado; uma falha de rede NAO fica cacheada (senao um erro passageiro do
+// Aiven travaria os filtros pro resto da sessao), a proxima chamada tenta de
+// novo.
+const _filtrosCompartilhadosCache = {};
+function _fetchFiltrosCompartilhado() {
+  const chave = _mercadoAtivo;
+  if (!_filtrosCompartilhadosCache[chave]) {
+    _filtrosCompartilhadosCache[chave] = fetchJSON(apiMercado("/api/filtros")).catch((e) => {
+      delete _filtrosCompartilhadosCache[chave];
+      throw e;
+    });
+  }
+  return _filtrosCompartilhadosCache[chave];
+}
+
 // Sem ISSO por padrao, uma chamada sem timeoutMs explicito nunca resolvia nem
 // rejeitava se o backend travasse/nao respondesse (ex: cold-start do free tier do
 // Render meio truncado por algum motivo) -- o await ficava pendurado pra sempre.
@@ -853,7 +882,7 @@ async function _initFiltersAndTabsImpl() {
 
   let filtros;
   try {
-    filtros = await fetchJSON(apiMercado("/api/filtros"));
+    filtros = await _fetchFiltrosCompartilhado();
   } catch (e) {
     _esconderLoadingOverlay();
     return;
@@ -968,7 +997,7 @@ function _popularFiltrosCompartilhados(filtros) {
 async function _repopularFiltrosCompartilhados() {
   let filtros;
   try {
-    filtros = await fetchJSON(apiMercado("/api/filtros"));
+    filtros = await _fetchFiltrosCompartilhado();
   } catch (e) {
     // /api/primario/filtros pode ainda nao existir (ver aviso de contrato
     // assumido no topo deste arquivo) -- os selects so ficam com o que ja

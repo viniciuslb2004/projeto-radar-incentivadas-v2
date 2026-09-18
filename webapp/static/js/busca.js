@@ -355,7 +355,7 @@ function _limparOpcoesBuscaFiltro(id) {
 async function _popularFiltrosBusca() {
   ["bu-f-agencia", "bu-f-produto", "bu-f-porte", "bu-f-uf", "bu-f-setor"].forEach(_limparOpcoesBuscaFiltro);
   try {
-    const filtros = await fetchJSON(apiMercado("/api/filtros"));
+    const filtros = await _fetchFiltrosCompartilhado();
     const fill = (id, values) => {
       const sel = document.getElementById(id);
       (values || []).filter(Boolean).forEach((v) => sel.appendChild(new Option(v, v)));
