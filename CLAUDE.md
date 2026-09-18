@@ -412,6 +412,50 @@ estados reais, distorceria a escala) e aparecem somadas como uma legenda textual
 mapa — o bar chart antigo mostrava `IE`/`NI` normalmente (sem corte de top-N no backend), então
 esconder esse volume sem avisar seria perder dado real que já era visível antes.
 
+**Link direto pra uma operação (deep link do modal de detalhe, 2026-09-18)**: pedido do
+usuário — clicar numa operação real (ex: "Ver operações deste setor" dentro do detalhe de uma
+Linha Incentivada → lista → uma operação) devia gerar um link que qualquer pessoa (logada)
+consiga colar e cair direto no detalhe daquela operação. Como `openOperacaoDetalhe(id)`
+(`common.js`) é o MESMO modal compartilhado por Busca/Consolidado/Tendências/grupo
+econômico/Linhas Incentivadas, a implementação ficou centralizada ali — vale automaticamente
+pra qualquer lugar que já abre esse modal, não só Linhas Incentivadas.
+- **Parâmetro de URL próprio, nunca misturado com os filtros da aba**: `?operacao=<id>`,
+  gravado/removido via `_definirOperacaoNaURL(id)` — ao contrário de `sincronizarFiltrosNaURL`
+  (que RECONSTRÓI a query string inteira a partir dos filtros de UMA aba), esta função só
+  seta/apaga essa UMA chave, preservando o resto da URL (path da aba + mercado + filtros já
+  ativos) — o modal é um OVERLAY por cima de qualquer aba, nunca uma troca de view, então não
+  faz sentido ele reescrever o que já estava lá. Gravado assim que o modal abre
+  (`openOperacaoDetalhe`, ANTES do fetch — mesmo se o id não existir, "detalhe não encontrado"
+  é um estado real, não motivo pra esconder o parâmetro) e apagado em `closeModal()`.
+- **Auto-abertura ao carregar a página** (`initFiltersAndTabs()`, `common.js`): o id é lido da
+  URL (`_idOperacaoDaURL()`) **ANTES** de `_ligarBotoesDeAba()`/`_ativarView` rodarem — essas
+  funções podem reescrever a query string via `sincronizarFiltrosNaURL` (cada aba normaliza
+  seus próprios filtros ao carregar), o que apagaria `operacao` da URL antes de eu conseguir
+  ler, já que essa função não sabe desse parâmetro. Guardado numa variável local, o modal só
+  abre DEPOIS que mercado/aba/filtros terminarem de resolver (sucesso ou erro — mesmo espírito
+  do `_resolverFiltrosProntos` no `finally`, nunca bloqueia o resto do boot).
+- **Botão "🔗 Copiar link"** (`#modal-copiar-link-btn`, ao lado do "☆ Salvar"): mesmo padrão de
+  visibilidade do botão de favoritar — só aparece em `openOperacaoDetalhe` (as outras 3 funções
+  que reusam o MESMO modal — `openOperacoesModal`, `editais.js::openEditalDetalhe`,
+  `linhas.js::openLinhaDetalhe` — escondem os dois de novo explicitamente, já que reusam o
+  elemento). Copia `window.location.href` (já contém `?operacao=<id>` na hora do clique — nunca
+  reconstrói a URL de novo aqui, uma única fonte de verdade) via `navigator.clipboard.writeText`,
+  com feedback textual temporário (2s) e fallback de erro se o clipboard falhar.
+  **Achado de ambiente ao testar**: `navigator.clipboard.writeText` falha com
+  `NotAllowedError: Document is not focused` dentro do Claude Code Browser pane (mesma classe
+  de limitação já documentada pra `document.cookie` nesse ambiente, ver "Coisas a saber antes
+  de mexer") — confirmado que o catch/feedback de erro funciona corretamente (o botão mostra
+  "Não foi possível copiar"), então o CÓDIGO está certo; só não dá pra confirmar visualmente o
+  copy-to-clipboard de verdade nesse navegador de teste específico. Um clique real de usuário
+  numa aba de verdade (com foco de janela genuíno) não deve ter esse problema.
+- **Testado ao vivo, ponta a ponta**: `openOperacaoDetalhe(31260)` → URL vira
+  `?operacao=31260`, modal abre com dado real; `closeModal()` → URL volta a
+  `/linhas-incentivadas` (sem o parâmetro); recarregar a página direto em
+  `/linhas-incentivadas?operacao=31260` (mesma simulação de "colar um link recebido") →
+  modal abre sozinho, automaticamente, com o mesmo dado — confirmado via screenshot. Nenhuma
+  exceção JS nova introduzida (console só mostrava os mesmos 401 residuais do carregamento
+  pré-login de sempre, já documentados como ruído deste ambiente de teste).
+
 ## Automação (GitHub Actions)
 
 Todos em `.github/workflows/`, usando o secret `DATABASE_URL`:

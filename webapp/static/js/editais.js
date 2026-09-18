@@ -180,6 +180,7 @@ async function openEditalDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe do edital";
   document.getElementById("modal-ordenar").style.display = "none";
   document.getElementById("modal-favoritar-btn").style.display = "none";
+  document.getElementById("modal-copiar-link-btn").style.display = "none";
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");

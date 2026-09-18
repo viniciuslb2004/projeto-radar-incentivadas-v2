@@ -487,6 +487,31 @@ function sincronizarFiltrosNaURL(params) {
   if (_viewAtivaAgora) _ultimaQueryPorGrupo[_chaveCacheGrupo(_viewAtivaAgora)] = query;
 }
 
+// ============ Link direto pra uma operação (deep link do modal de detalhe) ============
+// Pedido do usuário: clicar numa transação (ex: "Ver operações deste setor" dentro de
+// uma Linha Incentivada -> lista -> uma operação, mas vale pra QUALQUER lugar que abre
+// openOperacaoDetalhe -- Busca, tabela de maiores operações, grupo econômico etc, já que
+// todos passam pelo MESMO modal) deve gerar um link que, colado por qualquer pessoa
+// (logada), abre direto no detalhe daquela operação -- sem precisar navegar/buscar de novo.
+// Guarda o id num parâmetro de query PRÓPRIO (`operacao`), preservando o resto da URL
+// (path da aba + mercado + filtros já ativos) em vez de reescrever tudo como
+// `sincronizarFiltrosNaURL` faz -- o modal é um OVERLAY por cima de qualquer aba, não uma
+// troca de view, então não faz sentido ele mexer no path/filtros da aba de baixo.
+function _idOperacaoDaURL() {
+  return paramsDaURL().get("operacao");
+}
+
+function _definirOperacaoNaURL(id) {
+  const params = paramsDaURL();
+  if (id) params.set("operacao", id);
+  else params.delete("operacao");
+  const query = params.toString();
+  const destino = window.location.pathname + (query ? "?" + query : "");
+  if (destino !== window.location.pathname + window.location.search) {
+    window.history.replaceState(window.history.state, "", destino);
+  }
+}
+
 // Debounce generico -- usado pelos campos de texto livre (query da Busca, texto da
 // Editais, busca de Linhas Incentivadas) pra nao chamar sincronizarFiltrosNaURL a
 // cada tecla digitada. O VALOR final ainda fica refletido na URL assim que o
@@ -781,6 +806,15 @@ let _resolverFiltrosProntos;
 const filtrosProntosPromise = new Promise((resolve) => { _resolverFiltrosProntos = resolve; });
 
 async function initFiltersAndTabs() {
+  // Link direto pra uma operacao (ver _definirOperacaoNaURL/openOperacaoDetalhe) --
+  // capturado AGORA, antes de qualquer coisa que mexa na URL (_ligarBotoesDeAba/
+  // _ativarView), senao um F5 numa aba cuja _aplicarFiltros*DaURL reescreve a
+  // query string via sincronizarFiltrosNaURL perderia o parametro antes de eu
+  // conseguir ler. O modal so abre DEPOIS que mercado/aba/filtros estiverem
+  // resolvidos (ver abaixo) -- puramente estetico (nao trava se o backend cair no
+  // meio, mesmo espirito do _resolverFiltrosProntos no finally).
+  const idOperacaoDaURL = _idOperacaoDaURL();
+
   // Troca de aba e 100% client-side (so classes CSS) -- liga ISSO primeiro e
   // incondicionalmente, antes de qualquer fetch, pra a navegacao nunca depender
   // do backend responder.
@@ -791,6 +825,8 @@ async function initFiltersAndTabs() {
   } finally {
     _resolverFiltrosProntos();
   }
+
+  if (idOperacaoDaURL) openOperacaoDetalhe(idOperacaoDaURL);
 }
 
 async function _initFiltersAndTabsImpl() {
@@ -965,6 +1001,11 @@ const modalOverlay = () => document.getElementById("modal-overlay");
 
 function closeModal() {
   modalOverlay().classList.remove("open");
+  // Limpa o `?operacao=<id>` (ver openOperacaoDetalhe) -- so existe enquanto o
+  // modal de detalhe esta aberto; openOperacoesModal (lista) nunca grava esse
+  // parametro, entao fechar o modal de lista tambem so limpa se por acaso
+  // houvesse um -- no-op inofensivo nesse caso.
+  _definirOperacaoNaURL(null);
 }
 
 let modalExtraFilters = {};
@@ -986,6 +1027,7 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
   const ordenarSelect = document.getElementById("modal-ordenar");
   ordenarSelect.style.display = "inline-block";
   document.getElementById("modal-favoritar-btn").style.display = "none";
+  document.getElementById("modal-copiar-link-btn").style.display = "none";
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
@@ -1098,6 +1140,35 @@ async function alternarFavoritoOtimista(btn, opId, estavaAtiva, renderizar, aoCo
   }
 }
 
+// Botao "Copiar link" do modal de detalhe de operacao -- mesmo espirito/publico do
+// botao de favoritar acima (so aparece em openOperacaoDetalhe, escondido de novo em
+// openOperacoesModal/editais.js/linhas.js, que reusam o MESMO elemento). A URL ja foi
+// atualizada com `?operacao=<id>` por _definirOperacaoNaURL ANTES desta funcao ser
+// chamada (ver openOperacaoDetalhe) -- so precisa copiar `location.href` como esta
+// na hora do clique, nunca reconstruir a URL aqui (evita duas fontes de verdade pro
+// mesmo link). `navigator.clipboard` exige contexto seguro (https ou localhost) --
+// sempre verdade em producao (Vercel) e em dev local (uvicorn em 127.0.0.1); sem
+// fallback de `document.execCommand('copy')` porque esse caminho antigo esta
+// deprecado e o navegador so bloquearia em cenarios (http:// nao-local) que este
+// projeto nunca roda.
+function _configurarBotaoCopiarLink(opId) {
+  const btn = document.getElementById("modal-copiar-link-btn");
+  if (!btn) return;
+  btn.style.display = "inline-flex";
+  const textoOriginal = "🔗 Copiar link";
+  btn.textContent = textoOriginal;
+  btn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      btn.textContent = "✓ Link copiado!";
+    } catch (e) {
+      btn.textContent = "Não foi possível copiar";
+    } finally {
+      setTimeout(() => { btn.textContent = textoOriginal; }, 2000);
+    }
+  };
+}
+
 // Botao "Salvar"/"★ Salvo" do modal de detalhe de operacao (Transacoes Salvas, ver
 // webapp/salvos.py) -- reutilizavel de qualquer lugar que abre esse mesmo modal
 // (busca, tabela de operacoes, grupo economico etc, ja que todos passam por
@@ -1138,6 +1209,12 @@ async function openOperacaoDetalhe(id) {
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
+  // Reflete o id na URL (ver _definirOperacaoNaURL acima) ANTES do fetch --
+  // mesmo se o id nao existir (`data.secoes` vazio abaixo), o link continua
+  // reproduzindo o que o usuario estava vendo ("detalhe nao encontrado" e um
+  // estado real, nao um motivo pra esconder o parametro).
+  _definirOperacaoNaURL(id);
+  _configurarBotaoCopiarLink(id);
 
   const data = await fetchJSON(apiMercado("/api/operacoes") + `/${id}`);
   if (!data.secoes || !data.secoes.length) {
