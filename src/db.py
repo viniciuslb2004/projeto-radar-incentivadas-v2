@@ -408,7 +408,6 @@ CREATE INDEX IF NOT EXISTS idx_operations_raw ON operations(raw_table, raw_id);
 CREATE INDEX IF NOT EXISTS idx_operations_setor_origem ON operations(setor_origem);
 CREATE INDEX IF NOT EXISTS idx_operations_search_vector ON operations USING GIN(search_vector);
 CREATE INDEX IF NOT EXISTS idx_operations_cliente_trgm ON operations USING GIN(cliente gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_operations_segmento_trgm ON operations USING GIN(segmento gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_operations_setor ON operations(setor_bndes);
 CREATE INDEX IF NOT EXISTS idx_operations_segmento ON operations(segmento);
