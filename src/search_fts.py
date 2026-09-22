@@ -192,11 +192,13 @@ def buscar_texto(
 ) -> dict:
     """Busca determinística em 6 tiers (ver PRIORIDADE_MOTIVO), cada uma como sua
     propria query: tiers 1-3 (prefixo CNPJ/cliente, keyword em setor/subsetor/
-    segmento/produto/instrumento/indexador via LIKE) fazem seq scan -- sem indice
-    funcional pra unaccent(lower(campo)), ver nota de performance no CLAUDE.md;
-    tiers 4-5 (full-text, phraseto_tsquery/websearch_to_tsquery) usam o indice GIN
-    de search_vector direto no WHERE (rapidas, ver idx_operations_search_vector);
-    tier 6 (trigrama) so roda se as anteriores voltarem com poucos resultados
+    segmento/produto/instrumento/indexador via LIKE) usam os indices GIN trigram
+    funcionais que ja existem em producao sobre `busca_normalizar_texto(coluna)`
+    (idx_operations_*_busca_trgm/idx_operations_cnpj_digits_trgm -- documentados,
+    so pra registro/versionamento, no final de src/db.py); tiers 4-5 (full-text,
+    phraseto_tsquery/websearch_to_tsquery) usam o indice GIN de search_vector
+    direto no WHERE (rapidas, ver idx_operations_search_vector); tier 6 (trigrama)
+    so roda se as anteriores voltarem com poucos resultados
     (MINIMO_ANTES_DE_TRIGRAMA), tambem seq scan. Cada tier exclui os ids ja
     capturados por uma tier mais forte -- uma operacao aparece uma unica vez, na
     tier mais forte em que bate. Ordenado por prioridade, depois cobertura de
@@ -302,79 +304,98 @@ def buscar_texto(
         cur = conn.cursor()
 
         # Tiers 1-3 (prefixo de CNPJ/cliente, keyword em setor/subsetor/segmento/
-        # produto/instrumento/indexador) continuam um unico seq scan sobre a tabela
-        # inteira -- nao ha indice funcional pra unaccent(lower(cliente)) etc, e o
-        # volume de linhas candidatas aqui e tipicamente pequeno (prefixo exato ou
-        # keyword curta), entao o custo do seq scan em si e aceitavel. O que NAO
-        # fica mais aqui sao os tiers 4/5 (full-text): antes, os dois `@@ tsquery`
-        # + o `ts_rank_cd` ficavam DENTRO deste mesmo CASE, forcando o Postgres a
-        # avaliar full-text pra TODA operacao da base (~58 mil linhas) em toda
-        # busca, mesmo com o indice GIN de search_vector (idx_operations_search_vector)
-        # disponivel e OCIOSO -- misturar uma condicao indexavel dentro de um CASE
-        # que roda incondicionalmente sobre a tabela inteira impede o planner de
-        # usar esse indice. Tiers 4/5 viraram queries proprias logo abaixo, cada
-        # uma com `WHERE search_vector @@ tsquery(...)` direto (sem CASE por
-        # cima) -- isso deixa o Postgres escolher um Bitmap Index Scan no GIN em
-        # vez de Parallel Seq Scan. Ganho real medido ao vivo contra producao
-        # (EXPLAIN ANALYZE): uma busca de texto livre tipica caiu de ~5-8s pra
-        # ~150-300ms. Cada tier so roda se a(s) anterior(es) ainda nao encheram o
-        # `limite` pedido (mesmo padrao ja usado pro tier 6/trigrama abaixo), e
-        # cada uma exclui os ids ja escolhidos por uma tier mais forte -- preserva
-        # exatamente a mesma regra de antes (cada operacao aparece uma unica vez,
+        # produto/instrumento/indexador) usam os indices GIN trigram FUNCIONAIS que
+        # ja existem em producao (criados fora do controle de versao -- ver
+        # CREATE INDEX/CREATE OR REPLACE FUNCTION no final de src/db.py, adicionados
+        # la so pra documentar/versionar o que ja existe, nunca aplicados dali):
+        # idx_operations_cnpj_digits_trgm, idx_operations_cliente_busca_trgm,
+        # idx_operations_setor_busca_trgm, idx_operations_subsetor_busca_trgm,
+        # idx_operations_segmento_busca_trgm, idx_operations_produto_busca_trgm,
+        # idx_operations_instrumento_financeiro_busca_trgm,
+        # idx_operations_indexador_busca_trgm. Todos sao funcionais sobre
+        # `busca_normalizar_texto(coluna)` -- uma funcao SQL ja existente em
+        # producao que faz EXATAMENTE o mesmo calculo que `_normaliza_ortografia_sql()`
+        # reproduzia manualmente (unaccent + lower + normalizacao optica/otica). O
+        # Postgres so casa um indice funcional por IDENTIDADE EXATA da arvore de
+        # expressao -- reescrever essa mesma conta por fora (mesmo que
+        # matematicamente identica) quebra o casamento com o indice. Por isso as
+        # tiers 1-3 chamam `busca_normalizar_texto(coluna)` direto no WHERE (nunca
+        # reproduzem o calculo inline) e, como as tiers 4/5 ja faziam, cada uma
+        # virou uma query PROPRIA (WHERE plano sobre a tabela, sem CASE por cima)
+        # -- um CASE sobre a tabela inteira faz o planner ignorar qualquer indice,
+        # mesmo quando a expressao de dentro bateria com um. Ganho real medido ao
+        # vivo (EXPLAIN ANALYZE contra producao, 2026-09-22): de Parallel Seq Scan
+        # (~2.2-2.9s) pra Bitmap Heap Scan nos indices trigram (poucas dezenas de
+        # ms) pra "hospital"/"credito rural". Cada tier so roda se a(s) anterior(es)
+        # ainda nao encheram o teto (mesmo padrao ja usado pro tier 6/trigrama
+        # abaixo), e cada uma exclui os ids ja escolhidos por uma tier mais forte
+        # -- preserva a mesma regra de antes (cada operacao aparece uma unica vez,
         # na tier mais forte em que ela bate).
-        # TETO_TIERS123: essa query ainda faz seq scan (sem indice funcional pra
-        # unaccent(lower(campo)), so schema change resolveria -- ver nota no
-        # CLAUDE.md), mas NAO calcula mais ts_rank_cd aqui dentro (extraido pra um
-        # segundo passo abaixo, so nos candidatos que sobraram -- mesmo padrao
-        # `id = ANY(?)` ja usado pra cobertura). Motivo medido ao vivo: ts_rank_cd
-        # embutido no SELECT list e avaliado pra TODA linha da tabela varrida (as
-        # ~58 mil, mesmo as ~56 mil que nunca batem prioridade nenhuma e sao
-        # descartadas pelo WHERE de fora) -- puro desperdicio. Sem ORDER BY por
-        # rank_fts aqui dentro, a query nao sabe mais escolher os "N mais
-        # relevantes" sozinha, entao busca ATE um teto generoso (bem acima do
-        # `limite` default de 200) e deixa o rank_fts (calculado so pros
-        # candidatos que vieram) decidir o corte final em Python. Teto alto o
-        # bastante pra cobrir qualquer termo de setor/subsetor/segmento/produto
-        # plausivel (o mais largo observado, um SETOR inteiro tipo
+        # TETO_TIERS123: cada query abaixo ainda busca ate um teto generoso (bem
+        # acima do `limite` default de 200), nao so ate `limite` -- sem ORDER BY
+        # por relevancia dentro da query (nao ha rank calculado ainda pra estas
+        # tiers), overfetch garante que o re-rank por rank_fts feito depois em
+        # Python (ver "Calcula o rank_fts de verdade" abaixo) nao perca candidatos
+        # melhores que ficariam de fora por causa de um LIMIT curto demais. Teto
+        # alto o bastante pra cobrir qualquer termo de setor/subsetor/segmento/
+        # produto plausivel (o mais largo observado, um SETOR inteiro tipo
         # "agropecuaria", bateu ~2 mil linhas) sem herdar o custo de rankear a
         # base inteira.
-        TETO_TIERS123 = max(limite, 3000)
-        sql_tiers123 = f"""
-            SELECT {", ".join(_COLS_OPERACAO)}, prioridade FROM (
-                SELECT {", ".join(_COLS_OPERACAO)},
-                    CASE
-                        WHEN ? != '' AND regexp_replace(cnpj, '\\D', '', 'g') LIKE ? || '%%' THEN 1
-                        WHEN {_norm("unaccent(lower(cliente))")} LIKE {_norm("unaccent(lower(?))")} || '%%' THEN 1
-                        WHEN {_norm("unaccent(lower(coalesce(setor_bndes,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                          OR {_norm("unaccent(lower(coalesce(subsetor_bndes,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                          OR {_norm("unaccent(lower(coalesce(segmento,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                        THEN 2
-                        WHEN {_norm("unaccent(lower(coalesce(produto,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                          OR {_norm("unaccent(lower(coalesce(instrumento_financeiro,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                          OR {_norm("unaccent(lower(coalesce(indexador,'')))")} LIKE '%%' || {_norm("unaccent(lower(?))")} || '%%'
-                        THEN 3
-                        ELSE NULL
-                    END AS prioridade
+        def _buscar_tier_like(where_sql: str, where_params: list, prioridade: int, faltam: int, excluir: list) -> list:
+            """Mesmo padrao de `_buscar_tier_indexada` (uma query por tier, exclui
+            ids ja capturados por uma tier mais forte, para assim que enche
+            `faltam`) -- so que o teste de pertencer a tier aqui e um LIKE contra
+            `busca_normalizar_texto(coluna)`/`regexp_replace(cnpj, ...)` (casa com
+            os indices GIN trigram) em vez de `search_vector @@ tsquery`."""
+            if faltam <= 0:
+                return []
+            exclusao_sql, params_exclusao = "", []
+            if excluir:
+                exclusao_sql = "AND NOT (id = ANY(?))"
+                params_exclusao = [excluir]
+            sql = f"""
+                SELECT {", ".join(_COLS_OPERACAO)}, {prioridade} AS prioridade
                 FROM operations
-                WHERE 1=1 {filtro_sql}
-            ) sub
-            WHERE prioridade IS NOT NULL
-            ORDER BY prioridade ASC
-            LIMIT ?
-        """
-        params_tiers123 = [
-            cnpj_para_match, cnpj_para_match,  # tier 1 cnpj
-            query,  # tier 1 cliente prefixo
-            query, query, query,  # tier 2 setor/subsetor/segmento
-            query, query, query,  # tier 3 produto/instrumento/indexador
-        ]
-        params_tiers123.extend(params_extra_principal)
-        params_tiers123.append(TETO_TIERS123)
-        rows_tiers123 = cur.execute(sql_tiers123, params_tiers123).fetchall()
+                WHERE ({where_sql})
+                    {exclusao_sql} {filtro_sql}
+                LIMIT ?
+            """
+            params = list(where_params) + params_exclusao + params_extra_principal + [faltam]
+            return cur.execute(sql, params).fetchall()
+
+        TETO_TIERS123 = max(limite, 3000)
+        rows = []
+
+        rows_tier1 = _buscar_tier_like(
+            "(? != '' AND regexp_replace(cnpj, '\\D', '', 'g') LIKE ? || '%%')"
+            " OR busca_normalizar_texto(cliente) LIKE busca_normalizar_texto(?) || '%%'",
+            [cnpj_para_match, cnpj_para_match, query],
+            1, TETO_TIERS123 - len(rows), [],
+        )
+        rows += rows_tier1
+
+        rows_tier2 = _buscar_tier_like(
+            "busca_normalizar_texto(setor_bndes) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            " OR busca_normalizar_texto(subsetor_bndes) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            " OR busca_normalizar_texto(segmento) LIKE '%%' || busca_normalizar_texto(?) || '%%'",
+            [query, query, query],
+            2, TETO_TIERS123 - len(rows), [r[0] for r in rows],
+        )
+        rows += rows_tier2
+
+        rows_tier3 = _buscar_tier_like(
+            "busca_normalizar_texto(produto) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            " OR busca_normalizar_texto(instrumento_financeiro) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            " OR busca_normalizar_texto(indexador) LIKE '%%' || busca_normalizar_texto(?) || '%%'",
+            [query, query, query],
+            3, TETO_TIERS123 - len(rows), [r[0] for r in rows],
+        )
+        rows += rows_tier3
+
         # placeholder de rank_fts (substituido pelo valor real mais abaixo, so
         # pros candidatos finais) -- mantem o formato de tupla igual ao das tiers
         # 4/5, que ja vem com rank_fts de verdade.
-        rows = [r + (0.0,) for r in rows_tiers123]
+        rows = [r + (0.0,) for r in rows]
 
         def _buscar_tier_indexada(tsquery_fn: str, query_texto: str, prioridade: int, faltam: int, excluir: list) -> list:
             """Tier 4 (frase) ou 5 (OR) via `search_vector @@ tsquery` direto no
@@ -530,12 +551,26 @@ def buscar_texto(
                     ) DESC
                 LIMIT ?
             """
+            # ORDEM dos parametros tem que bater com a ORDEM POSICIONAL real dos `?`
+            # no SQL acima -- bug real corrigido em 2026-09-22 (documentado em
+            # docs/motor-busca.md): `{filtro_sql}` fica ENTRE o fecha-parenteses do
+            # WHERE e o ORDER BY (linha 542 acima), mas os params antes desta
+            # correcao eram montados como [SELECT, WHERE, ORDER BY] e SO DEPOIS
+            # ganhavam `.extend(params_extra_trigrama)` -- os valores do filtro
+            # estrutural (ex: uf) acabavam ligados aos `?` do ORDER BY (posicao
+            # errada) e os `?` do filtro (posicao real, logo apos o WHERE) recebiam
+            # `query` em vez do valor do filtro. Resultado: `buscar_texto("petrobas",
+            # uf="RJ")` filtrava por `uf = 'petrobas'` (0 linhas) em vez de
+            # `uf = 'RJ'`. Ordem correta, seguindo o texto do SQL de cima pra baixo:
+            # SELECT, WHERE, filtro estruturado, ORDER BY, LIMIT.
             params_trigrama = [
                 query, query, query, query,  # SELECT (rank_fts informativo)
                 query, query, query, query,  # WHERE
+            ]
+            params_trigrama.extend(params_extra_trigrama)  # filtro estruturado (entre WHERE e ORDER BY no SQL)
+            params_trigrama += [
                 query, query, query, query,  # ORDER BY (similarity, depois word_similarity)
             ]
-            params_trigrama.extend(params_extra_trigrama)
             params_trigrama.append(limite - len(rows))
             ja_incluidos = {r[0] for r in rows}
             rows_trigrama = cur.execute(sql_trigrama, params_trigrama).fetchall()

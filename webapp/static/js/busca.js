@@ -4,6 +4,15 @@
 
 let ultimosResultados = [];
 
+// Guarda contra race condition (2026-09-22): 2 chamadas a runBusca() em sequencia
+// rapida (ex: clique + troca de filtro logo em seguida) fazem 2 fetches
+// concorrentes -- sem isso, quem responde por ULTIMO na rede vence a renderizacao,
+// nao necessariamente quem foi disparado por ultimo (a resposta da busca antiga
+// pode chegar depois da nova e sobrescrever o resultado certo com um desatualizado).
+// Cada chamada incrementa e captura seu proprio id; so renderiza se ainda for o id
+// mais recente no momento em que a resposta chega.
+let _buscaReqId = 0;
+
 // Paginacao (2026-09-22): CLIENT-SIDE de proposito, nao no backend -- decisao medida ao
 // vivo antes de implementar, nao suposta. /api/busca ja capa em 200 resultados (limite
 // default de buscar_texto(), src/search_fts.py, nunca exposto pro caller hoje) e uma
@@ -357,6 +366,7 @@ async function _popularFiltrosBusca() {
 }
 
 async function runBusca(q) {
+  const meuReqId = ++_buscaReqId; // ver comentario da variavel no topo do arquivo
   await registrarHistoricoBusca(q);
   _sincronizarFiltrosBuscaNaURL(q);
   const container = document.getElementById("busca-resultado");
@@ -369,16 +379,20 @@ async function runBusca(q) {
       // webapp/main.py). Calcula o vetor da query no navegador (transformers.js) e
       // manda pronto -- o servidor so faz numpy contra os vetores do corpus.
       const prep = await fetchJSON("/api/busca/preparar?" + qs({ q }));
+      if (meuReqId !== _buscaReqId) return; // uma busca mais nova ja foi disparada, descarta esta resposta
       if (prep.erro) {
         container.innerHTML = `<p class="empty-state">${prep.erro}</p>`;
         return;
       }
       const vetor = await embutirQuery(prep.query_expandida, (info) => {
+        if (meuReqId !== _buscaReqId) return;
         if (info && info.status === "progress" && typeof info.progress === "number") {
           container.innerHTML = `<p class="empty-state">Baixando modelo de busca no seu navegador (${Math.round(info.progress)}%)...</p>`;
         }
       });
+      if (meuReqId !== _buscaReqId) return;
       data = await postJSON("/api/busca", { q, vetor });
+      if (meuReqId !== _buscaReqId) return;
 
       // A 1a passada pode vir com confianca baixa (nome de empresa/termo que a base
       // nao conhece, ex: "Quicksoft") -- tenta UMA 2a passada pesquisando `q` na web e
@@ -387,9 +401,12 @@ async function runBusca(q) {
       if (!data.erro && data.confianca_baixa) {
         try {
           const prepEnriquecido = await fetchJSON("/api/busca/preparar_enriquecido?" + qs({ q }), 10000);
+          if (meuReqId !== _buscaReqId) return;
           if (!prepEnriquecido.erro && prepEnriquecido.enriquecido_via_web && prepEnriquecido.query_expandida) {
             const vetorEnriquecido = await embutirQuery(prepEnriquecido.query_expandida);
+            if (meuReqId !== _buscaReqId) return;
             const dataEnriquecida = await postJSON("/api/busca", { q, vetor: vetorEnriquecido });
+            if (meuReqId !== _buscaReqId) return;
             if (!dataEnriquecida.erro && dataEnriquecida.melhor_score > data.melhor_score) {
               dataEnriquecida.query_original = q;
               dataEnriquecida.enriquecido_via_web = true;
@@ -409,9 +426,11 @@ async function runBusca(q) {
       data = await fetchJSON("/api/busca?" + qs({ q, ..._filtrosBusca() }));
     }
   } catch (e) {
-    container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
+    if (meuReqId === _buscaReqId) container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
     return;
   }
+
+  if (meuReqId !== _buscaReqId) return; // resposta de uma busca desatualizada -- quem chegou por ultimo na rede nao pode vencer quem foi disparado por ultimo
 
   if (data.erro) {
     container.innerHTML = `<p class="empty-state">${data.erro}</p>`;

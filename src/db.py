@@ -571,6 +571,34 @@ CREATE INDEX IF NOT EXISTS idx_linhas_status ON linhas_incentivadas(status);
 CREATE INDEX IF NOT EXISTS idx_linhas_setor ON linhas_incentivadas(setor_padronizado);
 CREATE INDEX IF NOT EXISTS idx_linhas_search_vector ON linhas_incentivadas USING GIN(search_vector);
 
+-- ============ Busca sem IA: indices GIN trigram funcionais (tiers 1-3, src/search_fts.py)
+-- ============
+-- Documentacao/versionamento do que ja existe em producao (Aiven) -- estes objetos
+-- foram criados fora do controle de versao, achados ao vivo numa investigacao de
+-- performance (EXPLAIN ANALYZE contra producao, 2026-09-22): tiers 1-3 da busca
+-- (prefixo de CNPJ/cliente, keyword em setor/subsetor/segmento/produto/instrumento/
+-- indexador) so usam Bitmap Heap Scan nestes indices quando o WHERE chama
+-- `busca_normalizar_texto(coluna)` DIRETO (o Postgres so casa um indice funcional
+-- por identidade EXATA da arvore de expressao -- reescrever a mesma conta por fora,
+-- mesmo que matematicamente identica, ja quebrava o casamento e caia pra Parallel
+-- Seq Scan, ~2.2-2.9s por busca). CREATE INDEX/FUNCTION aqui sao IF NOT EXISTS/
+-- OR REPLACE e os objetos ja existem em producao -- rodar isto de novo e um no-op
+-- seguro, mas mesmo assim NUNCA aplicar schema/indice contra producao sem
+-- confirmacao explicita do usuario antes (ver regra no CLAUDE.md), mesmo quando o
+-- objeto ja existe.
+CREATE OR REPLACE FUNCTION busca_normalizar_texto(txt TEXT) RETURNS TEXT AS $$
+    SELECT regexp_replace(unaccent(lower(coalesce(txt, ''))), '\\moptic', 'otic', 'gi')
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE SET search_path = public;
+
+CREATE INDEX IF NOT EXISTS idx_operations_cliente_busca_trgm ON operations USING GIN (busca_normalizar_texto(cliente) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_setor_busca_trgm ON operations USING GIN (busca_normalizar_texto(setor_bndes) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_subsetor_busca_trgm ON operations USING GIN (busca_normalizar_texto(subsetor_bndes) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_segmento_busca_trgm ON operations USING GIN (busca_normalizar_texto(segmento) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_produto_busca_trgm ON operations USING GIN (busca_normalizar_texto(produto) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_instrumento_financeiro_busca_trgm ON operations USING GIN (busca_normalizar_texto(instrumento_financeiro) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_indexador_busca_trgm ON operations USING GIN (busca_normalizar_texto(indexador) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_operations_cnpj_digits_trgm ON operations USING GIN (regexp_replace(cnpj, '\\D', '', 'g') gin_trgm_ops);
+
 """
 
 
