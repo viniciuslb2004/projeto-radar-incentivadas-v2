@@ -366,6 +366,38 @@ SINONIMOS_SEGMENTO = {
     "TRATAMENTO E DISPOSICAO DE RESIDUOS": ["tratamento de lixo", "aterro sanitario", "residuos"],
     "USINAS DE COMPOSTAGEM": ["compostagem", "reciclagem organica"],
     "RECUPERACAO DE MATERIAIS": ["reciclagem", "sucata", "materiais reciclaveis"],
+
+    # ---- FINALIDADE/USO DOS RECURSOS (2026-09-21) -----------------------------
+    # Lacunas identificadas olhando os segmentos com MAIS operacoes ainda sem
+    # nenhum sinonimo curado (ver segmentos_sem_sinonimo(), topo do ranking por
+    # n_operacoes) e que correspondem a uma FINALIDADE/proposito de uso dos
+    # recursos (nao um setor de atuacao da empresa) -- exatamente a lacuna que
+    # a tarefa pediu pra revisar. Chave usa so o trecho comum aos 4 rotulos
+    # reais que a base tem pra "pesquisa e desenvolvimento" (com/sem acento,
+    # singular "ciencia"/plural "ciencias" fisica/social) -- `chave in seg_norm`
+    # e substring, entao uma chave so cobre os 4 (222+95+78+2 operacoes,
+    # confirmado via SELECT DISTINCT segmento ... LIKE). "p&d"/"pd"/"inovacao"
+    # sao os termos que um usuario realmente digitaria pra essa finalidade
+    # (financiamento de P&D/inovacao e o proposito mais comum de operacoes da
+    # FINEP), nenhum deles aparece literalmente no texto oficial do CNAE.
+    "PESQUISA E DESENVOLVIMENTO": ["p&d", "pd", "inovacao", "inovador", "ciencia e tecnologia",
+                                    "pesquisa cientifica", "pesquisa e desenvolvimento"],
+    # "ADMINISTRACAO PUBLICA EM GERAL" (1377 operacoes, o MAIOR segmento sem
+    # sinonimo nenhum, confirmado): quem busca operacoes de orgaos publicos
+    # digita "governo"/"prefeitura"/"orgao publico", nao o rotulo tecnico do
+    # CNAE.
+    "ADMINISTRACAO PUBLICA EM GERAL": ["governo", "orgao publico", "orgaos publicos",
+                                        "poder publico", "prefeitura", "administracao publica"],
+    # NOTA (limitacao aceita, nao resolvida nesta sessao): os demais segmentos
+    # de maior volume em segmentos_sem_sinonimo() (ex: "FABRICACAO DE
+    # MAQUINAS-FERRAMENTA, PECAS E ACESSORIOS", "FABRICACAO DE PRODUTOS
+    # PETROQUIMICOS BASICOS") ja contem, no proprio rotulo, a palavra que um
+    # usuario provavelmente digitaria ("maquinas", "petroquimicos") -- tier 2
+    # (LIKE em setor/subsetor/segmento) e o proprio stemmer do tsvector ja
+    # cobrem esses casos sem precisar de sinonimo curado; nao adicionados por
+    # falta de um termo de uso comum CLARAMENTE ausente do texto oficial (
+    # mesmo criterio de "so cura o que tem lacuna real", ver docstring do
+    # modulo).
 }
 
 

@@ -35,6 +35,10 @@ PRIORIDADE_MOTIVO = {
 
 LIMIAR_SIMILARIDADE_TRGM = 0.25
 
+# Limiar pra word_similarity() (ver uso na tier 6 mais abaixo) -- mais alto que
+# LIMIAR_SIMILARIDADE_TRGM de proposito, ver comentario junto ao SQL da tier 6.
+LIMIAR_WORD_SIMILARITY_TRGM = 0.5
+
 # Palavras genericas DESTE dominio -- nao sao stopword em portugues "de verdade" (o
 # dicionario 'portuguese' do Postgres ja remove preposicoes/artigos), mas em uma base
 # onde TODO registro e uma operacao de credito de uma empresa, a palavra "empresa"
@@ -53,7 +57,42 @@ LIMIAR_SIMILARIDADE_TRGM = 0.25
 # SA, MOMBAK ANGICO-BRANCO FLORESTAL S.A.) ja rankeavam em 1o lugar buscando so pelo
 # nome proprio (Belterra/MOMBAK...), confirmando que o problema era so a palavra
 # generica, nao dado faltando.
-PALAVRAS_GENERICAS_QUERY = {"empresa", "empresas", "companhia", "companhias", "grupo", "grupos"}
+# Lote adicional confirmado empiricamente em 2026-09-21 (mesmo criterio: termo
+# comum no NOME/razao social de milhares de empresas -- ver contagem de
+# unaccent(lower(cliente)) LIKE '%termo%' -- que ficava concorrendo, no mesmo
+# OR-tsquery, com um termo raro de setor/segmento num campo de peso mais baixo):
+# "brasil"/"brasileira"/"brasileiro" (aparece em ~4,3 mil/700+/137 clientes --
+# "PETROLEO BRASILEIRO", "TELEFONICA BRASIL", "STELLANTIS ... BRASIL" etc.),
+# "nacional" (~520 clientes, ex: "FABRICA NACIONAL DE AMORTECEDORES", "MUSEU
+# HISTORICO NACIONAL"), "industrial"/"industriais" (~2,1 mil) e "comercio"/
+# "comercial" (~230-330, tambem substring do proprio setor "COMERCIO/SERVICOS" e
+# de "servicos"/"servico" -- ver abaixo). Confirmado ao vivo (bateria antes/depois,
+# mesmo padrao de teste do "empresa de hospitais"): "nacional de hospitais",
+# "brasil de hospitais", "servicos de hospitais" e "industrial de hospitais"
+# traziam no topo empresas de autopecas/produtos quimicos/sorvete cujo unico
+# ponto em comum com a query era essas palavras genericas no NOME (peso A),
+# nunca uma empresa do setor de saude -- exatamente o mesmo padrao do bug
+# "empresa"/"grupo". Mesmo teste com "comercio de hospitais"/"comercial de
+# hospitais" trouxe so comercio/industria genericos (peso A), nunca saude.
+# "servico"/"servicos" tambem confirmado poluindo do mesmo jeito ("servicos de
+# hospitais" trazia "SERVICO DE TECNOLOGIA ALTERNATIVA", nunca hospital) --
+# como o filtro so tira a palavra do OR de texto livre (tier 5)/calculo de
+# cobertura, NUNCA do tier 2 (que compara a FRASE completa contra
+# setor_bndes/subsetor_bndes, onde "COMERCIO/SERVICOS" e "INDUSTRIA" continuam
+# batendo normalmente), filtrar "comercio"/"servicos" aqui nao quebra a busca
+# por essas categorias de setor. NAO adicionados por falta de evidencia
+# empirica de poluicao real (testado e descartado, ver notas da sessao de
+# 2026-09-21): "sociedade", "holding", "participacoes", "instituicao",
+# "desenvolvimento" -- combinacoes testadas com esses termos ja traziam a
+# empresa certa no topo (o termo generico nao dominava o ranking).
+PALAVRAS_GENERICAS_QUERY = {
+    "empresa", "empresas", "companhia", "companhias", "grupo", "grupos",
+    "brasil", "brasileira", "brasileiras", "brasileiro", "brasileiros",
+    "nacional", "nacionais",
+    "industrial", "industriais",
+    "comercio", "comercial",
+    "servico", "servicos",
+}
 
 # UF (2 letras) e um FILTRO estruturado, nao um termo de conteudo -- deixa-lo entrar
 # no OR-tsquery de texto livre (tier 4) e um problema pior do que "empresa": o codigo
@@ -416,22 +455,86 @@ def buscar_texto(
         rows.sort(key=lambda r: (r[idx_prioridade], -cobertura_por_id.get(r[0], 0), -r[idx_rank_fts]))
 
         if len(rows) < MINIMO_ANTES_DE_TRIGRAMA:
+            # similarity() sozinho (limiar LIMIAR_SIMILARIDADE_TRGM) compara a
+            # query INTEIRA contra o campo INTEIRO -- funciona bem quando
+            # `cliente` ja e curto (ex: query "susano" vs cliente "SUZANO S.A.",
+            # similarity=0.31, acima do limiar), mas SUBESTIMA sistematicamente
+            # um erro de digitacao dentro de um nome legal LONGO: confirmado ao
+            # vivo (2026-09-21) que "petrobas" (falta um "r") vs o cliente real
+            # "PETROLEO BRASILEIRO S A PETROBRAS" tem similarity=0.24 -- abaixo
+            # do limiar por poucos centesimos so por causa do tamanho da string
+            # inteira, fazendo a tier 6 devolver ZERO resultados pra uma empresa
+            # extremamente conhecida com um erro de digitacao trivial. Postgres
+            # tem `word_similarity()` pra exatamente este caso -- "qual e a
+            # melhor substring/palavra do segundo texto que combina com o
+            # primeiro", sem penalizar pelo tamanho do texto todo. Medido ao
+            # vivo contra producao: word_similarity('petrobas', <nome longo>) =
+            # 0.667 (bem acima de um limiar propio, calibrado abaixo);
+            # idem klabim/KLABIN=0.71, brasken/BRASKEM=0.75,
+            # telefoncia/TELEFONICA=0.64 -- e testado que o resultado CORRETO
+            # sempre ranqueia no topo do GREATEST entre os poucos falsos-
+            # positivos que aparecem (ex: "MUNICIPIO DE PETROPOLIS" pra
+            # "petrobas", mas com word_similarity mais baixo que as variantes
+            # reais da Petrobras). LIMIAR_WORD_SIMILARITY_TRGM calibrado mais
+            # alto que LIMIAR_SIMILARIDADE_TRGM (0.5 vs 0.25) porque
+            # word_similarity tende a estruturalmente dar valores mais altos
+            # (compara so a MELHOR substring, nao o texto inteiro) -- nesse
+            # limiar, casos ja bem servidos por similarity() (nomes curtos,
+            # ex: "susano"/SUZANO) continuam entrando por aquele criterio, sem
+            # precisar de um limiar mais permissivo aqui que traria mais ruido
+            # (testado: "industria"/"banco" sozinhos, se usados como query
+            # aqui, bateriam em milhares de linhas por word_similarity -- mas
+            # esses ja tem >=10 resultados via tiers 1-5 e nunca chegam a esta
+            # tier).
+            # IMPORTANTE sobre a ORDENACAO (bug corrigido antes de fechar esta
+            # mudanca): um primeiro rascunho ordenava por
+            # GREATEST(similarity, word_similarity) junto -- misturar as duas
+            # escalas na mesma comparacao inverteu a ordem em pelo menos um
+            # caso real (confirmado ao vivo): pra "susano", a EMPRESA CERTA
+            # (SUZANO S.A., similarity=0.31) ficava ATRAS de um falso-positivo
+            # (BIOMETANO SUL S.A., que so bate por acaso em "sul"/"sustentavel",
+            # mas cujo word_similarity=0.57 e mais alto). similarity() sozinho
+            # ja ordenava os dois corretamente (0.31 > 0.20) -- e o mesmo padrao
+            # se confirma pra "petrobas" (0.24 > 0.18 pro falso-positivo
+            # "MUNICIPIO DE PETROPOLIS"). Por isso o ORDER BY abaixo usa
+            # similarity() como criterio PRIMARIO (preserva a ordem de antes
+            # desta mudanca sempre que ela ja resolve) e word_similarity so
+            # como DESEMPATE -- ele so decide a ordem entre linhas que
+            # similarity() nao consegue separar (tipicamente as que so entraram
+            # pelo criterio novo, com similarity() baixo demais pra ali ja
+            # discriminar nada).
             sql_trigrama = f"""
                 SELECT {", ".join(_COLS_OPERACAO)}, 6 AS prioridade,
                     GREATEST(
                         similarity(unaccent(lower(cliente)), unaccent(lower(?))),
-                        similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?)))
+                        similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?))),
+                        word_similarity(unaccent(lower(?)), unaccent(lower(cliente))),
+                        word_similarity(unaccent(lower(?)), unaccent(lower(coalesce(segmento,''))))
                     ) AS rank_fts
                 FROM operations
                 WHERE (
                     similarity(unaccent(lower(cliente)), unaccent(lower(?))) > {LIMIAR_SIMILARIDADE_TRGM}
                     OR similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?))) > {LIMIAR_SIMILARIDADE_TRGM}
+                    OR word_similarity(unaccent(lower(?)), unaccent(lower(cliente))) > {LIMIAR_WORD_SIMILARITY_TRGM}
+                    OR word_similarity(unaccent(lower(?)), unaccent(lower(coalesce(segmento,'')))) > {LIMIAR_WORD_SIMILARITY_TRGM}
                 )
                 {filtro_sql}
-                ORDER BY rank_fts DESC
+                ORDER BY
+                    GREATEST(
+                        similarity(unaccent(lower(cliente)), unaccent(lower(?))),
+                        similarity(unaccent(lower(coalesce(segmento,''))), unaccent(lower(?)))
+                    ) DESC,
+                    GREATEST(
+                        word_similarity(unaccent(lower(?)), unaccent(lower(cliente))),
+                        word_similarity(unaccent(lower(?)), unaccent(lower(coalesce(segmento,''))))
+                    ) DESC
                 LIMIT ?
             """
-            params_trigrama = [query, query, query, query]
+            params_trigrama = [
+                query, query, query, query,  # SELECT (rank_fts informativo)
+                query, query, query, query,  # WHERE
+                query, query, query, query,  # ORDER BY (similarity, depois word_similarity)
+            ]
             params_trigrama.extend(params_extra_trigrama)
             params_trigrama.append(limite - len(rows))
             ja_incluidos = {r[0] for r in rows}
