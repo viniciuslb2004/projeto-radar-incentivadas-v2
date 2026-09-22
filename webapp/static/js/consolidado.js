@@ -315,7 +315,7 @@ async function loadUF(filters) {
       const somaOps = foraDoMapa.reduce((acc, d) => acc + d.n_operacoes, 0);
       foraEl.textContent =
         `+ ${fmtBRL(somaValor)} (${fmtNum(somaOps)} operações) de abrangência nacional/interestadual ` +
-        "ou sem UF informada -- não representável em um mapa por estado.";
+        "ou sem UF informada.";
     } else {
       foraEl.textContent = "";
     }
@@ -604,7 +604,7 @@ function _aplicarRotulosMercadoConsolidado() {
     const el = document.getElementById(id);
     if (el) el.textContent = texto;
   };
-  set("chart-serie-titulo", primario ? "Evolução temporal — por instrumento" : "Evolução temporal — BNDES x FINEP");
+  set("chart-serie-titulo", primario ? "Evolução temporal — por instrumento" : "Evolução temporal de emissões");
   set("chart-serie-hint", primario ? "R$ emitido por período" : "R$ contratado por período");
   // "chart-setores-titulo" (Ranking de setores) so existe mais no card
   // Incentivado (ver index.html, data-mercado-only="incentivado") -- o slot

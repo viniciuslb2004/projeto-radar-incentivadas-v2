@@ -521,7 +521,7 @@ def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_f
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(setor_bndes, 'Nao classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE(setor_bndes, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
             GROUP BY setor_bndes
             ORDER BY SUM(valor_contratado) DESC
@@ -544,7 +544,7 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(subsetor_bndes, 'Nao classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE(subsetor_bndes, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
             GROUP BY subsetor_bndes
             ORDER BY SUM(valor_contratado) DESC
@@ -568,7 +568,7 @@ def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: 
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(segmento, 'Nao classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE(segmento, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
             GROUP BY segmento
             ORDER BY SUM(valor_contratado) DESC
@@ -633,7 +633,7 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
     def valor_por_grupo(d_ini, d_fim):
         where = where_base + (" AND " if where_base else "WHERE ") + "data_contratacao >= ? AND data_contratacao < ?"
         rows = cur.execute(
-            f"SELECT COALESCE({group_col}, 'Nao classificado'), SUM(valor_contratado), COUNT(*) "
+            f"SELECT COALESCE({group_col}, 'Não classificado'), SUM(valor_contratado), COUNT(*) "
             f"FROM operations {where} GROUP BY {group_col}",
             params_base + [d_ini, d_fim],
         ).fetchall()
