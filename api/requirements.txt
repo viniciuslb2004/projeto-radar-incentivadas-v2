@@ -37,12 +37,14 @@
 # pypdf (src/editais_documentos.py) NAO entra: so e importado por modulos do pipeline
 # (refresh_editais.py), nunca alcancado a partir de webapp/main.py.
 #
-# openpyxl removido daqui (2026-09-21, remocao da feature de Exportacoes/Excel --
-# ver docs/archive/removed-features.md): so era usado por webapp/exportar_excel.py
-# (import lazy dentro das rotas de exportar, agora removidas), nenhum outro modulo
-# do grafo de imports acima o importa. Continua em requirements.txt (raiz) porque
-# src/parse_bndes.py/src/parse_finep.py (pipeline, nunca alcancados a partir de
-# webapp/main.py) usam openpyxl pra ler as planilhas oficiais.
+# openpyxl: removido em 2026-09-21 (remocao da feature de Exportacoes/Excel -- ver
+# docs/archive/removed-features.md), READICIONADO em 2026-09-22 pela area interna
+# (/interno-artica -- Exportar Excel, ver webapp/exportar_excel.py) -- import lazy
+# dentro das rotas /api/salvos/exportar e /api/busca/exportar (webapp/main.py),
+# gated por Depends(exigir_staff). Mesmo pacote que src/parse_bndes.py/
+# src/parse_finep.py (pipeline) usam pra ler as planilhas oficiais -- ja estava em
+# requirements.txt (raiz) por esse motivo, so faltava aqui pro runtime hospedado.
+openpyxl
 #
 # uvicorn fica de fora de proposito: o runtime Python da Vercel importa o objeto
 # ASGI `app` diretamente (ver api/index.py) e roda seu proprio servidor -- nao

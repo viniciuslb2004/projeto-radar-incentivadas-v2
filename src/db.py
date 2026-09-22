@@ -599,6 +599,39 @@ CREATE INDEX IF NOT EXISTS idx_operations_instrumento_financeiro_busca_trgm ON o
 CREATE INDEX IF NOT EXISTS idx_operations_indexador_busca_trgm ON operations USING GIN (busca_normalizar_texto(indexador) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_operations_cnpj_digits_trgm ON operations USING GIN (regexp_replace(cnpj, '\\D', '', 'g') gin_trgm_ops);
 
+-- ============ Area interna (Equipe Artica, /interno-artica) -- Salvar/Notas ============
+-- Declarada aqui documentada/versionada (nenhum script deste projeto executa isto
+-- automaticamente -- init_db()/create_tables() nunca rodam sozinhos, so via
+-- `python src/db.py` manual). ACHADO AO VIVO nesta mesma sessao (2026-09-22): a
+-- tabela JA EXISTE em producao (Aiven), 0 linhas -- a remocao de "Transacoes Salvas"
+-- (2026-09-21) criou o backup `usuario_operacoes_salvas_removido_backup` mas NUNCA
+-- chegou a rodar o DROP TABLE da tabela original, apesar do que
+-- docs/archive/removed-features.md secao 3 descreve como ja feito (confirmado via
+-- `SELECT to_regclass('usuario_operacoes_salvas')` contra producao). Este
+-- CREATE TABLE IF NOT EXISTS e' portanto um NO-OP contra o schema atual -- nao ha
+-- DDL pendente de confirmacao pra esta tabela especificamente (mantido aqui so' pra
+-- versionar a declaracao, caso o backup precise ser restaurado num Aiven novo).
+--
+-- Favoritar operacao + nota interna POR CONTA DE STAFF (`admin_usuarios.password_hash
+-- != ''`, ver webapp/admin/auth.py) -- NUNCA por lead publico identificado no site
+-- (password_hash=''). `usuario_id` sem FK pra admin_usuarios de proposito (mesma
+-- segregacao ja documentada pro painel de admin: admin_usuarios/admin_sessoes vivem
+-- fora do schema de negocio deste arquivo, criadas por webapp/admin/seed.py) -- a
+-- validade de usuario_id e' garantida pelo backend (gate de staff em cada rota, ver
+-- webapp/admin/auth.py::exigir_staff), nao por constraint de banco. `nota` reaproveitada
+-- pelo pedido de "Notas" (nao existe tabela de notas separada). Codigo original desta
+-- tabela (antes de "Transacoes Salvas" ser removida em 2026-09-21) em
+-- docs/archive/removed-features.md, secao 3.2 -- reaproveitado aqui identico.
+CREATE TABLE IF NOT EXISTS usuario_operacoes_salvas (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    usuario_id INTEGER NOT NULL,
+    operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    nota TEXT,
+    criado_em TEXT NOT NULL,
+    UNIQUE (usuario_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usuario_operacoes_salvas_usuario ON usuario_operacoes_salvas(usuario_id, criado_em DESC);
+
 """
 
 

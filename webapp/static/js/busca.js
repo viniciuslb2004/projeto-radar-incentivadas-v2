@@ -259,6 +259,11 @@ function renderResultados(data) {
         <option value="valor-asc">Menor valor</option>
         <option value="agencia-asc">Agência (A-Z)</option>
       </select>
+      <!-- Exportar Excel (area interna, /interno-artica) -- so aparece pra sessao
+           de STAFF (ver _configurarExportarBuscaBtn abaixo, chamada apos renderizar
+           os resultados). Gate de verdade e' o backend (Depends(exigir_staff) em
+           POST /api/busca/exportar), isto aqui e' so' visibilidade de UI. -->
+      <button id="busca-exportar-btn" class="acao-btn hidden" style="margin-top:0;" title="Exportar estes resultados para Excel">⬇ Exportar Excel</button>
     </div>
   </div>`;
   html += '<div id="busca-lista"></div>';
@@ -269,7 +274,25 @@ function renderResultados(data) {
     buscaPaginaAtual = 1; // trocar o criterio de ordenacao tambem volta pra pagina 1
     renderListaResultados();
   });
+  _configurarExportarBuscaBtn(data.query || "");
   renderListaResultados();
+}
+
+// Exportar Excel dos resultados ATUAIS da Busca (ultimosResultados, ja
+// renderizado na tela -- nunca re-roda a busca no backend, ver webapp/
+// exportar_excel.py). So mostra o botao pra sessao de staff (obterSessaoAtual,
+// common.js) -- recalculado a cada renderResultados() porque o HTML inteiro de
+// #busca-resultado e' reescrito a cada busca nova.
+function _configurarExportarBuscaBtn(query) {
+  const btn = document.getElementById("busca-exportar-btn");
+  if (!btn) return;
+  obterSessaoAtual().then((sessao) => {
+    if (sessao.staff) btn.classList.remove("hidden");
+  });
+  btn.onclick = async () => {
+    const slug = (query || "resultado").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "resultado";
+    await _baixarArquivoPost("/api/busca/exportar", { query, resultados: ultimosResultados }, `busca-${slug}.xlsx`);
+  };
 }
 
 function _filtrosBusca() {

@@ -6,6 +6,15 @@
 
   const API = "/admin/api";
 
+  // Rotulo legivel de `admin_acessos_log.origem` -- 'admin' (painel), 'interno'
+  // (area interna da Equipe Artica, /interno-artica, ver CLAUDE.md) ou 'site'
+  // (site publico/lead, valor default/fallback pra qualquer origem desconhecida).
+  function _rotuloOrigemAcesso(origem) {
+    if (origem === "admin") return "Painel admin";
+    if (origem === "interno") return "Área interna";
+    return "Site principal";
+  }
+
   const loginView = document.getElementById("admin-login-view");
   const painelView = document.getElementById("admin-painel-view");
   const loginForm = document.getElementById("admin-login-card");
@@ -221,7 +230,7 @@
         const paginas = s.paginas && s.paginas.length ? s.paginas.join(", ") : "--";
         const saida = s.saida ? formatarData(s.saida) : "(sessão em aberto)";
         const duracao = s.duracao_min != null ? `${s.duracao_min} min` : "--";
-        const origem = s.origem === "admin" ? "Painel admin" : "Site principal";
+        const origem = _rotuloOrigemAcesso(s.origem);
         const interesses =
           s.interesses && s.interesses.length
             ? s.interesses
@@ -405,7 +414,7 @@
       .map(
         (a) => `<tr>
           <td>${a.username}</td>
-          <td>${a.origem === "admin" ? "Painel admin" : "Site principal"}</td>
+          <td>${_rotuloOrigemAcesso(a.origem)}</td>
           <td>${a.evento === "login" ? "Login" : "Logout"}</td>
           <td>${a.ip || "--"}</td>
           <td>${formatarData(a.criado_em)}</td>

@@ -1,5 +1,11 @@
 > Detalhe/histórico extraído do CLAUDE.md em 2026-09-21 (redução de tokens por sessão). Ler só quando a tarefa tocar este assunto especificamente.
 
+> **ATUALIZADO 2026-09-22 (2) — área interna da Equipe Ártica (`/interno-artica`).**
+> Nova área que serve a MESMA SPA do site público, mas só pra sessão de STAFF
+> (`admin_usuarios.password_hash != ''`), com 3 funcionalidades extras (Salvar,
+> Notas, Exportar Excel). Ver seção "Área interna da Equipe Ártica (/interno-artica)"
+> no fim deste arquivo.
+
 > **ATUALIZADO 2026-09-22 — reposicionamento pra plataforma pública de lead-gen.**
 > O login por usuário+senha do SITE PRINCIPAL descrito nas seções abaixo (`POST
 > /api/login`, cadastro público com aprovação via `POST /api/registrar` +
@@ -485,3 +491,74 @@ painel: seções empilhadas verticalmente).
 - **Dashboard** (`GET /admin/api/dashboard`, cards no topo) ganhou `total_usuarios_site`,
   `total_leads` e `leads_pendentes` (contagem de `interesse_lead` com `contatado = FALSE`) —
   `total_usuarios` (cards "Contas do painel") passou a contar só `password_hash != ''`.
+
+---
+
+## Área interna da Equipe Ártica (`/interno-artica`, 2026-09-22)
+
+Entrega a MESMA experiência do produto público (mesma SPA -- `webapp/static/index.html`,
+reaproveitada, nunca duplicada) pra Equipe Ártica autenticada, com 3 funcionalidades extras que
+o público não tem: **Salvar** (favoritar operação), **Notas** (nota interna na operação) e
+**Exportar Excel**.
+
+**Investigação prévia (passo 0), confirmada por leitura de código antes de desenhar**:
+1. Contas de staff (as mesmas usadas em `/admin`) e leads públicos (identificação passwordless,
+   `POST /api/identificar`/`/api/cadastrar`) vivem na MESMA tabela `admin_usuarios` — **não há
+   tabela separada**. O eixo que distingue os dois é `password_hash` (`''` = lead público
+   passwordless; hash PBKDF2 real = staff), **não** `role` (`admin`/`usuario` são dois papéis de
+   staff igualmente válidos — um lead público sempre nasce com `role='usuario'` também, então
+   `role` sozinho não serve pra este gate).
+2. Sessão pública (lead) e sessão de staff usam o MESMO mecanismo (`admin_sessoes`, cookie
+   `admin_session`, `verificar_acesso_principal`) — a única forma de diferenciá-las é olhar
+   `admin_usuarios.password_hash` do dono da sessão.
+
+**Desenho**: nenhuma tabela de contas nova. `webapp/admin/auth.py::validar_sessao_token` passou
+a devolver também `staff` (`bool(password_hash)`) junto de `id`/`username`/`role`. Gate de
+autorização real de backend: `webapp/admin/auth.py::exigir_staff` (novo `Depends`) — exige sessão
+válida E `staff=True`, qualquer `role` (diferente de `exigir_admin`, que exige `role='admin'`
+especificamente pro painel `/admin`). Login próprio da área interna:
+`POST /api/interno/login` (`webapp/main.py`) — username+senha contra `admin_usuarios`
+(`autenticar_credenciais`, mesma função do painel), **sem** exigir `role='admin'` — qualquer
+conta de staff ativa entra. Uma conta de lead público nunca autentica aqui (senha vazia sempre
+falha em `verificar_senha`).
+
+**Frontend**: `/interno-artica` serve o MESMO `index.html`/`common.js` do site público
+(`_SPA_PAGINAS` em `webapp/main.py` + rewrite em `vercel.json`). `common.js::MODO_INTERNO`
+(baseado em `window.location.pathname`) decide qual overlay de login mostrar quando não há
+sessão (`_mostrarLanding`): `#landing-interno-overlay` (usuário+senha) em `/interno-artica`,
+`#landing-overlay` (passwordless) em qualquer outra rota — nunca os dois ao mesmo tempo. As 3
+funcionalidades extras (badge "Modo interno" na topbar, botão "☆ Salvar" + nota no modal de
+detalhe, "Exportar Excel" na Busca e "Exportar salvos" na topbar) são controladas pelo flag
+`staff` de `GET /api/me` (`obterSessaoAtual()`), **em qualquer aba** — uma sessão de staff
+continua "staff" navegando pelas URLs públicas também (mesmo cookie), então não faz sentido
+escondê-las fora de `/interno-artica` especificamente. **Público não vê nada disso**: nenhum
+link/botão/referência a `/interno-artica` existe em tela pública nenhuma (só em comentários HTML,
+nunca renderizados).
+
+**Reativado a partir do código arquivado** (`docs/archive/removed-features.md`, "Transações
+Salvas" e "Exportações", removidos em 2026-09-21): `webapp/salvos.py` (favoritar/desfavoritar/
+nota/listar, tabela `usuario_operacoes_salvas`, campo `nota` já embutido reaproveitado pro pedido
+de "Notas" — sem tabela nova de notas) e `webapp/exportar_excel.py`
+(`gerar_xlsx_busca`/`gerar_xlsx_operacoes_salvas`, estilo navy já usado no projeto) — **o gate
+antigo (`_exigir_usuario_logado`, qualquer lead público logado) foi trocado por `exigir_staff`**
+em todas as rotas novas (`POST`/`DELETE`/`PATCH /api/salvos/operacoes/{id}`, `GET /api/salvos`,
+`POST /api/salvos/exportar`, `POST /api/busca/exportar`). `GET /api/operacoes/{id}` também passou
+a incluir `salva`/`nota` na resposta, mas só quando quem chama é staff (nunca pra lead público).
+
+**Achado ao vivo, testando contra produção (Aiven) nesta sessão**: a tabela
+`usuario_operacoes_salvas` **já existe em produção** (0 linhas) — a remoção de "Transações
+Salvas" em 2026-09-21 criou o backup (`usuario_operacoes_salvas_removido_backup`) mas **nunca
+chegou a rodar o `DROP TABLE` da tabela original**, apesar do que a seção 3 de
+`docs/archive/removed-features.md` descreve como já feito. `CREATE TABLE IF NOT EXISTS` foi
+adicionado em `src/db.py` mesmo assim (documentado/versionado, no-op contra o schema já
+existente) — nenhum DDL foi executado por esta sessão, só lido via `information_schema`. Como a
+tabela já existe e está vazia, as rotas de Salvar/Notas/Exportar foram testadas de ponta a ponta
+contra produção (favoritar/nota/listar/exportar/desfavoritar), usando a sessão de staff real já
+ativa no navegador de teste — nenhuma linha de teste ficou para trás (o teste terminou
+desfavoritando a mesma operação).
+
+**Log de acessos**: `registrar_acesso(..., origem="interno", ...)` no login de
+`/interno-artica` — terceiro valor de `origem` em `admin_acessos_log` (além de `'site'`/
+`'admin'`), rotulado "Área interna" em `webapp/static/js/admin.js::_rotuloOrigemAcesso` (painel).
+Nenhuma mudança na Atividade agregada (`GET /admin/api/atividade`) — o agrupamento por
+`usuario_id` já é agnóstico a `origem`.

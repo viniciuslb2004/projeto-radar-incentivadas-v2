@@ -17,6 +17,12 @@ Mercado Primário/Exportações/Favoritos removidos; login do site principal vir
 por e-mail (`POST /api/identificar`/`/api/cadastrar`, sem senha — `/admin` continua com senha
 normalmente); nova aba "Potenciais Linhas". Ver `docs/painel-admin.md`/`docs/linhas-incentivadas.md`.
 
+**Revisão adicional 2026-09-22**: nova área interna `/interno-artica` — mesma SPA do site
+público, login próprio (usuário+senha, `POST /api/interno/login`, qualquer conta de staff já
+existente em `admin_usuarios`) com 3 funcionalidades extras (Salvar/Notas/Exportar Excel),
+gated por `webapp/admin/auth.py::exigir_staff` (staff = `password_hash != ''`, distinto de
+`role`). Ver `docs/painel-admin.md`, seção "Área interna da Equipe Ártica".
+
 ## O que é a plataforma
 
 Site que acompanha operações de **crédito incentivado** de empresas brasileiras junto a
@@ -76,7 +82,8 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
 | `linhas_incentivadas` | catálogo de produtos permanentes (não transações) |
 | `operations_correcoes_manuais` | correções manuais, reaplicadas a cada refresh |
 | `refresh_log` / `refresh_editais_log` | histórico de cada rodada de pipeline |
-| `admin_usuarios` / `admin_sessoes` / `admin_acessos_log` | contas, sessão e log de acesso (painel + site principal) |
+| `admin_usuarios` / `admin_sessoes` / `admin_acessos_log` | contas, sessão e log de acesso (painel + site principal + área interna) |
+| `usuario_operacoes_salvas` | favoritos + nota interna por conta de STAFF (`/interno-artica`), já existe em produção (achado ao vivo 2026-09-22 — nunca chegou a ser dropada quando "Transações Salvas" foi removida, apesar do que `docs/archive/removed-features.md` descreve) |
 
 ## Onde procurar o quê (mapa rápido — histórico/detalhe em `docs/`)
 
@@ -91,6 +98,7 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
 | Frontend — abas, roteamento, filtros na URL | `webapp/static/js/common.js`, `webapp/static/index.html` | `docs/frontend-abas.md` |
 | Frontend — cada aba | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` | — |
 | Painel de Admin (`/admin`) | `webapp/admin/*`, `webapp/static/admin.html`, `webapp/static/js/admin.js` | `docs/painel-admin.md` |
+| Área interna Equipe Ártica (`/interno-artica` — Salvar/Notas/Exportar Excel) | `webapp/salvos.py`, `webapp/exportar_excel.py`, `webapp/admin/auth.py::exigir_staff` | `docs/painel-admin.md` |
 | Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` | `docs/stack-deploy.md` |
 | Automação (GitHub Actions) | `.github/workflows/*.yml` | `docs/automacao.md` |
 | Gotchas de infra/produção (Aiven, pool, sequences, cookie) | — | `docs/incidentes-infra.md` |

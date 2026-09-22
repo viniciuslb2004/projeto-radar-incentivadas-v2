@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS admin_acessos_log (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     usuario_id INTEGER REFERENCES admin_usuarios(id) ON DELETE SET NULL,
     username_snapshot TEXT NOT NULL,
-    origem TEXT NOT NULL,   -- 'site' (login principal) | 'admin' (painel /admin)
+    origem TEXT NOT NULL,   -- 'site' (login principal) | 'admin' (painel /admin) | 'interno' (/interno-artica, ver CLAUDE.md)
     evento TEXT NOT NULL,   -- 'login' | 'logout'
     ip TEXT,
     criado_em TEXT NOT NULL

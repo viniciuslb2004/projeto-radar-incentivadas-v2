@@ -165,6 +165,8 @@ async function openEditalDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe do edital";
   document.getElementById("modal-ordenar").style.display = "none";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
+  document.getElementById("modal-favoritar-btn").classList.add("hidden");
+  document.getElementById("modal-nota-container").classList.add("hidden");
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");

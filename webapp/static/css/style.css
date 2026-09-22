@@ -150,13 +150,13 @@
 .landing-acesso-card h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
 .landing-acesso-sub { margin: 0 0 18px; font-size: 12px; color: var(--blue-lighter); line-height: 1.5; }
 
-#identificar-form, #cadastro-form {
+#identificar-form, #cadastro-form, #interno-login-form {
   display: flex;
   flex-direction: column;
 }
 #identificar-form.hidden, #cadastro-form.hidden { display: none; }
 
-#identificar-form label, #cadastro-form label {
+#identificar-form label, #cadastro-form label, #interno-login-form label {
   align-self: flex-start;
   font-size: 11px;
   color: var(--blue-lighter);
@@ -164,7 +164,7 @@
   letter-spacing: 0.4px;
   margin-top: 10px;
 }
-#identificar-form input, #cadastro-form input {
+#identificar-form input, #cadastro-form input, #interno-login-form input {
   width: 100%;
   border: 1px solid var(--blue-mid);
   border-radius: 6px;
@@ -176,8 +176,41 @@
   color: #fff;
 }
 #identificar-form input::placeholder, #cadastro-form input::placeholder { color: var(--blue-lighter); }
-#identificar-form input:focus, #cadastro-form input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
+#identificar-form input:focus, #cadastro-form input:focus, #interno-login-form input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
 #cadastro-form input:read-only { opacity: 0.7; }
+
+/* ============ Login da area interna (/interno-artica -- Equipe Artica) ============
+   Overlay PROPRIO (nao o #landing-overlay publico -- ver common.js::_mostrarLanding,
+   que escolhe um dos dois conforme MODO_INTERNO) com o MESMO tratamento visual
+   (gradiente navy, mesmo card), so com usuario+senha em vez de so e-mail -- reusa as
+   classes .landing-* (nao esta 100% escopado por ID como #landing-overlay, ver
+   comentario na regra dele). */
+#landing-interno-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy) 100%);
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+}
+#landing-interno-overlay.hidden { display: none; }
+#interno-login-btn {
+  margin-top: 20px;
+  width: 100%;
+  background: var(--navy-900);
+  color: #fff;
+  border: 1px solid var(--blue-mid);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#interno-login-btn:hover { background: var(--navy); }
+#interno-login-btn:disabled { opacity: 0.6; cursor: default; }
 
 .login-erro {
   color: #ff9b9b;
@@ -397,6 +430,25 @@ body {
 }
 .topbar-interesse-btn.hidden { display: none; }
 .topbar-interesse-btn:hover { background: var(--steel-2); }
+
+/* "Modo interno" -- indicacao visual discreta na topbar (ver CLAUDE.md,
+   /interno-artica) de que a sessao atual e' de STAFF (nunca aparece pra lead
+   publico, ver common.js -- so' quando /api/me devolve staff=true). Cor propria
+   (dourado/ambar) pra nao ser confundida com "Quero saber mais" (publico). */
+.topbar-interno-badge {
+  background: #7a5a1e;
+  border: 1px solid #a67c2e;
+  color: #ffe8b3;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.topbar-interno-badge.hidden { display: none; }
 
 /* ============ Filter bar ============ */
 .filterbar {
@@ -621,6 +673,36 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
   transition: background 0.15s, color 0.15s;
 }
 .fav-btn:hover { background: rgba(255,255,255,0.22); }
+.fav-btn.ativo { background: #a67c2e; border-color: #a67c2e; color: #fff; }
+.fav-btn.ativo:hover { background: #8f6a24; }
+.fav-btn.hidden { display: none; }
+
+/* ============ Nota interna (area /interno-artica, so pra operacao ja SALVA por
+   uma conta de staff -- ver webapp/salvos.py, campo `nota` reaproveitado tambem
+   pro pedido de "Notas") ============ */
+#modal-nota-container { margin-top: 12px; }
+#modal-nota-container.hidden { display: none; }
+.salvos-nota {
+  width: 100%;
+  min-height: 64px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.salvos-nota:focus { outline: 2px solid var(--blue-mid); outline-offset: -1px; }
+.salvos-nota-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+  display: block;
+}
+.salvos-nota-status { font-size: 11px; color: var(--text-muted); margin-top: 4px; min-height: 14px; }
 
 table.ops-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.ops-table th {
@@ -874,6 +956,7 @@ table.ops-table tr.ops-grupo-item td:first-child { padding-left: 24px; }
   font-size: 13px;
   margin-top: 4px;
 }
+.acao-btn.hidden { display: none; }
 
 /* ============ Mapa "Por UF" (Consolidado) ============
    Substitui o bar chart (Chart.js, so top-12 UFs) por um SVG inline do mapa do

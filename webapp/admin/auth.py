@@ -113,17 +113,25 @@ def encerrar_sessao(conn, token: str) -> None:
 
 
 def validar_sessao_token(conn, token: str):
+    """Devolve {'id','username','role','staff'} da sessao, ou None. `staff` (novo,
+    ver `exigir_staff` abaixo / area interna /interno-artica) e' `password_hash != ''`
+    -- a MESMA convencao ja usada por `GET /admin/api/usuarios` vs `usuarios-site`
+    pra separar conta da Equipe Artica (senha real, PBKDF2) de lead publico
+    identificado passwordless no site (`password_hash=''`, ver webapp/main.py::
+    site_cadastrar). Nao e' o mesmo eixo de `role` ('admin'|'usuario') -- os dois
+    papeis de staff sao igualmente "staff" aqui; `role` so importa pra `exigir_admin`
+    (painel /admin, exige role='admin' especificamente)."""
     if not token:
         return None
     row = conn.execute(
-        "SELECT u.id, u.username, u.ativo, u.role, s.expira_em "
+        "SELECT u.id, u.username, u.ativo, u.role, u.password_hash, s.expira_em "
         "FROM admin_sessoes s JOIN admin_usuarios u ON u.id = s.usuario_id "
         "WHERE s.token = ?",
         (token,),
     ).fetchone()
     if row is None:
         return None
-    usuario_id, username, ativo, role, expira_em = row
+    usuario_id, username, ativo, role, password_hash, expira_em = row
     if not ativo:
         return None
     expira = datetime.fromisoformat(expira_em)
@@ -131,7 +139,7 @@ def validar_sessao_token(conn, token: str):
         expira = expira.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) >= expira:
         return None
-    return {"id": usuario_id, "username": username, "role": role}
+    return {"id": usuario_id, "username": username, "role": role, "staff": bool(password_hash)}
 
 
 def definir_cookie_sessao(response: Response, token: str) -> None:
@@ -185,6 +193,30 @@ def exigir_admin(request: Request):
         conn.close()
     if usuario is None or usuario["role"] != "admin":
         raise HTTPException(status_code=401, detail="Sessao invalida ou expirada")
+    return usuario
+
+
+def exigir_staff(request: Request):
+    """Gate de AUTORIZACAO (nao so autenticacao) das 3 funcionalidades extras da area
+    interna (/interno-artica -- Salvar, Notas, Exportar Excel, ver webapp/salvos.py e
+    webapp/exportar_excel.py): exige sessao valida E de conta STAFF
+    (`password_hash != ''`, ver `validar_sessao_token` acima), qualquer `role`
+    ('admin' OU 'usuario' -- os dois papeis de staff ja existentes acessam
+    /interno-artica igualmente, diferente de `exigir_admin` que exige role='admin'
+    especificamente pro painel /admin). NUNCA confia em esconder botao so no
+    frontend -- uma sessao de LEAD PUBLICO (identificado passwordless no site,
+    `password_hash=''`) que de alguma forma monte a mesma chamada recebe 403 aqui,
+    mesmo que a sessao em si seja valida pra navegar no site principal."""
+    token = request.cookies.get(SESSION_COOKIE)
+    conn = get_connection(pooled=True)
+    try:
+        usuario = validar_sessao_token(conn, token)
+    finally:
+        conn.close()
+    if usuario is None:
+        raise HTTPException(status_code=401, detail="Sessao invalida ou expirada")
+    if not usuario["staff"]:
+        raise HTTPException(status_code=403, detail="Recurso disponivel somente para a Equipe Artica")
     return usuario
 
 

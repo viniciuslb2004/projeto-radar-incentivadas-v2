@@ -64,19 +64,35 @@ function _fetchFiltrosCompartilhado() {
 // explicitamente, entao nao sao afetadas.
 const TIMEOUT_PADRAO_MS = 45000;
 
-// Usuario logado (username de /api/me, ou null se login individual nao estiver
-// configurado). Cacheado numa Promise unica -- varios lugares da SPA (topbar,
-// historico pessoal de busca) precisam saber "quem esta logado" e nao devem
-// disparar um /api/me por chamador.
-let _usuarioAtualPromise = null;
-function obterUsuarioAtual() {
-  if (!_usuarioAtualPromise) {
-    _usuarioAtualPromise = fetch(_urlCompleta("/api/me"), { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : { username: null }))
-      .then((dado) => dado.username || null)
-      .catch(() => null);
+// Area interna da Equipe Artica (/interno-artica, ver CLAUDE.md) -- MESMA SPA do
+// site publico, so troca qual overlay de login aparece quando nao ha sessao (ver
+// _mostrarLanding abaixo) e liga/desliga o botao "Quero saber mais" (so publico).
+// As 3 funcionalidades extras (Salvar/Notas/Exportar Excel) sao controladas pelo
+// flag `staff` de /api/me (obterSessaoAtual abaixo), NAO por este path -- uma
+// conta de staff continua "staff" mesmo navegando pelas URLs publicas
+// (/consolidado etc, mesma sessao/cookie compartilhado), entao os botoes internos
+// aparecem em qualquer aba pra quem logou como staff, nao so' em /interno-artica.
+const MODO_INTERNO = window.location.pathname.startsWith("/interno-artica");
+
+// Sessao atual completa ({username, nome, staff}, de /api/me) -- cacheada numa
+// Promise unica -- varios lugares da SPA (topbar, historico pessoal de busca,
+// botoes da area interna) precisam saber "quem esta logado" e nao devem disparar
+// um /api/me por chamador.
+let _sessaoAtualPromise = null;
+function obterSessaoAtual() {
+  if (!_sessaoAtualPromise) {
+    _sessaoAtualPromise = fetch(_urlCompleta("/api/me"), { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { username: null, nome: null, staff: false }))
+      .catch(() => ({ username: null, nome: null, staff: false }));
   }
-  return _usuarioAtualPromise;
+  return _sessaoAtualPromise;
+}
+
+// Username logado (ou null) -- mantido por compatibilidade dos chamadores
+// existentes (busca.js, log de navegacao) que so precisam do username, nunca do
+// flag `staff`.
+function obterUsuarioAtual() {
+  return obterSessaoAtual().then((sessao) => sessao.username || null);
 }
 
 // ============ Landing / identificacao passwordless (ver #landing-overlay em
@@ -99,6 +115,23 @@ class ErroAutenticacao extends Error {}
 // vazia sem nunca voltar pra landing (bug real relatado pelo usuario: "o site
 // quebra, fica em branco"). Idempotente -- seguro chamar varias vezes.
 function _mostrarLanding(mensagemErro) {
+  // /interno-artica mostra o login de STAFF (usuario+senha) -- NUNCA a landing/
+  // identificacao passwordless publica (essa e' so pro site principal). Os dois
+  // overlays sao mutuamente exclusivos (nunca os dois "hidden"=false ao mesmo
+  // tempo) -- ver #landing-overlay/#landing-interno-overlay em index.html.
+  if (MODO_INTERNO) {
+    document.getElementById("landing-interno-overlay").classList.remove("hidden");
+    const erro = document.getElementById("interno-login-erro");
+    if (mensagemErro) {
+      erro.textContent = mensagemErro;
+      erro.classList.remove("hidden");
+    } else {
+      erro.classList.add("hidden");
+    }
+    const usuarioInput = document.getElementById("interno-login-usuario");
+    if (usuarioInput) usuarioInput.focus();
+    return;
+  }
   document.getElementById("landing-overlay").classList.remove("hidden");
   document.getElementById("cadastro-form").classList.add("hidden");
   document.getElementById("identificar-form").classList.remove("hidden");
@@ -287,12 +320,23 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // "Quero saber mais" (substitui usuario logado + Sair na topbar, ver CLAUDE.md)
-  // -- so aparece pra quem ja se identificou (ver /api/me em webapp/main.py). Sem
-  // ninguem identificado (ou identificacao ainda nao configurada, dev local sem
-  // nenhuma conta), a rota devolve username=null e o botao fica escondido.
-  obterUsuarioAtual().then((usuario) => {
-    if (!usuario) return;
-    document.getElementById("topbar-interesse-btn").classList.remove("hidden");
+  // -- so aparece pra LEAD PUBLICO ja identificado (staff=false), nunca pra
+  // sessao de staff (area interna tem seu proprio indicativo, "Modo interno" +
+  // botoes de Salvar/Notas/Exportar -- ver bloco abaixo). Sem ninguem
+  // identificado (ou identificacao ainda nao configurada, dev local sem nenhuma
+  // conta), a rota devolve username=null e o botao fica escondido.
+  obterSessaoAtual().then((sessao) => {
+    if (sessao.username && !sessao.staff) {
+      document.getElementById("topbar-interesse-btn").classList.remove("hidden");
+    }
+    // "Modo interno" (indicacao visual discreta, pedido explicito do escopo de
+    // /interno-artica) + botao de exportar operacoes salvas -- SO' pra sessao de
+    // staff, em QUALQUER aba (a mesma sessao/cookie vale nas URLs publicas
+    // tambem, ver MODO_INTERNO acima).
+    if (sessao.staff) {
+      document.getElementById("topbar-interno-badge").classList.remove("hidden");
+      document.getElementById("topbar-exportar-salvos-btn").classList.remove("hidden");
+    }
   });
 
   document.getElementById("topbar-interesse-btn").addEventListener("click", async () => {
@@ -311,6 +355,88 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("interesse-modal-overlay").classList.add("hidden");
   });
 });
+
+// ============ Area interna da Equipe Artica (/interno-artica) ============
+// Login de staff (usuario+senha, ver webapp/main.py::interno_login) -- reload
+// completo em caso de sucesso, mesmo padrao do login/identificacao publica acima.
+document.addEventListener("DOMContentLoaded", () => {
+  const form = document.getElementById("interno-login-form");
+  if (!form) return; // defensivo -- este form so existe em index.html
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("interno-login-btn");
+    const erroEl = document.getElementById("interno-login-erro");
+    erroEl.classList.add("hidden");
+    const username = document.getElementById("interno-login-usuario").value.trim();
+    const password = document.getElementById("interno-login-senha").value;
+    if (!username || !password) {
+      erroEl.textContent = "Informe usuário e senha.";
+      erroEl.classList.remove("hidden");
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Entrando...";
+    try {
+      const r = await fetch(_urlCompleta("/api/interno/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+        credentials: "include",
+      });
+      const dado = await r.json().catch(() => ({}));
+      if (r.status !== 200) {
+        erroEl.textContent = dado.detail || "Usuário ou senha incorretos.";
+        erroEl.classList.remove("hidden");
+        btn.disabled = false;
+        btn.textContent = "Entrar";
+        return;
+      }
+      location.reload();
+    } catch (e2) {
+      erroEl.textContent = "Erro de rede -- tente novamente.";
+      erroEl.classList.remove("hidden");
+      btn.disabled = false;
+      btn.textContent = "Entrar";
+    }
+  });
+
+  // "Exportar salvos" (Exportar Excel, item 3 do pedido de /interno-artica) --
+  // baixa o .xlsx das operacoes salvas por ESTA conta de staff (ver
+  // webapp/salvos.py/exportar_excel.py). POST sem body -- backend identifica o
+  // usuario pela sessao (Depends(exigir_staff), nunca por parametro do cliente).
+  document.getElementById("topbar-exportar-salvos-btn").addEventListener("click", async () => {
+    await _baixarArquivoPost("/api/salvos/exportar", {}, "operacoes-salvas.xlsx");
+  });
+});
+
+// Helper generico: POST que devolve um arquivo (blob) -- dispara o download do
+// navegador. Usado por "Exportar salvos" (acima) e "Exportar Excel" da Busca
+// (busca.js) -- os dois so' existem pra sessao de staff (gate real e' o backend,
+// Depends(exigir_staff); aqui e' so' a mecanica de baixar o blob).
+async function _baixarArquivoPost(url, body, nomeArquivoFallback) {
+  const r = await fetch(_urlCompleta(url), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+    credentials: "include",
+  });
+  if (!r.ok) {
+    alert("Não foi possível gerar o arquivo. Tente novamente.");
+    return;
+  }
+  const blob = await r.blob();
+  const cd = r.headers.get("Content-Disposition") || "";
+  const match = /filename="?([^"]+)"?/.exec(cd);
+  const nomeArquivo = (match && match[1]) || nomeArquivoFallback;
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+}
 
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
@@ -843,6 +969,8 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
   const ordenarSelect = document.getElementById("modal-ordenar");
   ordenarSelect.style.display = "inline-block";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
+  document.getElementById("modal-favoritar-btn").classList.add("hidden");
+  document.getElementById("modal-nota-container").classList.add("hidden");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
@@ -977,11 +1105,88 @@ function _configurarBotaoCopiarLink(opId) {
   };
 }
 
+// "Salvar" + Notas (area interna, /interno-artica) -- so aparece quando o backend
+// devolveu "salva" no detalhe (GET /api/operacoes/{id}), o que so acontece pra
+// sessao de STAFF (ver webapp/main.py::operacao_detalhe) -- pra qualquer outra
+// sessao (ou nenhuma), data.salva e' `undefined` e este bloco so esconde os dois
+// elementos, nunca chama a API de salvos (que devolveria 403 mesmo assim, mas nem
+// vale a pena tentar). Gate de VERDADE continua sendo o backend
+// (Depends(exigir_staff) em cada rota /api/salvos*) -- isto aqui e' so' UI.
+function _configurarSalvarNotaInterna(opId, data) {
+  const favBtn = document.getElementById("modal-favoritar-btn");
+  const notaContainer = document.getElementById("modal-nota-container");
+  const notaTexto = document.getElementById("modal-nota-texto");
+  const notaStatus = document.getElementById("modal-nota-status");
+  if (!favBtn || !notaContainer) return;
+  if (data.salva === undefined) {
+    favBtn.classList.add("hidden");
+    notaContainer.classList.add("hidden");
+    return;
+  }
+
+  let salva = !!data.salva;
+  const atualizarVisual = () => {
+    favBtn.classList.remove("hidden");
+    favBtn.classList.toggle("ativo", salva);
+    favBtn.textContent = salva ? "★ Salvo" : "☆ Salvar";
+    notaContainer.classList.toggle("hidden", !salva);
+  };
+  notaTexto.value = data.nota || "";
+  notaStatus.textContent = "";
+  atualizarVisual();
+
+  favBtn.onclick = async () => {
+    favBtn.disabled = true;
+    try {
+      const r = salva
+        ? await fetch(_urlCompleta(`/api/salvos/operacoes/${opId}`), { method: "DELETE", credentials: "include" })
+        : await fetch(_urlCompleta(`/api/salvos/operacoes/${opId}`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+            credentials: "include",
+          });
+      if (r.status === 401) { _mostrarLanding(); return; }
+      if (!r.ok) throw new Error("falha ao salvar");
+      salva = !salva;
+      if (!salva) notaTexto.value = "";
+      atualizarVisual();
+    } catch (e) {
+      alert("Não foi possível atualizar. Tente novamente.");
+    } finally {
+      favBtn.disabled = false;
+    }
+  };
+
+  let notaTimer = null;
+  notaTexto.oninput = () => {
+    notaStatus.textContent = "Salvando...";
+    clearTimeout(notaTimer);
+    notaTimer = setTimeout(async () => {
+      try {
+        const r = await fetch(_urlCompleta(`/api/salvos/operacoes/${opId}`), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nota: notaTexto.value }),
+          credentials: "include",
+        });
+        if (r.status === 401) { _mostrarLanding(); return; }
+        notaStatus.textContent = r.ok ? "Nota salva." : "Não foi possível salvar a nota.";
+      } catch (e) {
+        notaStatus.textContent = "Erro de rede ao salvar a nota.";
+      }
+      setTimeout(() => { notaStatus.textContent = ""; }, 2000);
+    }, 600);
+  };
+}
+
 async function openOperacaoDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe da operação";
   document.getElementById("modal-ordenar").style.display = "none";
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
+  document.getElementById("modal-favoritar-btn").classList.add("hidden");
+  document.getElementById("modal-nota-container").classList.add("hidden");
   modalOverlay().classList.add("open");
   // Reflete o id na URL (ver _definirOperacaoNaURL acima) ANTES do fetch --
   // mesmo se o id nao existir (`data.secoes` vazio abaixo), o link continua
@@ -995,6 +1200,7 @@ async function openOperacaoDetalhe(id) {
     body.innerHTML = '<p class="empty-state">Detalhe não encontrado.</p>';
     return;
   }
+  _configurarSalvarNotaInterna(id, data);
 
   const badge = `<span class="badge" style="background:var(--blue-lightest); color:var(--navy); margin-left:8px;">${data.agencia || data.instrumento || ""}${data.instrumento && data.agencia ? " · " + data.instrumento : ""}</span>`;
   document.getElementById("modal-title").innerHTML = `Detalhe da operação ${badge}`;

@@ -71,6 +71,38 @@
   </div>
 </div>
 
+<!-- Login da area interna da Equipe Artica (/interno-artica -- ver CLAUDE.md).
+     MESMA SPA do site publico, mas gate de login proprio (usuario+senha, mesmo
+     mecanismo do painel /admin) -- so aparece quando MODO_INTERNO (common.js,
+     baseado na URL) e nao ha sessao de staff ainda. Nunca linkado/referenciado de
+     nenhuma tela do site publico. -->
+<div id="landing-interno-overlay" class="hidden">
+  <div class="landing-content">
+    <div class="landing-hero">
+      <img src="/img/logo-artica.png" alt="Ártica" class="landing-logo">
+      <h1 class="landing-titulo brand-texto">Área interna — Equipe Ártica</h1>
+      <p class="landing-subtitulo">
+        Acesso restrito à Equipe Ártica. Entre com sua conta de staff para usar o Radar de
+        Crédito Incentivado com as funcionalidades internas (Salvar, Notas e Exportar Excel).
+      </p>
+    </div>
+    <div class="landing-acesso">
+      <div class="landing-acesso-card">
+        <h2>Entrar</h2>
+        <p class="landing-acesso-sub">Usuário e senha da Equipe Ártica (mesma conta do painel de admin).</p>
+        <form id="interno-login-form">
+          <label for="interno-login-usuario">Usuário</label>
+          <input type="text" id="interno-login-usuario" autocomplete="username" autofocus>
+          <label for="interno-login-senha">Senha</label>
+          <input type="password" id="interno-login-senha" autocomplete="current-password">
+          <div id="interno-login-erro" class="login-erro hidden"></div>
+          <button type="submit" id="interno-login-btn">Entrar</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- "Obrigado pelo interesse" (ver botao "Quero saber mais" na topbar) -->
 <div id="interesse-modal-overlay" class="interesse-modal-overlay hidden">
   <div class="interesse-modal">
@@ -96,6 +128,12 @@
     </div>
   </div>
   <button id="topbar-interesse-btn" class="topbar-interesse-btn hidden">Quero saber mais</button>
+  <!-- Area interna (/interno-artica) -- so aparecem quando /api/me devolve
+       staff=true (ver common.js). "Modo interno": indicacao visual discreta
+       pedida no escopo. "Exportar salvos": Exportar Excel (item 3 do pedido) das
+       operacoes salvas por esta conta -- ver webapp/salvos.py/exportar_excel.py. -->
+  <span id="topbar-interno-badge" class="topbar-interno-badge hidden">Modo interno</span>
+  <button id="topbar-exportar-salvos-btn" class="topbar-interesse-btn hidden" title="Exportar Excel das operações salvas por você">⬇ Exportar salvos</button>
 </div>
 
 <div class="filterbar" id="filterbar">
@@ -467,10 +505,26 @@
         <option value="agencia-asc">Agência (A-Z)</option>
         <option value="cliente-asc">Cliente (A-Z)</option>
       </select>
+      <!-- "Salvar" -- so pra sessao de STAFF (/interno-artica), ver
+           common.js::_configurarBotaoFavoritar. Publico NUNCA ve este botao (o
+           backend so devolve "salva"/"nota" em GET /api/operacoes/{id} pra quem e'
+           staff -- ver webapp/main.py::operacao_detalhe). -->
+      <button class="fav-btn hidden" id="modal-favoritar-btn" title="Salvar operação (Equipe Ártica)">☆ Salvar</button>
       <button class="fav-btn" id="modal-copiar-link-btn" style="display:none;" title="Copiar link direto para esta operação">🔗 Copiar link</button>
       <button class="close-btn" id="modal-close">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
+    <!-- Notas (area interna) -- FORA de #modal-body de proposito: aberto/fechado
+         via _configurarNotaInterna (common.js), que so' e' chamado por
+         openOperacaoDetalhe -- sobreviveria a um innerHTML de #modal-body (que e'
+         reescrito por INTEIRO a cada abertura de modal, ver openOperacoesModal/
+         openOperacaoDetalhe), diferente de um elemento criado DENTRO dele. So
+         aparece quando a operacao esta salva por esta conta de staff. -->
+    <div id="modal-nota-container" class="hidden" style="padding: 0 20px 16px;">
+      <label class="salvos-nota-label" for="modal-nota-texto">Nota interna (Equipe Ártica)</label>
+      <textarea id="modal-nota-texto" class="salvos-nota" placeholder="Observações internas sobre esta operação..."></textarea>
+      <div class="salvos-nota-status" id="modal-nota-status"></div>
+    </div>
   </div>
 </div>
 

@@ -18,14 +18,18 @@ from search_fts import PORTE_NORMALIZADO_SQL
 from webapp.detalhe import montar_detalhe_amigavel
 from webapp.admin.auth import (
     SESSION_COOKIE,
+    autenticar_credenciais,
     criar_sessao,
     definir_cookie_sessao,
     encerrar_sessao,
+    exigir_staff,
     limpar_cookie_sessao,
+    mensagem_status_bloqueado,
     registrar_acesso,
     validar_sessao_token,
     verificar_acesso_principal,
 )
+import webapp.salvos as salvos
 
 # As rotas de IA/busca (abaixo) capturam Exception generico e devolvem {"erro": ...}
 # de proposito -- uma falha de IA nao deve derrubar a pagina inteira pro usuario.
@@ -60,7 +64,7 @@ MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
 # customizada (ver #landing-overlay em index.html, common.js) que faz POST
 # /api/identificar (e, se precisar de mais dados, POST /api/cadastrar) -- cookie
 # de sessao devolvido nos dois casos, NUNCA senha em nenhum ponto deste fluxo.
-_ROTAS_PUBLICAS_API = {"/api/identificar", "/api/cadastrar", "/api/logout"}
+_ROTAS_PUBLICAS_API = {"/api/identificar", "/api/cadastrar", "/api/logout", "/api/interno/login"}
 
 
 def _verificar_acesso(request: Request):
@@ -267,6 +271,36 @@ def site_cadastrar(payload: dict, request: Request, response: Response):
     return {"ok": True}
 
 
+@app.post("/api/interno/login")
+def interno_login(payload: dict, request: Request, response: Response):
+    """Login da area interna da Equipe Artica (/interno-artica, ver CLAUDE.md) --
+    username+senha, MESMA tabela/mecanismo de sessao do painel /admin
+    (`autenticar_credenciais`/`admin_sessoes`), mas SEM a exigencia de role='admin'
+    que `webapp/admin/routes.py::login` tem: qualquer conta de staff ATIVA
+    (`admin` OU `usuario`, os dois papeis ja existentes) entra aqui. Uma conta de
+    lead publico (passwordless, `password_hash=''`) nunca autentica por senha
+    (`verificar_senha` sempre devolve False pra hash vazio), entao chegar aqui com
+    senha correta ja e' garantia estrutural de ser conta de staff -- a autorizacao
+    de verdade das rotas extras (Salvar/Notas/Exportar) continua sendo
+    `Depends(exigir_staff)` em cada uma, nunca so este login."""
+    username = (payload.get("username") or "").strip()
+    senha = payload.get("password") or ""
+    conn = get_connection(pooled=True)
+    try:
+        usuario = autenticar_credenciais(conn, username, senha)
+        if usuario is None:
+            raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
+        mensagem_bloqueio = mensagem_status_bloqueado(usuario["status"])
+        if mensagem_bloqueio:
+            raise HTTPException(status_code=401, detail=mensagem_bloqueio)
+        token = criar_sessao(conn, usuario["id"])
+        registrar_acesso(conn, usuario["id"], usuario["username"], "interno", "login", _ip_do_request(request))
+    finally:
+        conn.close()
+    definir_cookie_sessao(response, token)
+    return {"ok": True, "username": username}
+
+
 @app.post("/api/interesse")
 def site_interesse(request: Request):
     """'Quero saber mais' (substitui usuario logado+Sair na topbar, ver CLAUDE.md) --
@@ -288,12 +322,16 @@ def site_interesse(request: Request):
 
 @app.get("/api/me")
 def site_me(request: Request):
-    """Quem esta identificado no site principal AGORA (ou None, se nao houver
-    sessao) -- usado pra mostrar o botao "Quero saber mais" na topbar (ver
-    common.js), nunca pra controle de acesso."""
+    """Quem esta identificado AGORA (site principal OU /interno-artica, mesma
+    sessao/cookie -- ver None se nao houver sessao). `staff` (novo, ver
+    webapp/admin/auth.py::validar_sessao_token) alimenta o frontend pra: (1) mostrar
+    o botao "Quero saber mais" (site publico, so pra staff=False) OU o badge "Modo
+    interno" + botoes de Salvar/Notas/Exportar (staff=True); NUNCA usado pra
+    controle de acesso de verdade (isso e' sempre o gate de backend em cada rota --
+    ver exigir_staff)."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
-        return {"username": None, "nome": None}
+        return {"username": None, "nome": None, "staff": False}
     conn = get_connection(pooled=True)
     try:
         usuario = validar_sessao_token(conn, token)
@@ -303,7 +341,11 @@ def site_me(request: Request):
             nome = row[0] if row else None
     finally:
         conn.close()
-    return {"username": usuario["username"] if usuario else None, "nome": nome}
+    return {
+        "username": usuario["username"] if usuario else None,
+        "nome": nome,
+        "staff": bool(usuario["staff"]) if usuario else False,
+    }
 
 
 @app.post("/api/logout")
@@ -920,7 +962,7 @@ def operacoes(
 
 
 @app.get("/api/operacoes/{op_id}")
-def operacao_detalhe(op_id: int):
+def operacao_detalhe(op_id: int, request: Request):
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -930,6 +972,18 @@ def operacao_detalhe(op_id: int):
         if not row:
             return {"erro": "operacao nao encontrada"}
         raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj = row
+
+        # Salvar/Notas (area interna, /interno-artica) -- so calculado quando quem
+        # chama e' STAFF (ver webapp/salvos.py). Nunca pra lead publico: alem de ser
+        # trabalho a toa (o botao "Salvar" nem aparece pra ele no frontend), evita
+        # vazar "salva"/"nota" (que so faz sentido por CONTA de staff) pra uma conta
+        # que nao devia nem saber que essa feature existe. Reaproveita a MESMA
+        # conexao ja aberta acima (`conn`) -- nunca abre uma segunda conexao pooled
+        # so pra isso (pool tem max_size=2, ver CLAUDE.md).
+        salva_info = None
+        usuario_sessao = validar_sessao_token(conn, request.cookies.get(SESSION_COOKIE))
+        if usuario_sessao is not None and usuario_sessao.get("staff"):
+            salva_info = salvos.operacao_esta_salva(conn, usuario_sessao["id"], op_id)
 
         raw_row = cur.execute(f"SELECT * FROM {raw_table} WHERE id = ?", (raw_id,)).fetchone()
         if not raw_row:
@@ -959,10 +1013,13 @@ def operacao_detalhe(op_id: int):
                 if campos_empresa:
                     secoes = [{"titulo": "Identificação da empresa", "campos": campos_empresa}] + secoes
 
-        return {
+        resposta = {
             "raw_table": raw_table, "agencia": agencia, "instrumento": instrumento,
             "setor_bndes": setor_bndes, "secoes": secoes,
         }
+        if salva_info is not None:
+            resposta.update(salva_info)  # {"salva": bool} ou {"salva": True, "nota": str|None}
+        return resposta
     finally:
         conn.close()
 
@@ -991,6 +1048,106 @@ def operacao_grupo_economico(op_id: int):
         return {"resultados": [dict(zip(cols, r)) for r in rows]}
     finally:
         conn.close()
+
+
+# ============ Area interna da Equipe Artica (/interno-artica) -- Salvar/Notas/
+# Exportar Excel (ver CLAUDE.md) ============
+# Todas as rotas abaixo exigem Depends(exigir_staff) -- gate de AUTORIZACAO real de
+# backend (nunca so esconder botao no frontend, ver webapp/admin/auth.py::
+# exigir_staff): uma sessao de lead publico (identificada passwordless no site,
+# `password_hash=''`) recebe 403 mesmo que monte a mesma chamada manualmente.
+
+@app.post("/api/salvos/operacoes/{op_id}")
+def salvos_favoritar(op_id: int, payload: dict = None, usuario: dict = Depends(exigir_staff)):
+    """Salvar (favoritar) uma operacao -- payload opcional {"nota": "..."}. Upsert
+    (UNIQUE(usuario_id, operation_id) em usuario_operacoes_salvas, ver
+    webapp/salvos.py::favoritar_operacao) -- chamar de novo numa operacao ja salva
+    so atualiza a nota (nota=None PRESERVA a nota existente, nunca apaga por
+    engano)."""
+    nota = (payload or {}).get("nota")
+    conn = get_connection(pooled=True)
+    try:
+        salvos.favoritar_operacao(conn, usuario["id"], op_id, nota)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/salvos/operacoes/{op_id}")
+def salvos_desfavoritar(op_id: int, usuario: dict = Depends(exigir_staff)):
+    conn = get_connection(pooled=True)
+    try:
+        salvos.desfavoritar_operacao(conn, usuario["id"], op_id)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.patch("/api/salvos/operacoes/{op_id}")
+def salvos_atualizar_nota(op_id: int, payload: dict, usuario: dict = Depends(exigir_staff)):
+    """Atualiza SO a nota de uma operacao ja salva (campo "Notas" do pedido -- mesma
+    coluna `nota` de usuario_operacoes_salvas, sem tabela nova). 404 se a operacao
+    nao estiver salva por esta conta (nunca cria a linha aqui -- isso e' o POST
+    acima)."""
+    nota = (payload or {}).get("nota", "")
+    conn = get_connection(pooled=True)
+    try:
+        atualizado = salvos.atualizar_nota_operacao_salva(conn, usuario["id"], op_id, nota)
+    finally:
+        conn.close()
+    if not atualizado:
+        raise HTTPException(status_code=404, detail="Operacao nao esta salva")
+    return {"ok": True}
+
+
+@app.get("/api/salvos")
+def salvos_listar(usuario: dict = Depends(exigir_staff)):
+    """Lista completa das operacoes salvas POR ESTA CONTA de staff (usada pra
+    exportar Excel, ver /api/salvos/exportar abaixo)."""
+    conn = get_connection(pooled=True)
+    try:
+        linhas = salvos.listar_operacoes_salvas(conn, usuario["id"])
+        resumo = salvos.resumo_operacoes_salvas(conn, usuario["id"])
+    finally:
+        conn.close()
+    return {"resultados": linhas, "resumo": resumo}
+
+
+@app.post("/api/salvos/exportar")
+def salvos_exportar(usuario: dict = Depends(exigir_staff)):
+    """Exportar Excel (item 3 do pedido de /interno-artica) -- gera o .xlsx das
+    operacoes salvas POR ESTA CONTA (ver webapp/exportar_excel.py, estilo navy
+    ja usado pelo resto do projeto)."""
+    from webapp.exportar_excel import gerar_xlsx_operacoes_salvas
+    conn = get_connection(pooled=True)
+    try:
+        linhas = salvos.listar_operacoes_salvas(conn, usuario["id"])
+    finally:
+        conn.close()
+    conteudo = gerar_xlsx_operacoes_salvas(linhas)
+    return Response(
+        content=conteudo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="operacoes-salvas.xlsx"'},
+    )
+
+
+@app.post("/api/busca/exportar")
+def busca_exportar(body: dict, usuario: dict = Depends(exigir_staff)):
+    """Exportar Excel dos resultados de Busca JA RENDERIZADOS na tela (nunca
+    re-roda a busca aqui -- ver docstring de webapp/exportar_excel.py). Body:
+    {"query": "...", "resultados": [...]} (mesmo shape de `ultimosResultados` do
+    frontend, ver busca.js)."""
+    from webapp.exportar_excel import gerar_xlsx_busca
+    query = (body or {}).get("query") or "resultado"
+    linhas = (body or {}).get("resultados") or []
+    conteudo = gerar_xlsx_busca(query, linhas)
+    slug = "".join(c if c.isalnum() else "-" for c in query).strip("-").lower() or "resultado"
+    return Response(
+        content=conteudo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="busca-{slug}.xlsx"'},
+    )
 
 
 if not MOTOR_BUSCA_IA:
@@ -1592,7 +1749,15 @@ def enriquecimento_corrigir(body: dict, request: Request):
 # resolve isso e o rewrite em vercel.json direto na CDN -- estas rotas aqui so
 # importam pro modo local (`uvicorn webapp.main:app`), onde nao existe CDN
 # reescrevendo nada antes de chegar no FastAPI.
-_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "potenciais-linhas"]
+_SPA_PAGINAS = [
+    "consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "potenciais-linhas",
+    # Area interna da Equipe Artica (ver CLAUDE.md) -- MESMA SPA (index.html), so
+    # ganha 3 funcionalidades extras (Salvar/Notas/Exportar Excel) quando a sessao
+    # atual e' de staff (ver #topbar-interno-badge/common.js e Depends(exigir_staff)
+    # nas rotas /api/salvos*/api/busca/exportar). Nao aparece em nenhum link/botao
+    # do site publico -- so quem ja conhece a URL chega aqui.
+    "interno-artica",
+]
 
 
 @app.get("/{pagina}", include_in_schema=False)
