@@ -7,11 +7,56 @@ Incremental (ver incremental.py): a FINEP republica o historico INTEIRO a cada
 vez (nas 3 planilhas -- credito direto, credito descentralizado e nao aprovados),
 entao so inserimos as linhas cujo hash de conteudo ainda nao existe na tabela.
 """
+import unicodedata
+
 import pandas as pd
 
 from db import get_connection
 from download import FINEP_NAO_APROVADOS_PATH, FINEP_PATH
 from incremental import backfill_row_hashes, compute_row_hash, existing_hashes, insert_new_rows
+
+
+def _normalizar_nome_aba(nome: str) -> str:
+    """Remove acentos/case/espacos duplicados de um nome de aba, so para
+    COMPARACAO -- nunca usado como valor de fato (ver `_resolver_aba_nao_aprovados`)."""
+    nfkd = unicodedata.normalize("NFKD", nome)
+    sem_acento = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return " ".join(sem_acento.lower().split())
+
+
+def _resolver_aba_nao_aprovados(path) -> str:
+    """Acha o nome exato da aba de 'Projetos Nao Aprovados' dentro do xlsx.
+
+    Causa raiz real (2026-09-21): o refresh semanal falhou por completo (nenhuma
+    operacao nova de BNDES/FINEP entrou em `operations` naquela rodada) porque
+    `pd.read_excel(..., sheet_name="Projetos Não Aprovados")` deu
+    `ValueError: Worksheet named ... not found` -- a planilha da FINEP nao tinha
+    uma aba com esse nome EXATO no momento daquele download (a aba real
+    provavelmente variou por um detalhe de acento/espaco/capitalizacao da FINEP,
+    fonte externa fora do nosso controle). Em vez de depender de um match exato
+    fragil, tenta o nome exato primeiro (caminho mais comum) e cai para um match
+    normalizado (sem acento, case-insensitive, espacos colapsados) se o exato
+    nao bater -- cobre pequenas variacoes futuras sem inventar dado nenhum. Se
+    nem assim achar, levanta um erro com a lista real de abas do arquivo (mais
+    facil de diagnosticar do que o ValueError generico do pandas)."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        nomes = wb.sheetnames
+        alvo = "Projetos Não Aprovados"
+        if alvo in nomes:
+            return alvo
+        alvo_norm = _normalizar_nome_aba(alvo)
+        for nome in nomes:
+            if _normalizar_nome_aba(nome) == alvo_norm:
+                print(f"  aviso: aba 'Projetos Não Aprovados' nao encontrada exata, usando {nome!r} (match normalizado)")
+                return nome
+        raise ValueError(
+            f"Nenhuma aba de 'Projetos Nao Aprovados' encontrada em {path}. Abas disponiveis: {nomes}"
+        )
+    finally:
+        wb.close()
 
 NAO_APROVADOS_COLUMNS = {
     "Instrumento": "instrumento",
@@ -149,8 +194,9 @@ def parse_finep_nao_aprovados(path=FINEP_NAO_APROVADOS_PATH):
     publica propostas recusadas, entao essa base so cobre a FINEP)."""
     conn = get_connection()
     try:
-        print(f"Lendo {path} (aba Projetos Não Aprovados)...")
-        df = pd.read_excel(path, sheet_name="Projetos Não Aprovados", header=6, engine="openpyxl")
+        aba = _resolver_aba_nao_aprovados(path)
+        print(f"Lendo {path} (aba {aba!r})...")
+        df = pd.read_excel(path, sheet_name=aba, header=6, engine="openpyxl")
         df = df.rename(columns=NAO_APROVADOS_COLUMNS)
         df = df[[c for c in NAO_APROVADOS_COLUMNS.values() if c in df.columns]]
         df = df.dropna(subset=["proponente"])

@@ -82,7 +82,19 @@ def run_refresh() -> str:
         download.download_all()
         _, bndes_rows = parse_bndes.parse_bndes()
         _, _, finep_direto_rows, finep_desc_rows = parse_finep.parse_finep()
-        parse_finep.parse_finep_nao_aprovados()
+
+        # Best-effort, isolado de proposito (causa raiz real, 2026-09-21): esta base
+        # so alimenta a taxa de aprovacao (ver docstring de parse_finep_nao_aprovados),
+        # nunca `operations` -- uma falha aqui (ex: a FINEP mudou levemente o nome da
+        # aba do xlsx, fonte externa fora do nosso controle) NAO pode derrubar o
+        # rebuild de `operations` inteiro, que e o que todo o resto do site depende.
+        try:
+            parse_finep.parse_finep_nao_aprovados()
+        except Exception:
+            aviso = f"aviso: parse_finep_nao_aprovados falhou (nao bloqueia o resto do refresh):\n{traceback.format_exc()}"
+            print(aviso)
+            detalhe += aviso + "\n\n"
+
         resultado_unify = unify.build_operations()
         ops_rows = resultado_unify["total"]
         pendentes = resultado_unify["pendentes"]
