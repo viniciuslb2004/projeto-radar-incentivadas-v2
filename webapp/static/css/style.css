@@ -344,11 +344,12 @@ body {
 .tabs {
   display: flex;
   gap: 4px;
-  /* Com 5 abas, pode nao caber em larguras de desktop intermediarias
-     (~950-1250px) nem em telas estreitas (celular) -- em vez de deixar as
-     ultimas abas cortadas/inalcancaveis (flex sem wrap nem scroll), rola
-     horizontalmente. Padrao comum de navegacao por abas em mobile, sem
-     precisar de um menu hamburguer. */
+  /* Com 6 abas (5 originais + "Potenciais Linhas", 2026-09-22), pode nao
+     caber em larguras de desktop intermediarias (~950-1250px) nem em telas
+     estreitas (celular) -- em vez de deixar as ultimas abas cortadas/
+     inalcancaveis (flex sem wrap nem scroll), rola horizontalmente. Padrao
+     comum de navegacao por abas em mobile, sem precisar de um menu
+     hamburguer. */
   overflow-x: auto;
   flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
