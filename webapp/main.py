@@ -2,6 +2,7 @@
 import datetime
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -17,13 +18,10 @@ from search_fts import PORTE_NORMALIZADO_SQL
 from webapp.detalhe import montar_detalhe_amigavel
 from webapp.admin.auth import (
     SESSION_COOKIE,
-    autenticar_credenciais,
     criar_sessao,
     definir_cookie_sessao,
     encerrar_sessao,
-    gerar_hash_senha,
     limpar_cookie_sessao,
-    mensagem_status_bloqueado,
     registrar_acesso,
     validar_sessao_token,
     verificar_acesso_principal,
@@ -47,18 +45,22 @@ logger = logging.getLogger("radar")
 MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
 
 # ============ Acesso (so ativo quando ha pelo menos uma conta cadastrada) ============
-# ATE 2026-09: login unico compartilhado via HTTP Basic (SITE_PASSWORD). Substituido
-# por contas individuais (tabela `admin_usuarios`, EXCECAO documentada a segregacao
-# do painel de admin -- ver webapp/admin/auth.py::verificar_acesso_principal e
-# CLAUDE.md, secao "Painel de Admin"). Sessao por cookie opaco (`admin_session`,
-# COMPARTILHADO com o painel /admin -- e a mesma tabela de contas), nunca mais HTTP
-# Basic. O app local sem nenhuma conta cadastrada (banco novo, seed.py nunca rodado)
-# continua rodando sem exigir login, mesmo espirito de antes sem SITE_PASSWORD. O
-# HTML/CSS/JS estatico e publico de proposito -- so as rotas /api/* exigem; a propria
-# pagina carrega uma tela de login customizada (ver #login-overlay em index.html,
-# _tentarLogin()/_mostrarLoginOverlay() em common.js) que faz POST /api/login (cookie
-# de sessao, nao mais header Basic guardado em sessionStorage).
-_ROTAS_PUBLICAS_API = {"/api/login", "/api/logout", "/api/registrar"}
+# HISTORICO: HTTP Basic (SITE_PASSWORD) -> contas individuais com login+senha
+# (`admin_usuarios`) -> (2026-09-22) IDENTIFICACAO PASSWORDLESS por e-mail, unica
+# forma de acesso ao site principal hoje (reposicionamento pra plataforma publica
+# de geracao de leads -- ver CLAUDE.md/docs/painel-admin.md). O painel `/admin`
+# (uso interno da Artica) CONTINUA exigindo usuario+senha normalmente -- essa
+# mudanca e' so pro site principal (ver webapp/admin/auth.py, inalterado).
+# Sessao por cookie opaco (`admin_session`, COMPARTILHADO com o painel /admin --
+# mesma tabela de contas/mesmo mecanismo de sessao, so sem verificar senha pro
+# site). O app local sem nenhuma conta cadastrada (banco novo, seed.py nunca
+# rodado) continua rodando sem exigir identificacao, mesmo espirito de antes sem
+# SITE_PASSWORD. O HTML/CSS/JS estatico e publico de proposito -- so as rotas
+# /api/* exigem; a propria pagina carrega uma landing/tela de identificacao
+# customizada (ver #landing-overlay em index.html, common.js) que faz POST
+# /api/identificar (e, se precisar de mais dados, POST /api/cadastrar) -- cookie
+# de sessao devolvido nos dois casos, NUNCA senha em nenhum ponto deste fluxo.
+_ROTAS_PUBLICAS_API = {"/api/identificar", "/api/cadastrar", "/api/logout"}
 
 
 def _verificar_acesso(request: Request):
@@ -145,61 +147,132 @@ def registrar_navegacao(payload: dict, request: Request):
     return {"ok": True}
 
 
-@app.post("/api/login")
-def site_login(payload: dict, request: Request, response: Response):
-    """Login do SITE PRINCIPAL -- mesma tabela de contas do painel de admin
-    (admin_usuarios), qualquer role (admin ou usuario) pode logar aqui. Ver
-    webapp/admin/auth.py::verificar_acesso_principal para o gate correspondente."""
-    username = (payload.get("username") or "").strip()
-    senha = payload.get("password") or ""
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _email_valido(email: str) -> bool:
+    return bool(_EMAIL_RE.match(email or ""))
+
+
+# "Ja usado nos ultimos 3 meses" (pedido do usuario) -- aproximado em dias, mesmo
+# espirito de outras janelas ja usadas neste projeto (ex: SESSION_TTL_HORAS).
+JANELA_RENOVACAO_DIAS = 90
+
+
+@app.post("/api/identificar")
+def site_identificar(payload: dict, request: Request, response: Response):
+    """1o passo do fluxo de identificacao PASSWORDLESS do site principal (substitui
+    login+senha -- ver CLAUDE.md/docs/painel-admin.md, e docs/archive/removed-
+    features.md secao 4 pro fluxo antigo de cadastro com aprovacao que isso
+    substituiu). So pede e-mail: se ja usado pra logar nos ultimos
+    JANELA_RENOVACAO_DIAS dias, renova o acesso NA HORA (cria sessao, registra um
+    evento 'login' novo) sem pedir mais nada; senao (e-mail novo OU ultimo acesso
+    mais antigo que a janela), devolve precisa_dados=True pro frontend mostrar o
+    formulario completo (POST /api/cadastrar abaixo)."""
+    email = (payload.get("email") or "").strip().lower()
+    if not _email_valido(email):
+        raise HTTPException(status_code=400, detail="Informe um e-mail válido.")
     conn = get_connection(pooled=True)
     try:
-        usuario = autenticar_credenciais(conn, username, senha)
-        if usuario is None:
-            raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
-        mensagem_bloqueio = mensagem_status_bloqueado(usuario["status"])
-        if mensagem_bloqueio:
-            raise HTTPException(status_code=401, detail=mensagem_bloqueio)
-        token = criar_sessao(conn, usuario["id"])
-        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "login", _ip_do_request(request))
+        row = conn.execute(
+            "SELECT id, ativo FROM admin_usuarios WHERE lower(email) = ?", (email,)
+        ).fetchone()
+        if row is None:
+            return {"ok": True, "precisa_dados": True}
+        usuario_id, ativo = row
+        if not ativo:
+            raise HTTPException(status_code=403, detail="Este acesso foi desativado. Entre em contato com a Ártica.")
+        limite = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=JANELA_RENOVACAO_DIAS)
+        ).isoformat()
+        ultimo_login = conn.execute(
+            "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        if ultimo_login is None or ultimo_login < limite:
+            return {"ok": True, "precisa_dados": True}
+        # E-mail usado recentemente -- "Voce ja esta cadastrado", acesso imediato,
+        # sem pedir mais nada (renova/atualiza o acesso: novo evento de login).
+        token = criar_sessao(conn, usuario_id)
+        registrar_acesso(conn, usuario_id, email, "site", "login", _ip_do_request(request))
     finally:
         conn.close()
     definir_cookie_sessao(response, token)
-    return {"ok": True, "username": usuario["username"]}
+    return {"ok": True, "precisa_dados": False}
 
 
-@app.post("/api/registrar")
-def site_registrar(payload: dict):
-    """Cadastro publico (rota SEM autenticacao, ver _ROTAS_PUBLICAS_API abaixo) --
-    conta nasce com status='pendente' e role='usuario' (SEMPRE -- promover a admin
-    continua sendo uma acao manual separada, via CRUD do painel). Login com conta
-    pendente/rejeitada falha com mensagem especifica (ver mensagem_status_bloqueado
-    em webapp/admin/auth.py), nunca cria sessao."""
-    username = (payload.get("username") or "").strip()
-    senha = payload.get("password") or ""
-    email = (payload.get("email") or "").strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="Usuario e obrigatorio")
-    if len(senha) < 8:
-        raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 8 caracteres")
-    # Validacao BEM simples de proposito -- so pra pegar erro de digitacao obvio,
-    # nao verifica entrega nem manda nenhum e-mail (decisao explicita do usuario:
-    # so coletar o dado, pro admin ver na hora de aprovar/rejeitar).
-    if "@" not in email or "." not in email.split("@")[-1]:
-        raise HTTPException(status_code=400, detail="Informe um e-mail valido")
+@app.post("/api/cadastrar")
+def site_cadastrar(payload: dict, request: Request, response: Response):
+    """2o passo (e-mail novo OU ultimo acesso ha mais de JANELA_RENOVACAO_DIAS dias)
+    -- pede nome/empresa/cargo/e-mail e concede acesso IMEDIATO, sem nenhuma
+    aprovacao de admin (substitui o antigo cadastro publico com aprovacao -- ver
+    docs/archive/removed-features.md secao 4). Upsert por e-mail (nunca cria uma
+    segunda conta pro mesmo e-mail). Sem senha em NENHUM caso -- password_hash fica
+    com string vazia (sentinela; verificar_senha() sempre devolve False pra esse
+    formato, entao essa conta nunca autentica por senha por engano em nenhum outro
+    fluxo, ex: /admin/api/login)."""
+    email = (payload.get("email") or "").strip().lower()
+    nome = (payload.get("nome") or "").strip()
+    empresa = (payload.get("empresa") or "").strip()
+    cargo = (payload.get("cargo") or "").strip()
+    if not _email_valido(email):
+        raise HTTPException(status_code=400, detail="Informe um e-mail válido.")
+    if not nome or not empresa or not cargo:
+        raise HTTPException(status_code=400, detail="Nome, empresa e cargo são obrigatórios.")
 
-    password_hash = gerar_hash_senha(senha)
     conn = get_connection(pooled=True)
     try:
-        ja_existe = conn.execute("SELECT 1 FROM admin_usuarios WHERE username = ?", (username,)).fetchone()
-        if ja_existe:
-            raise HTTPException(status_code=409, detail="Ja existe uma conta com esse nome de usuario")
-        conn.execute(
-            "INSERT INTO admin_usuarios (username, password_hash, email, role, status, ativo, criado_em) "
-            "VALUES (?, ?, ?, 'usuario', 'pendente', TRUE, ?)",
-            (username, password_hash, email, datetime.datetime.now(datetime.timezone.utc).isoformat()),
-        )
+        existente = conn.execute(
+            "SELECT id, ativo FROM admin_usuarios WHERE lower(email) = ?", (email,)
+        ).fetchone()
+        if existente:
+            usuario_id, ativo = existente
+            if not ativo:
+                raise HTTPException(status_code=403, detail="Este acesso foi desativado. Entre em contato com a Ártica.")
+            conn.execute(
+                "UPDATE admin_usuarios SET nome = ?, empresa = ?, cargo = ? WHERE id = ?",
+                (nome, empresa, cargo, usuario_id),
+            )
+        else:
+            # username e' UNIQUE NOT NULL (schema antigo, ver seed.py) -- usa o
+            # proprio e-mail como username (funcionalmente unico o suficiente);
+            # o loop cobre so o caso improvavel de colisao (ex: mesmo e-mail com
+            # capitalizacao diferente ja usado como username por uma conta antiga).
+            username = email
+            sufixo = 1
+            while conn.execute("SELECT 1 FROM admin_usuarios WHERE username = ?", (username,)).fetchone():
+                sufixo += 1
+                username = f"{email}+{sufixo}"
+            conn.execute(
+                "INSERT INTO admin_usuarios "
+                "(username, email, nome, empresa, cargo, password_hash, role, status, ativo, criado_em) "
+                "VALUES (?, ?, ?, ?, ?, '', 'usuario', 'aprovado', TRUE, ?)",
+                (username, email, nome, empresa, cargo, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+            )
+            usuario_id = conn.execute("SELECT id FROM admin_usuarios WHERE username = ?", (username,)).fetchone()[0]
+        token = criar_sessao(conn, usuario_id)
+        registrar_acesso(conn, usuario_id, email, "site", "login", _ip_do_request(request))
         conn.commit()
+    finally:
+        conn.close()
+    definir_cookie_sessao(response, token)
+    return {"ok": True}
+
+
+@app.post("/api/interesse")
+def site_interesse(request: Request):
+    """'Quero saber mais' (substitui usuario logado+Sair na topbar, ver CLAUDE.md) --
+    registra um lead IMEDIATAMENTE (evento='interesse_lead' em admin_acessos_log,
+    mesmo padrao ja usado por 'view_aba') usando os dados que a pessoa ja informou
+    na identificacao -- sem formulario adicional. Rota protegida (fora de
+    _ROTAS_PUBLICAS_API, entao _verificar_acesso/verificar_acesso_principal ja
+    garante sessao valida antes de chegar aqui)."""
+    usuario = _usuario_atual(request)
+    if usuario is None:
+        raise HTTPException(status_code=401, detail="Sessão inválida")
+    conn = get_connection(pooled=True)
+    try:
+        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "interesse_lead", _ip_do_request(request))
     finally:
         conn.close()
     return {"ok": True}
@@ -207,10 +280,22 @@ def site_registrar(payload: dict):
 
 @app.get("/api/me")
 def site_me(request: Request):
-    """Quem esta logado no site principal AGORA (ou None, se nao houver sessao ou o
-    login nem estiver configurado) -- usado so pra mostrar o nome + botao Sair na
-    topbar (ver common.js), nunca pra controle de acesso."""
-    return {"username": _usuario_logado(request)}
+    """Quem esta identificado no site principal AGORA (ou None, se nao houver
+    sessao) -- usado pra mostrar o botao "Quero saber mais" na topbar (ver
+    common.js), nunca pra controle de acesso."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return {"username": None, "nome": None}
+    conn = get_connection(pooled=True)
+    try:
+        usuario = validar_sessao_token(conn, token)
+        nome = None
+        if usuario is not None:
+            row = conn.execute("SELECT nome FROM admin_usuarios WHERE id = ?", (usuario["id"],)).fetchone()
+            nome = row[0] if row else None
+    finally:
+        conn.close()
+    return {"username": usuario["username"] if usuario else None, "nome": nome}
 
 
 @app.post("/api/logout")

@@ -1,5 +1,23 @@
 > Detalhe/histórico extraído do CLAUDE.md em 2026-09-21 (redução de tokens por sessão). Ler só quando a tarefa tocar este assunto especificamente.
 
+> **ATUALIZADO 2026-09-22 — reposicionamento pra plataforma pública de lead-gen.**
+> O login por usuário+senha do SITE PRINCIPAL descrito nas seções abaixo (`POST
+> /api/login`, cadastro público com aprovação via `POST /api/registrar` +
+> `status='pendente'/'aprovado'/'rejeitado'`) foi **substituído** por identificação
+> passwordless por e-mail (`POST /api/identificar` + `POST /api/cadastrar`, ver
+> seção nova "Identificação passwordless do site principal" mais abaixo) — sem
+> senha em nenhum ponto do fluxo do site, acesso imediato (nunca aprovação de
+> admin). **O painel `/admin` em si CONTINUA com login por usuário+senha
+> normalmente** (`POST /admin/api/login`, tudo nesta seção abaixo sobre hash
+> PBKDF2/sessão/`exigir_admin` permanece válido tal como está — a mudança é só no
+> login do site). O fluxo antigo de cadastro com aprovação, e a antiga seção
+> "Saúde do banco" do painel (removida na mesma sessão), estão documentados em
+> `docs/archive/removed-features.md`, seção 4, caso precise reconstruir algum dos
+> dois. As seções "Cadastro público com aprovação" e "Saúde do banco (proxy)" mais
+> abaixo neste arquivo descrevem o comportamento ANTIGO — mantidas por enquanto
+> só como histórico de decisões (hash de senha reaproveitado, `status` column,
+> etc.), não como comportamento atual.
+
 ## Painel de Admin (`/admin`)
 
 Área administrativa com contas individuais de verdade (login + senha com hash), que
@@ -332,3 +350,138 @@ admin_usuarios;`; 3) apagar a pasta `webapp/admin/` + `webapp/static/admin.html`
 `css/admin.css`; 4) remover a linha de include em `webapp/main.py` (e o ajuste em
 `spa_pagina()`); 5) remover as 2 entradas de rewrite de `vercel.json`. Fora essa exceção
 documentada, nada disso toca em `operations`, `linhas_incentivadas` ou `editais_raw`.
+
+---
+
+## Identificação passwordless do site principal (2026-09-22)
+
+Reposicionamento explícito do produto: de ferramenta com cadastro+senha pra plataforma
+pública de geração de leads. Login por usuário+senha do site (`POST /api/login`) e cadastro
+público com aprovação (`POST /api/registrar`, ver seção "Cadastro público com aprovação"
+acima — comportamento ANTIGO, arquivado em `docs/archive/removed-features.md` seção 4) foram
+REMOVIDOS e substituídos por identificação só por e-mail, **sem senha em nenhum caso**. O
+painel `/admin` (uso interno da Ártica) não foi tocado — continua login+senha normal.
+
+**Landing page** (`webapp/static/index.html`, `#landing-overlay` — substitui o antigo
+`#login-overlay`): página institucional (hero com proposta de valor + bullets, reaproveitando
+a paleta navy/steel já definida em `style.css`) com o card de identificação ao lado. Mostrada
+automaticamente sempre que uma rota `/api/*` protegida devolve 401 — ver "Robustez contra
+sessão inválida" abaixo.
+
+**Fluxo (2 passos, `webapp/main.py`)**:
+1. `POST /api/identificar` `{email}` — só pede e-mail.
+   - E-mail encontrado em `admin_usuarios` E com um evento `evento='login'` em
+     `admin_acessos_log` nos últimos `JANELA_RENOVACAO_DIAS` dias (90, aproximação de "3
+     meses"): **acesso imediato** — cria sessão (`criar_sessao`, mesmo mecanismo do painel,
+     sem verificar senha), registra um novo evento `login`, devolve `{precisa_dados: false}`
+     (cookie de sessão já setado). Frontend só dá `location.reload()`.
+   - E-mail não encontrado OU encontrado mas sem login nos últimos 90 dias: devolve
+     `{precisa_dados: true}`, SEM criar sessão — frontend mostra o formulário completo
+     (`#cadastro-form`).
+2. `POST /api/cadastrar` `{nome, empresa, cargo, email}` — upsert por e-mail (nunca cria uma
+   segunda conta pro mesmo e-mail; se já existe, só atualiza nome/empresa/cargo). Concede
+   acesso IMEDIATO (cria sessão na hora), sem aprovação de admin nenhuma. Conta nasce/continua
+   com `role='usuario'`, `status='aprovado'` (coluna `status` mantida por compatibilidade de
+   schema, mas não bloqueia mais nada nesse fluxo — só o painel antigo de aprovação a lia, e
+   esse painel foi removido), `password_hash=''` (string vazia, sentinela — ver abaixo).
+
+**Schema (`webapp/admin/seed.py`, mesmo padrão de migração incremental de sempre)**: 3
+colunas novas em `admin_usuarios` — `nome TEXT`, `empresa TEXT`, `cargo TEXT` (NULL em contas
+antigas/staff, só populadas pelo fluxo passwordless). Nenhuma tabela nova.
+
+**`password_hash = ''` é o sinal de "conta passwordless" (convenção nova, não uma coluna
+dedicada)** — usada em dois lugares pra separar "conta do painel/staff" (senha real, PBKDF2)
+de "usuário/lead do site" (sem senha):
+- `GET /admin/api/usuarios` (CRUD de staff, já existia) passou a filtrar
+  `password_hash != ''` — sem isso, todo lead que se identifica no site apareceria misturado
+  na lista de contas do painel.
+- `GET /admin/api/usuarios-site` (nova, ver "Painel reestruturado" abaixo) filtra o oposto,
+  `password_hash = ''`.
+`verificar_senha('', hash_armazenado)` sempre falha (o split por `$` de um hash vazio levanta
+`ValueError`, capturado e vira `False`) — uma conta passwordless nunca consegue logar em
+`/admin/api/login` por acidente, mesmo que alguém tente.
+
+**`username`**: como o schema antigo exige `username UNIQUE NOT NULL`, contas passwordless
+usam o próprio e-mail como `username` (funcionalmente único o suficiente) — `site_cadastrar`
+tem um loop de fallback (`email+2`, `email+3`, ...) só pro caso improvável de colisão.
+
+**`GET /api/me`** devolve `{username, nome}` agora (antes só `username`) — `nome` alimenta o
+texto do botão "Quero saber mais" se um dia precisar mostrar o nome (hoje o botão não mostra,
+mas o campo já está disponível pro frontend).
+
+### "Quero saber mais" (substitui usuário logado + Sair na topbar)
+
+Onde antes havia nome do usuário + botão "Sair" (`#topbar-usuario`), agora há um único botão
+`#topbar-interesse-btn` — só visível pra quem já se identificou (`obterUsuarioAtual()`, ver
+`common.js`). Clique: mostra um modal de agradecimento IMEDIATAMENTE (a pessoa já informou
+nome/empresa/cargo/e-mail na identificação, não há formulário adicional aqui) e dispara
+`POST /api/interesse` (rota protegida — exige sessão válida, fora de `_ROTAS_PUBLICAS_API`)
+em paralelo, best-effort (uma falha de rede não desfaz o agradecimento já mostrado). Backend
+registra um evento novo `evento='interesse_lead'` em `admin_acessos_log` (mesma tabela, mesmo
+padrão já usado por `view_aba`) — sem tabela nova, sem formulário adicional.
+
+**Coluna nova `admin_acessos_log.contatado`** (`BOOLEAN NOT NULL DEFAULT FALSE`, via
+`seed.py`) — só tem sentido pra linhas `evento='interesse_lead'`; alimenta o indicador
+"precisa ser abordado" na seção Leads do painel (ver abaixo). `POST
+/admin/api/leads/{log_id}/contatado` alterna o valor.
+
+### Robustez contra sessão inválida (bug real corrigido)
+
+Reportado pelo usuário: quando a sessão expirava/cookie sumia/usuário era removido, o site
+"quebrava" (ficava em branco) em vez de voltar pra tela de login. Causa raiz: só o PRIMEIRO
+fetch (`/api/status`, dentro de `_initFiltersAndTabsImpl`) tratava `ErroAutenticacao`
+mostrando a tela de login — qualquer outro fetch protegido que caísse num 401 no MEIO do uso
+(sessão expirando depois do carregamento inicial) batia num `catch` genérico já existente em
+vários arquivos (`consolidado.js`/`tendencias.js`: `catch (e) { data = []; }`), que engolia o
+erro silenciosamente sem nunca voltar pra tela de login.
+
+**Corrigido centralizando o tratamento em `fetchJSON`/`postJSON`** (`common.js`): as duas
+funções agora chamam `_mostrarLanding()` (mostra a landing/tela de identificação) ANTES de
+lançar `ErroAutenticacao`, sempre que a resposta é 401 — cobre sessão expirada, cookie
+ausente, usuário removido/inativo e sessão inválida (todos esses casos já caíam em 401 no
+backend, ver `verificar_acesso_principal`), independente de qualquer `catch` que o chamador
+tenha (ou não tenha). Um `window.addEventListener("unhandledrejection", ...)` global serve de
+backstop pra qualquer `ErroAutenticacao` que escape sem handler nenhum (defesa em
+profundidade). `_mostrarLanding()` é idempotente (só troca classes CSS), seguro chamar várias
+vezes seguidas.
+
+### Painel reestruturado (usuários/leads/comportamento)
+
+Pedido explícito do usuário: painel focado em usuários/leads/comportamento, 3 visões claras
+— todas seções da MESMA página `admin.html` (não abas separadas, mesmo padrão de sempre desse
+painel: seções empilhadas verticalmente).
+
+- **Usuários** (`GET /admin/api/usuarios-site`, seção "Usuários" em `admin.html`): nome,
+  e-mail, empresa, cargo, primeiro acesso, último acesso, quantidade de acessos — só contas
+  `password_hash = ''` (site/lead), nunca contas do painel. Primeiro/último acesso e
+  quantidade calculados via subquery correlacionada sobre `admin_acessos_log` (volume baixo,
+  sem preocupação de performance aqui).
+- **Interessados / Leads** (`GET /admin/api/leads`, `POST /admin/api/leads/{id}/contatado`,
+  seção "Interessados / Leads"): nome/e-mail/empresa/cargo (via JOIN com `admin_usuarios`) +
+  data da manifestação (`criado_em` do evento `interesse_lead`) + badge de status ("Precisa
+  ser abordado" em vermelho / "Contatado" em verde, reaproveitando as classes CSS
+  `.admin-pill.inativo`/`.admin-pill.ativo` já existentes) + botão pra alternar o status.
+- **Atividade** (`GET /admin/api/atividade`, seção "Atividade"): sessões agregadas — uma
+  sessão começa num evento `login` e termina no próximo `logout` OU no próximo `login` da
+  MESMA pessoa (o que vier primeiro; cobre o caso comum de fechar a aba sem logout explícito,
+  já que o site público não tem mais botão de Sair). Duração aproximada = diferença de tempo
+  entre entrada e saída; páginas visitadas = eventos `view_aba` dentro desse intervalo.
+  Agrupamento feito em PYTHON (não SQL — `webapp/admin/routes.py::atividade`), de propósito:
+  o volume de `admin_acessos_log` é pequeno o suficiente pra isso ser simples e fácil de
+  revisar, em vez de uma janela SQL correlacionada mais difícil de auditar. Limitado a 300
+  sessões mais recentes (sem paginação ainda, mesmo espírito de outros limites já documentados
+  neste painel).
+- **`GET /admin/api/acessos`** (lista geral de login/logout, já existia) continua só com
+  `evento IN ('login', 'logout')` — `interesse_lead` (como `view_aba`) fica de fora dessa
+  lista geral de propósito (mesmo motivo já documentado pra `view_aba`: evitar afogar o sinal
+  de "quem entrou/saiu"), só aparece nas seções Leads/Atividade específicas.
+- **"Contas do painel (equipe Ártica)"** — renomeado de "Usuários do painel" pra não confundir
+  com a nova seção "Usuários" (site/leads) — MESMO CRUD de sempre (criar/ativar/desativar/
+  promover/rebaixar/resetar senha/excluir conta de staff), filtrando agora `password_hash !=
+  ''` (ver acima), comportamento interno inalterado.
+- **"Saúde do banco" foi REMOVIDA** do painel (pedido explícito do usuário, fora do fluxo
+  principal de usuários/leads) — código original preservado em
+  `docs/archive/removed-features.md` seção 4, caso um dia vire uma tela técnica separada.
+- **Dashboard** (`GET /admin/api/dashboard`, cards no topo) ganhou `total_usuarios_site`,
+  `total_leads` e `leads_pendentes` (contagem de `interesse_lead` com `contatado = FALSE`) —
+  `total_usuarios` (cards "Contas do painel") passou a contar só `password_hash != ''`.

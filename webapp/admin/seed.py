@@ -80,16 +80,22 @@ CREATE INDEX IF NOT EXISTS idx_admin_acessos_log_criado_em ON admin_acessos_log(
 # da insercao.
 MIGRACAO_ROLE = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'"
 
-# 'pendente' | 'aprovado' | 'rejeitado' -- cadastro publico (POST /api/registrar,
-# ver webapp/main.py). Default 'aprovado' pelo MESMO motivo do MIGRACAO_ROLE acima:
-# todas as contas que ja existiam antes desta coluna (seed + criadas pelo CRUD do
-# painel) devem continuar logando normalmente sem precisar de aprovacao retroativa.
+# 'pendente' | 'aprovado' | 'rejeitado' -- HISTORICO: era escrita pelo antigo cadastro
+# publico com aprovacao de admin (POST /api/registrar, removido em 2026-09-22 -- ver
+# docs/archive/removed-features.md secao 4). Mantida por compatibilidade de schema
+# (nao removida), mas nenhuma rota nova escreve/le este campo pra bloquear login --
+# toda conta criada pelo fluxo passwordless atual (POST /api/cadastrar) nasce direto
+# com 'aprovado'. Default 'aprovado' pelo MESMO motivo do MIGRACAO_ROLE acima: toda
+# conta que ja existia antes desta coluna continua logando sem aprovacao retroativa.
 MIGRACAO_STATUS = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'aprovado'"
 
-# Coletado no cadastro publico (POST /api/registrar) so pra o admin ver junto do
-# username na hora de aprovar/rejeitar -- SEM default (contas antigas ficam com
-# email NULL, sem problema) e SEM nenhuma integracao de envio de e-mail (decisao
-# explicita do usuario: so coletar o dado, nao mandar nada).
+# E-mail -- HOJE a chave de identificacao passwordless do site principal (POST
+# /api/identificar/POST /api/cadastrar, ver webapp/main.py e docs/painel-admin.md).
+# Antes (ate 2026-09-22) so era coletado no cadastro publico com aprovacao pra o
+# admin ver junto do username. SEM default (contas antigas ficam com email NULL,
+# sem problema) e SEM constraint de unicidade no banco (a unicidade funcional pro
+# fluxo passwordless e' garantida pela lookup por e-mail em site_identificar/
+# site_cadastrar, nao pelo schema).
 MIGRACAO_EMAIL = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS email TEXT"
 
 # Campo generico de detalhe por evento -- usado hoje pelo evento novo 'view_aba'
@@ -98,6 +104,23 @@ MIGRACAO_EMAIL = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS email TEXT
 # precisar de mais uma migracao de coluna a cada novo tipo. NULL pra login/logout
 # (esses ja se explicam sozinhos pelo campo `evento`).
 MIGRACAO_ACESSOS_DETALHE = "ALTER TABLE admin_acessos_log ADD COLUMN IF NOT EXISTS detalhe TEXT"
+
+# Identificacao passwordless do site principal (reposicionamento pra plataforma
+# publica de lead-gen, 2026-09-22 -- ver CLAUDE.md/docs/painel-admin.md e
+# docs/archive/removed-features.md secao 4, sobre o fluxo antigo de cadastro com
+# aprovacao que este substitui). Nome/empresa/cargo sao coletados na tela de
+# identificacao (POST /api/cadastrar) -- NULL em contas antigas (staff/seed), sem
+# problema, esses 3 campos so importam pra conta que passou pelo fluxo novo.
+MIGRACAO_NOME = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS nome TEXT"
+MIGRACAO_EMPRESA = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS empresa TEXT"
+MIGRACAO_CARGO = "ALTER TABLE admin_usuarios ADD COLUMN IF NOT EXISTS cargo TEXT"
+
+# "Quero saber mais" (ver CLAUDE.md) grava um evento 'interesse_lead' em
+# admin_acessos_log (mesma tabela, mesmo padrao de 'view_aba') -- este campo so
+# tem sentido pra esse evento especifico (indicador de "ja foi abordado pelo
+# time" no painel de admin, secao Leads). Default FALSE -- todo lead novo nasce
+# "precisa ser abordado" ate um admin marcar manualmente como contatado.
+MIGRACAO_ACESSOS_CONTATADO = "ALTER TABLE admin_acessos_log ADD COLUMN IF NOT EXISTS contatado BOOLEAN NOT NULL DEFAULT FALSE"
 
 
 def main():
@@ -129,6 +152,16 @@ def main():
         conn.execute(MIGRACAO_ACESSOS_DETALHE)
         conn.commit()
         print("Coluna admin_acessos_log.detalhe pronta.")
+
+        conn.execute(MIGRACAO_NOME)
+        conn.execute(MIGRACAO_EMPRESA)
+        conn.execute(MIGRACAO_CARGO)
+        conn.commit()
+        print("Colunas admin_usuarios.nome/empresa/cargo prontas.")
+
+        conn.execute(MIGRACAO_ACESSOS_CONTATADO)
+        conn.commit()
+        print("Coluna admin_acessos_log.contatado pronta.")
 
         for username, password_hash, role in SEED_USUARIOS:
             ja_existe = conn.execute(

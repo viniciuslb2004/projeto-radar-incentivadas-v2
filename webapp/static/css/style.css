@@ -72,44 +72,91 @@
 .loading-texto { font-size: 13px; color: var(--blue-lighter); }
 .loading-logo { height: 56px; width: auto; margin-bottom: 8px; }
 
-/* ============ Tela de login (custom, substitui o dialogo nativo do navegador) ============
-   So aparece quando ha pelo menos uma conta cadastrada (admin_usuarios) e ainda nao
-   ha sessao valida (cookie `admin_session`, ver _tentarLogin() em common.js). As
-   rotas /api/* continuam exigindo sessao por baixo dos panos (ver
-   webapp/main.py::_verificar_acesso / webapp/admin/auth.py::verificar_acesso_principal)
-   -- so o HTML/CSS/JS estatico e publico, pra esta tela poder carregar e fazer login
-   via fetch() ANTES de mostrar qualquer dado real. */
-#login-overlay {
+/* ============ Landing institucional + identificacao passwordless ============
+   Substitui a antiga tela de login+senha (ver docs/archive/removed-features.md
+   secao 4). So aparece enquanto nao ha sessao valida -- fetchJSON/postJSON (ver
+   common.js) mostram esta tela automaticamente em qualquer 401 da API, alem da
+   checagem inicial em initFiltersAndTabs(). O HTML/CSS/JS estatico continua
+   publico de proposito, so as rotas /api/* exigem sessao por baixo dos panos (ver
+   webapp/main.py::_verificar_acesso). */
+#landing-overlay {
   position: fixed;
   inset: 0;
   z-index: 1001;
-  background: var(--navy-900);
+  background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy) 100%);
+  overflow-y: auto;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 48px 20px;
 }
-#login-overlay.hidden { display: none; }
-#login-card.hidden, #registrar-card.hidden { display: none; }
+#landing-overlay.hidden { display: none; }
 
-#login-card, #registrar-card {
-  background: var(--steel);
-  border-radius: var(--radius);
-  box-shadow: 0 10px 40px rgba(0,0,0,0.35);
-  padding: 32px 36px;
+.landing-content {
   width: 100%;
-  max-width: 340px;
+  max-width: 980px;
+  display: flex;
+  gap: 56px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.landing-hero { flex: 1 1 380px; color: #fff; }
+.landing-logo { height: 38px; width: auto; margin-bottom: 26px; }
+.landing-titulo {
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+  margin: 0 0 14px;
+}
+.landing-subtitulo {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--blue-lighter);
+  margin: 0 0 22px;
+  max-width: 460px;
+}
+.landing-bullets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 4px;
+  gap: 11px;
+}
+.landing-bullets li {
+  position: relative;
+  padding-left: 22px;
+  font-size: 13px;
   color: #fff;
 }
+.landing-bullets li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--blue-mid);
+  font-weight: 700;
+}
 
-.login-logo { height: 44px; width: auto; margin-bottom: 10px; }
-.login-titulo { font-weight: 700; font-size: 16px; text-align: center; }
-.login-subtitulo { font-size: 12px; color: var(--blue-lighter); text-align: center; margin-bottom: 16px; }
+.landing-acesso { flex: 0 1 360px; min-width: 300px; }
+.landing-acesso-card {
+  background: var(--steel);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  padding: 32px 36px;
+  color: #fff;
+}
+.landing-acesso-card h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
+.landing-acesso-sub { margin: 0 0 18px; font-size: 12px; color: var(--blue-lighter); line-height: 1.5; }
 
-#login-card label, #registrar-card label {
+#identificar-form, #cadastro-form {
+  display: flex;
+  flex-direction: column;
+}
+#identificar-form.hidden, #cadastro-form.hidden { display: none; }
+
+#identificar-form label, #cadastro-form label {
   align-self: flex-start;
   font-size: 11px;
   color: var(--blue-lighter);
@@ -117,7 +164,7 @@
   letter-spacing: 0.4px;
   margin-top: 10px;
 }
-#login-card input, #registrar-card input {
+#identificar-form input, #cadastro-form input {
   width: 100%;
   border: 1px solid var(--blue-mid);
   border-radius: 6px;
@@ -128,8 +175,9 @@
   background: rgba(255,255,255,0.08);
   color: #fff;
 }
-#login-card input::placeholder, #registrar-card input::placeholder { color: var(--blue-lighter); }
-#login-card input:focus, #registrar-card input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
+#identificar-form input::placeholder, #cadastro-form input::placeholder { color: var(--blue-lighter); }
+#identificar-form input:focus, #cadastro-form input:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
+#cadastro-form input:read-only { opacity: 0.7; }
 
 .login-erro {
   color: #ff9b9b;
@@ -139,7 +187,15 @@
 }
 .login-erro.hidden { display: none; }
 
-#login-btn {
+.login-sucesso {
+  color: #9fe8a8;
+  font-size: 12px;
+  margin-top: 12px;
+  text-align: center;
+}
+.login-sucesso.hidden { display: none; }
+
+#identificar-btn, #cadastro-btn {
   margin-top: 20px;
   width: 100%;
   background: var(--navy-900);
@@ -151,8 +207,8 @@
   font-weight: 600;
   cursor: pointer;
 }
-#login-btn:hover { background: var(--navy); }
-#login-btn:disabled { opacity: 0.6; cursor: default; }
+#identificar-btn:hover, #cadastro-btn:hover { background: var(--navy); }
+#identificar-btn:disabled, #cadastro-btn:disabled { opacity: 0.6; cursor: default; }
 
 .login-link-btn {
   margin-top: 12px;
@@ -167,28 +223,35 @@
 }
 .login-link-btn:hover { color: #fff; }
 
-.login-sucesso {
-  color: #9fe8a8;
-  font-size: 12px;
-  margin-top: 12px;
+@media (max-width: 620px) {
+  .landing-titulo { font-size: 24px; }
+  .landing-acesso-card { padding: 26px 24px; }
+}
+
+/* ============ "Obrigado pelo interesse" (botao Quero saber mais) ============ */
+.interesse-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1002;
+  background: rgba(21, 37, 52, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.interesse-modal-overlay.hidden { display: none; }
+.interesse-modal {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  padding: 28px 32px;
+  max-width: 360px;
+  width: 100%;
   text-align: center;
 }
-.login-sucesso.hidden { display: none; }
-
-#registrar-btn {
-  margin-top: 20px;
-  width: 100%;
-  background: var(--navy-900);
-  color: #fff;
-  border: 1px solid var(--blue-mid);
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-#registrar-btn:hover { background: var(--navy); }
-#registrar-btn:disabled { opacity: 0.6; cursor: default; }
+.interesse-modal-titulo { font-size: 17px; font-weight: 700; color: var(--navy); margin-bottom: 8px; }
+.interesse-modal-texto { font-size: 13px; color: var(--text-muted); margin: 0 0 14px; line-height: 1.5; }
+.interesse-modal .login-link-btn { color: var(--blue-mid); }
+.interesse-modal .login-link-btn:hover { color: var(--navy); }
 
 body {
   margin: 0;
@@ -224,7 +287,7 @@ body {
    funcionando. */
 @media (min-width: 900px) {
   .topbar { flex-wrap: nowrap; }
-  .topbar .brand, .topbar-usuario { flex-shrink: 0; white-space: nowrap; }
+  .topbar .brand, .topbar-interesse-btn { flex-shrink: 0; white-space: nowrap; }
 }
 
 .topbar-logo { height: 26px; width: auto; }
@@ -316,24 +379,23 @@ body {
 .tab-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .tab-btn.active { background: var(--steel-2); color: #fff; }
 
-.topbar-usuario {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--blue-lighter);
-}
-.topbar-usuario.hidden { display: none; }
-.topbar-logout-btn {
-  background: transparent;
+/* "Quero saber mais" -- substitui usuario logado + Sair (ver CLAUDE.md, item 5 do
+   reposicionamento pra lead-gen). So aparece pra quem ja se identificou (ver
+   common.js, obterUsuarioAtual()). */
+.topbar-interesse-btn {
+  background: var(--blue-mid);
   border: 1px solid var(--blue-mid);
   color: #fff;
   border-radius: 6px;
-  padding: 4px 12px;
+  padding: 7px 16px;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.topbar-logout-btn:hover { background: var(--steel); }
+.topbar-interesse-btn.hidden { display: none; }
+.topbar-interesse-btn:hover { background: var(--steel-2); }
 
 /* ============ Filter bar ============ */
 .filterbar {
