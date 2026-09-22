@@ -10,9 +10,11 @@ function currentLinhasFilters() {
   return {
     instituicao: document.getElementById("ln-f-instituicao").value,
     setor: document.getElementById("ln-f-setor").value,
+    // "porte" aqui e o bucket canonico (porte_grupo, ver docs/linhas-incentivadas.md
+    // e webapp/main.py::_linhas_where) -- o <select> so lista os ~5 valores do
+    // bucket, nunca os 42 valores brutos de porte_padronizado.
     porte: document.getElementById("ln-f-porte").value,
     regiao: document.getElementById("ln-f-regiao").value,
-    status: document.getElementById("ln-f-status").value,
     fluxo: document.getElementById("ln-f-fluxo").value,
     q: document.getElementById("linhas-busca-input").value.trim(),
   };
@@ -34,7 +36,6 @@ function _aplicarFiltrosLinhasDaURL() {
     setor: "ln-f-setor",
     porte: "ln-f-porte",
     regiao: "ln-f-regiao",
-    status: "ln-f-status",
     fluxo: "ln-f-fluxo",
   };
   Object.entries(CAMPO_PARA_ID).forEach(([campo, id]) => {
@@ -59,7 +60,6 @@ async function initLinhasFiltros() {
   fill("ln-f-setor", filtros.setores);
   fill("ln-f-porte", filtros.portes);
   fill("ln-f-regiao", filtros.regioes);
-  fill("ln-f-status", filtros.status);
   fill("ln-f-fluxo", filtros.fluxos);
   linhasFiltrosInicializados = true;
 }
@@ -140,6 +140,32 @@ function _campoDetalhe(rotulo, valor) {
   return `<div class="meta" style="margin-top:6px;"><strong>${rotulo}:</strong> ${valor}</div>`;
 }
 
+// Card mini de "resumo executivo" -- mesma classe .kpi-card ja usada no
+// Consolidado (grid de estatisticas), reaproveitada aqui em vez de criar CSS
+// novo. "-" quando o campo nao foi informado pela fonte (nunca esconde o card,
+// sempre mostra que o dado nao existe -- diferente de omitir a linha inteira).
+function _kpiMiniDetalhe(rotulo, valor, sub) {
+  const texto = (valor === null || valor === undefined || valor === "" || valor === "Não informado pela fonte")
+    ? "Não informado" : valor;
+  return `<div class="kpi-card">
+    <div class="label">${rotulo}</div>
+    <div class="value" style="font-size:16px;">${texto}</div>
+    ${sub ? `<div class="sub">${sub}</div>` : ""}
+  </div>`;
+}
+
+// Secao com titulo (reaproveita .card/.card-header, ja usados no resto do site)
+// -- so renderiza se tiver ao menos 1 campo preenchido, pra nao mostrar um card
+// vazio so com titulo.
+function _secaoDetalhe(titulo, camposHtml) {
+  const conteudo = camposHtml.filter(Boolean).join("");
+  if (!conteudo) return "";
+  return `<div class="card" style="margin-top:14px;">
+    <div class="card-header">${titulo}</div>
+    <div class="card-body">${conteudo}</div>
+  </div>`;
+}
+
 async function openLinhaDetalhe(id) {
   document.getElementById("modal-title").textContent = "Linha incentivada";
   const ordenarSelect = document.getElementById("modal-ordenar");
@@ -156,38 +182,57 @@ async function openLinhaDetalhe(id) {
   }
   document.getElementById("modal-title").textContent = l.nome_oficial;
 
+  // Reorganizacao (item 2 do pedido): "resumo executivo" no topo, pensado pra
+  // responder rapido "essa linha serve pro meu projeto?" -- Taxa/Prazo/
+  // Carência/Participação no projeto/Enquadramento/O que pode ser financiado,
+  // NESSA ordem. Nenhum campo que ja existia foi removido -- so reordenado em
+  // secoes abaixo do resumo (ver mapeamento campo->secao nos comentarios).
+  const resumo = `
+    <div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-top:10px;">
+      ${_kpiMiniDetalhe("Taxa", l.taxa_completa, [l.indexador, l.spread].filter((v) => v && v !== "Não informado pela fonte").join(" · ") || null)}
+      ${_kpiMiniDetalhe("Prazo", l.prazo_total)}
+      ${_kpiMiniDetalhe("Carência", l.carencia)}
+      ${_kpiMiniDetalhe("Participação no projeto", l.percentual_financiavel)}
+      ${_kpiMiniDetalhe("Enquadramento", l.criterios_elegibilidade ? l.criterios_elegibilidade.slice(0, 80) + (l.criterios_elegibilidade.length > 80 ? "…" : "") : null)}
+      ${_kpiMiniDetalhe("O que pode ser financiado", l.itens_financiaveis ? l.itens_financiaveis.slice(0, 80) + (l.itens_financiaveis.length > 80 ? "…" : "") : null)}
+    </div>
+  `;
+
   body.innerHTML = `
     <div class="meta"><span class="badge neutro">${l.instituicao}</span> · ${l.status || "Não informado pela fonte"} · ${l.fluxo === "edital" ? "Edital/chamada pública" : "Fluxo contínuo"}</div>
-    ${_campoDetalhe("Descrição", l.descricao_completa)}
-    ${_campoDetalhe("Público-alvo / critérios de elegibilidade", l.criterios_elegibilidade)}
-    ${_campoDetalhe("Setores elegíveis", l.setores_elegiveis)}
-    ${_campoDetalhe("Setores não elegíveis", l.setores_nao_elegiveis)}
-    ${_campoDetalhe("Porte elegível", l.porte_padronizado)}
-    ${_campoDetalhe("Faixa de receita", l.faixa_receita)}
-    ${_campoDetalhe("Região elegível", l.regiao_elegivel)}
-    ${_campoDetalhe("Destinação", l.destinacao)}
-    ${_campoDetalhe("Itens financiáveis", l.itens_financiaveis)}
-    ${_campoDetalhe("Itens não financiáveis", l.itens_nao_financiaveis)}
-    ${_campoDetalhe("Valor financiável", fmtValorLinha(l.valor_minimo, l.valor_maximo))}
-    ${_campoDetalhe("Percentual financiável", l.percentual_financiavel)}
-    ${_campoDetalhe("Contrapartida", l.contrapartida)}
-    ${_campoDetalhe("Taxa completa", l.taxa_completa)}
-    ${_campoDetalhe("Indexador", l.indexador)}
-    ${_campoDetalhe("Spread", l.spread)}
-    ${_campoDetalhe("Prazo total", l.prazo_total)}
-    ${_campoDetalhe("Carência", l.carencia)}
-    ${_campoDetalhe("Amortização", l.amortizacao)}
-    ${_campoDetalhe("Garantias", l.garantias)}
-    ${_campoDetalhe("Restrições", l.restricoes)}
-    ${_campoDetalhe("Agente financeiro", l.agente_financeiro)}
-    ${_campoDetalhe("Canal de contratação", l.canal_contratacao)}
-    ${_campoDetalhe("Prazo de inscrição", l.prazo_inscricao)}
-    ${_campoDetalhe("Documentos necessários", l.documentos_necessarios)}
-    ${_campoDetalhe("Data de vigência", l.data_vigencia)}
-    ${_campoDetalhe("Capturado em", l.data_captura ? new Date(l.data_captura).toLocaleDateString("pt-BR") : null)}
-    ${_campoDetalhe("Atualizado em", l.data_atualizacao ? new Date(l.data_atualizacao).toLocaleDateString("pt-BR") : null)}
-    ${_campoDetalhe("Origem do dado", l.origem_dado === "curadoria_manual_verificada" ? "Curadoria manual verificada" : "Coleta automática (fonte oficial)")}
-    ${_campoDetalhe("Trecho da fonte", l.trecho_fonte)}
+    ${resumo}
+    ${_secaoDetalhe("Descrição", [_campoDetalhe("Descrição completa", l.descricao_completa)])}
+    ${_secaoDetalhe("Instituição", [
+      _campoDetalhe("Agente financeiro", l.agente_financeiro),
+      _campoDetalhe("Canal de contratação", l.canal_contratacao),
+      _campoDetalhe("Modalidade", l.modalidade),
+      _campoDetalhe("Tipo de apoio", l.tipo_apoio),
+    ])}
+    ${_secaoDetalhe("Setores e público-alvo", [
+      _campoDetalhe("Setores elegíveis", l.setores_elegiveis),
+      _campoDetalhe("Setores não elegíveis", l.setores_nao_elegiveis),
+      _campoDetalhe("Porte elegível", l.porte_padronizado),
+      _campoDetalhe("Faixa de receita", l.faixa_receita),
+      _campoDetalhe("Região elegível", l.regiao_elegivel),
+      _campoDetalhe("Destinação", l.destinacao),
+    ])}
+    ${_secaoDetalhe("Condições adicionais", [
+      _campoDetalhe("Valor financiável", fmtValorLinha(l.valor_minimo, l.valor_maximo)),
+      _campoDetalhe("Itens não financiáveis", l.itens_nao_financiaveis),
+      _campoDetalhe("Contrapartida", l.contrapartida),
+      _campoDetalhe("Amortização", l.amortizacao),
+      _campoDetalhe("Prazo de inscrição", l.prazo_inscricao),
+      _campoDetalhe("Documentos necessários", l.documentos_necessarios),
+    ])}
+    ${_secaoDetalhe("Garantias", [_campoDetalhe("Garantias", l.garantias)])}
+    ${_secaoDetalhe("Observações", [_campoDetalhe("Restrições", l.restricoes)])}
+    ${_secaoDetalhe("Fonte", [
+      _campoDetalhe("Data de vigência", l.data_vigencia),
+      _campoDetalhe("Capturado em", l.data_captura ? new Date(l.data_captura).toLocaleDateString("pt-BR") : null),
+      _campoDetalhe("Atualizado em", l.data_atualizacao ? new Date(l.data_atualizacao).toLocaleDateString("pt-BR") : null),
+      _campoDetalhe("Origem do dado", l.origem_dado === "curadoria_manual_verificada" ? "Curadoria manual verificada" : "Coleta automática (fonte oficial)"),
+      _campoDetalhe("Trecho da fonte", l.trecho_fonte),
+    ])}
     <div class="meta" style="margin-top:10px;"><a href="${l.url_oficial}" target="_blank" rel="noopener">Ver na fonte oficial ↗</a></div>
   `;
 
@@ -225,7 +270,7 @@ async function openLinhaDetalhe(id) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(
-    "#ln-f-instituicao, #ln-f-setor, #ln-f-porte, #ln-f-regiao, #ln-f-status, #ln-f-fluxo"
+    "#ln-f-instituicao, #ln-f-setor, #ln-f-porte, #ln-f-regiao, #ln-f-fluxo"
   ).forEach((el) => el.addEventListener("change", () => {
     _sincronizarFiltrosLinhasNaURL();
     loadLinhas(0);

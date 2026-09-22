@@ -81,12 +81,123 @@ verificados against a estrutura real (e razoavelmente estavel) de cada site.
 """
 import datetime
 import json
+import re
+import unicodedata
 
 from db import get_connection
 
 
 def _agora() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _sem_acento(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+# ============ Bucketing de Porte/Destinação (filtros de UI, "Potenciais Linhas") ============
+# `porte_padronizado` (42 valores de texto livre, ex: "Micro, Pequena, Médias,
+# Média-Grande, Pré-operacional") e `destinacao_padronizada` (97 valores, maioria
+# com 1 ocorrencia so) sao granulares demais pra um <select> de filtro utilizavel.
+# As duas funcoes abaixo colapsam pra um punhado de categorias por
+# regex/keyword sobre o texto original -- NUNCA inventam um valor novo (o campo
+# fonte continua intacto, isto e so uma leitura simplificada dele) e sao
+# deliberadamente conservadoras: quando o texto nao da sinal claro o suficiente,
+# caem em "Não informado"/"Outros" em vez de arriscar uma categoria errada.
+NAO_INFORMADO_GRUPO = "Não informado"
+
+
+def _calcular_porte_grupo(porte_padronizado: str) -> str:
+    """Bucketing pedido: contem micro/pequena SEM media/grande -> 'Micro/Pequena';
+    contem media -> 'Média'; contem grande -> 'Grande'; menciona multiplos portes
+    (ou a frase 'todos os portes') -> 'Todos os portes'; vazio/nao informado ->
+    'Não informado'. Texto livre real as vezes cita 2+ faixas ao mesmo tempo (ex:
+    'Pequena-média Empresa, Média Empresa, Grande Empresa') -- tratado como
+    'Todos os portes' (o balde que junta qualquer combinacao de 2+ faixas), nao
+    como erro: o objetivo e so eliminar a fragmentacao de 42 valores, nao
+    reconstruir a faixa exata."""
+    if not porte_padronizado:
+        return NAO_INFORMADO_GRUPO
+    texto = _sem_acento(porte_padronizado).lower()
+    if "nao informado" in texto:
+        return NAO_INFORMADO_GRUPO
+    if "todos os portes" in texto or "todos os tamanhos" in texto:
+        return "Todos os portes"
+
+    tem_micro_pequena = bool(re.search(r"micro|pequen", texto))
+    tem_media = bool(re.search(r"m[ea]di", texto))
+    tem_grande = bool(re.search(r"grand", texto))
+    grupos_presentes = sum([tem_micro_pequena, tem_media, tem_grande])
+
+    if grupos_presentes >= 2:
+        return "Todos os portes"
+    if tem_micro_pequena:
+        return "Micro/Pequena"
+    if tem_media:
+        return "Média"
+    if tem_grande:
+        return "Grande"
+    # Texto sem nenhuma palavra de porte reconhecida (ex: "Cooperativas",
+    # "Produtores Rurais", "Agricultura familiar") -- nao ha como inferir faixa de
+    # porte sem inventar, entao cai em "Não informado" (mesmo sentinela do caso
+    # vazio).
+    return NAO_INFORMADO_GRUPO
+
+
+# Categorias de "uso dos recursos" -- adaptadas aos valores REAIS observados em
+# destinacao_padronizada (97 distintos, ver recon anterior), nao uma taxonomia
+# inventada do zero. Ordem da lista = ordem de prioridade do match (primeira
+# regex que bater decide o balde) -- categorias mais especificas (agropecuario,
+# infraestrutura, eficiencia energetica) vem antes das mais genericas
+# (capex/investimento) pra nao "engolir" um caso mais especifico so porque o
+# texto tambem contem a palavra "investimento".
+_DESTINACAO_GRUPOS = [
+    ("Capital de giro", r"capital de giro|custeio.*cartao|rotativo"),
+    ("Agropecuário / Rural", r"agro|agricul|rural|pecuar|aquicultura|pesca|silvicultura|florest|biodiversidade|cafeicultura"),
+    ("Eficiência energética / Sustentabilidade", r"eficiencia energetica|sustenta|baixo carbono|energia renovavel|esg|ecoeficiencia"),
+    ("Infraestrutura", r"infraestrutura|saneamento|mobilidade|rede.*telecomunica|transporte|log[ií]stica|energia eletrica|armazenagem"),
+    ("Inovação / P&D", r"inovac|tecnolog|pesquisa e desenvolvimento|p ?& ?d"),
+    ("Máquinas e equipamentos", r"maquinas e equipamentos|bens de capital"),
+    ("Comércio e serviços", r"comercio|servicos|franquia"),
+    ("CAPEX / Projetos de investimento", r"investimento|capex|amplia|moderniza|implanta|expans|aquisicao de (bens|terras)"),
+]
+
+
+def _calcular_destinacao_grupo(destinacao_padronizada: str) -> str:
+    """Mesma logica de _calcular_porte_grupo, aplicada a destinacao_padronizada --
+    ver _DESTINACAO_GRUPOS acima pras categorias e a ordem de prioridade. Cai em
+    'Outros' quando o texto existe mas nao bate nenhum padrao reconhecido (nunca
+    em 'Não informado' nesse caso, reservado pro campo vazio/NAO_INFORMADO --
+    'Outros' sinaliza "tem dado real, so nao teve categoria propria", diferente
+    de "não sabemos")."""
+    if not destinacao_padronizada:
+        return NAO_INFORMADO_GRUPO
+    texto = _sem_acento(destinacao_padronizada).lower()
+    if "nao informado" in texto:
+        return NAO_INFORMADO_GRUPO
+    for grupo, padrao in _DESTINACAO_GRUPOS:
+        if re.search(padrao, texto):
+            return grupo
+    return "Outros"
+
+
+def backfill_porte_e_destinacao_grupo(conn) -> int:
+    """Recalcula porte_grupo/destinacao_grupo pra TODAS as linhas ja gravadas --
+    chamada no fim de build_linhas_incentivadas() (idempotente, sem custo real:
+    112 linhas) pra manter as duas colunas em sincronia mesmo pra linhas que nao
+    foram re-upsertadas nesta rodada (_upsert_many ja calcula as duas na hora do
+    insert/update, mas so pras linhas processadas naquela chamada especifica)."""
+    linhas = conn.execute("SELECT id, porte_padronizado, destinacao_padronizada FROM linhas_incentivadas").fetchall()
+    cur = conn.cursor()
+    total = 0
+    for linha_id, porte, destinacao in linhas:
+        cur.execute(
+            "UPDATE linhas_incentivadas SET porte_grupo = ?, destinacao_grupo = ? WHERE id = ?",
+            (_calcular_porte_grupo(porte), _calcular_destinacao_grupo(destinacao), linha_id),
+        )
+        total += 1
+    conn.commit()
+    return total
 
 
 def _search_document(linha: dict) -> str:
@@ -120,7 +231,7 @@ _COLS_LINHA = [
     "origem_dado", "origem_raw_id", "setor_padronizado", "subsetor_padronizado",
     "cnaes_relacionados", "porte_padronizado", "destinacao_padronizada",
     "tecnologias_relacionadas", "temas_inovacao", "temas_sustentabilidade",
-    "sinonimos_termos", "search_document",
+    "sinonimos_termos", "search_document", "porte_grupo", "destinacao_grupo",
 ]
 
 _CHAVE_NATURAL = ("instituicao", "nome_oficial", "url_oficial")
@@ -140,6 +251,8 @@ def _upsert_many(conn, linhas: list, lote: int = 100) -> int:
         linha.setdefault("data_captura", agora)
         linha["data_atualizacao"] = agora
         linha["search_document"] = _search_document(linha)
+        linha["porte_grupo"] = _calcular_porte_grupo(linha.get("porte_padronizado"))
+        linha["destinacao_grupo"] = _calcular_destinacao_grupo(linha.get("destinacao_padronizada"))
 
     placeholders = ", ".join("?" * len(_COLS_LINHA))
     set_clause = ", ".join(f"{c} = excluded.{c}" for c in _COLS_LINHA if c not in _CHAVE_NATURAL and c != "data_captura")
@@ -4851,6 +4964,7 @@ def build_linhas_incentivadas():
         n_basa = seed_basa_manual(conn)
         n_bb = seed_bb_manual(conn)
         n_cef = seed_cef_manual(conn)
+        backfill_porte_e_destinacao_grupo(conn)
         total = conn.execute("SELECT COUNT(*) FROM linhas_incentivadas").fetchone()[0]
     finally:
         conn.close()
