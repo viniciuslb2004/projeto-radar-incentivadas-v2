@@ -417,6 +417,7 @@ const _SLUG_PARA_VIEW = {
   "busca": "busca",
   "editais": "editais",
   "linhas-incentivadas": "linhas",
+  "potenciais-linhas": "potenciais",
 };
 const _VIEW_PARA_SLUG = {
   consolidado: "consolidado",
@@ -424,6 +425,7 @@ const _VIEW_PARA_SLUG = {
   busca: "busca",
   editais: "editais",
   linhas: "linhas-incentivadas",
+  potenciais: "potenciais-linhas",
 };
 
 function _viewInicialDaURL() {
@@ -435,7 +437,7 @@ function _ativarView(view, empilharHistorico) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   document.getElementById("filterbar").style.display =
-    view === "busca" || view === "editais" || view === "linhas" ? "none" : "flex";
+    view === "busca" || view === "editais" || view === "linhas" || view === "potenciais" ? "none" : "flex";
   const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
   const mudouDeAba = window.location.pathname !== caminho;
   if (empilharHistorico) {

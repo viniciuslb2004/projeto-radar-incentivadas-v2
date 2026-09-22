@@ -59,6 +59,7 @@
       <button class="tab-btn" data-view="busca">Busca</button>
       <button class="tab-btn" data-view="editais">Editais</button>
       <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
+      <button class="tab-btn" data-view="potenciais">Potenciais Linhas</button>
     </div>
   </div>
   <div class="topbar-usuario hidden" id="topbar-usuario">
@@ -353,10 +354,6 @@
         <select id="ln-f-regiao"><option value="Todas">Todas</option></select>
       </div>
       <div>
-        <label>Status</label>
-        <select id="ln-f-status"><option value="Todos">Todos</option></select>
-      </div>
-      <div>
         <label>Fluxo</label>
         <select id="ln-f-fluxo"><option value="Todos">Todos</option></select>
       </div>
@@ -378,6 +375,47 @@
 
     <div id="linhas-lista"></div>
     <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
+  </section>
+
+  <!-- "Potenciais Linhas" (item 3 do pedido): usuario informa caracteristicas do
+       projeto e recebe um ranking de Linhas Incentivadas com "potencial
+       aderência" -- ver webapp/static/js/potenciais.js e webapp/potenciais.py.
+       Formulario proprio, sem usar o #filterbar compartilhado (conceitos
+       diferentes: volume/porte/uso do PROJETO do usuario, nao filtro de uma
+       listagem existente). -->
+  <section id="view-potenciais" class="view">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">Conte sobre o seu projeto</div>
+      <div class="card-body">
+        <div class="filterbar" style="margin:0; border:none; padding:0;">
+          <div>
+            <label>Setor</label>
+            <select id="pt-f-setor"><option value="">Selecione...</option></select>
+          </div>
+          <div>
+            <label>Subsetor <span class="hint">(opcional, só refina as transações semelhantes)</span></label>
+            <select id="pt-f-subsetor"><option value="">Todos</option></select>
+          </div>
+          <div>
+            <label>Porte da empresa</label>
+            <select id="pt-f-porte"><option value="">Selecione...</option></select>
+          </div>
+          <div>
+            <label>Volume necessário (R$)</label>
+            <input type="number" id="pt-f-volume" placeholder="Ex: 500000" min="0" step="1000">
+          </div>
+          <div>
+            <label>Uso dos recursos</label>
+            <select id="pt-f-uso"><option value="">Selecione...</option></select>
+          </div>
+        </div>
+        <button class="acao-btn" id="pt-buscar-btn" style="margin-top:14px;">Ver linhas potenciais</button>
+        <p class="meta" id="pt-erro" style="display:none; color:var(--red, #b3261e); margin-top:8px;"></p>
+      </div>
+    </div>
+
+    <p class="meta" id="pt-contagem"></p>
+    <div id="pt-lista"></div>
   </section>
 
 </main>
@@ -414,5 +452,6 @@
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
 <script src="/js/linhas.js"></script>
+<script src="/js/potenciais.js"></script>
 </body>
 </html>

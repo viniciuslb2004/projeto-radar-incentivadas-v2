@@ -554,7 +554,16 @@ CREATE TABLE IF NOT EXISTS linhas_incentivadas (
     temas_sustentabilidade TEXT,
     sinonimos_termos TEXT,
     search_document TEXT,
-    search_vector TSVECTOR
+    search_vector TSVECTOR,
+    -- porte_grupo/destinacao_grupo: bucketing simples (nao gravado por nenhuma
+    -- fonte oficial, calculado localmente a partir de porte_padronizado/
+    -- destinacao_padronizada, ver src/linhas_incentivadas.py::_calcular_porte_grupo/
+    -- _calcular_destinacao_grupo) -- existem so pra dar um filtro de UI utilizavel
+    -- (porte_padronizado tem 42 valores de texto livre, destinacao_padronizada tem
+    -- 97, a maioria com 1 ocorrencia so) sem inventar dado novo, nunca sobrescrevem
+    -- os campos originais.
+    porte_grupo TEXT,
+    destinacao_grupo TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_linhas_natural_key ON linhas_incentivadas(instituicao, nome_oficial, url_oficial);
 CREATE INDEX IF NOT EXISTS idx_linhas_instituicao ON linhas_incentivadas(instituicao);
@@ -619,6 +628,12 @@ MIGRACOES_COLUNAS = [
     # dois campos hoje.
     ("cnpj_cnae", "uf", "TEXT"),
     ("cnpj_cnae", "municipio", "TEXT"),
+    # porte_grupo/destinacao_grupo: bucketing de porte_padronizado/destinacao_padronizada
+    # (ver CREATE TABLE linhas_incentivadas acima e src/linhas_incentivadas.py) --
+    # adicionadas depois que a tabela ja existia em producao (2026-09-22, filtros de
+    # "Potenciais Linhas").
+    ("linhas_incentivadas", "porte_grupo", "TEXT"),
+    ("linhas_incentivadas", "destinacao_grupo", "TEXT"),
 ]
 
 

@@ -9,6 +9,7 @@
     { "source": "/busca", "destination": "/index.html" },
     { "source": "/editais", "destination": "/index.html" },
     { "source": "/linhas-incentivadas", "destination": "/index.html" },
+    { "source": "/potenciais-linhas", "destination": "/index.html" },
     { "source": "/admin", "destination": "/admin.html" }
   ],
   "functions": {

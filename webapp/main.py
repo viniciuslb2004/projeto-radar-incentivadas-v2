@@ -87,6 +87,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from webapp.admin.routes import router as admin_router  # noqa: E402
 app.include_router(admin_router, prefix="/admin")
 
+# Potenciais Linhas (item 3 do pedido) -- pacote isolado, mesmo espirito de
+# webapp/admin/: so consulta linhas_incentivadas/operations ja existentes (nenhuma
+# tabela nova), sem logica propria fora deste arquivo. Prefixo comeca com "/api/",
+# entao ja cai automaticamente sob o gate de _verificar_acesso acima (mesma
+# protecao de /api/operacoes, /api/linhas etc.).
+from webapp.potenciais import router as potenciais_router  # noqa: E402
+app.include_router(potenciais_router, prefix="/api/potenciais")
+
 
 def _ip_do_request(request: Request) -> str:
     return request.headers.get("x-forwarded-for", request.client.host if request.client else None)
@@ -245,7 +253,10 @@ def _warmup_busca():
         print(f"Aviso: motor de busca nao pode ser pre-carregado ({e}).")
 
 
-def _filters_clause(agencia=None, setor=None, uf=None, data_inicio=None, data_fim=None, instrumento=None, subsetor=None, segmento=None):
+def _filters_clause(
+    agencia=None, setor=None, uf=None, data_inicio=None, data_fim=None, instrumento=None,
+    subsetor=None, segmento=None, porte=None, valor_min=None, valor_max=None, produto=None,
+):
     # Defesa contra intervalo invertido (data_inicio > data_fim): o frontend ja impede
     # o usuario de chegar nesse estado (ver validarIntervaloDatas em common.js), mas
     # uma chamada direta a API, um link salvo antigo, ou o botao "voltar" do navegador
@@ -282,6 +293,24 @@ def _filters_clause(agencia=None, setor=None, uf=None, data_inicio=None, data_fi
     if data_fim:
         clauses.append("data_contratacao < ?")
         params.append(data_fim)
+    # porte/valor_min/valor_max/produto: filtros novos (2026-09-22, "Potenciais
+    # Linhas" -- ver webapp/potenciais.py/"Transações Semelhantes"), adicionados no
+    # FINAL da assinatura pra nao quebrar nenhuma das chamadas posicionais ja
+    # existentes acima. porte usa a MESMA normalizacao canonica (4 categorias) ja
+    # usada pelo filtro de porte da Busca (ver PORTE_NORMALIZADO_SQL, importado de
+    # search_fts.py).
+    if porte and porte != "Todos":
+        clauses.append(f"({PORTE_NORMALIZADO_SQL}) = ?")
+        params.append(porte)
+    if valor_min is not None:
+        clauses.append("valor_contratado >= ?")
+        params.append(valor_min)
+    if valor_max is not None:
+        clauses.append("valor_contratado <= ?")
+        params.append(valor_max)
+    if produto and produto != "Todos":
+        clauses.append("produto = ?")
+        params.append(produto)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -741,6 +770,10 @@ def operacoes(
     data_inicio: str = None,
     data_fim: str = None,
     instrumento: str = None,
+    porte: str = None,
+    valor_min: float = None,
+    valor_max: float = None,
+    produto: str = None,
     order_by: str = "valor",
     order_dir: str = "desc",
     limit: int = 200,
@@ -748,7 +781,10 @@ def operacoes(
 ):
     limit = max(1, min(limit, 2000))
     offset = max(0, offset)
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento)
+    where, params = _filters_clause(
+        agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento,
+        porte, valor_min, valor_max, produto,
+    )
     coluna_ordenacao = ORDENACAO_COLUNAS.get(order_by, "valor_contratado")
     direcao = "ASC" if order_dir == "asc" else "DESC"
     conn = get_connection(pooled=True)
@@ -1234,7 +1270,12 @@ def _linhas_where(instituicao=None, setor=None, porte=None, regiao=None, status=
         clauses.append("setor_padronizado = ?")
         params.append(setor)
     if porte and porte != "Todos":
-        clauses.append("porte_padronizado = ?")
+        # Filtra pelo bucket CANONICO (porte_grupo, ver src/linhas_incentivadas.py::
+        # _calcular_porte_grupo), nao porte_padronizado bruto -- porte_padronizado
+        # tem 42 valores de texto livre (ver docs/linhas-incentivadas.md), fragmentado
+        # demais pra um filtro de UI. O parametro continua se chamando "porte" (o
+        # frontend so manda um dos poucos valores de porte_grupo agora).
+        clauses.append("porte_grupo = ?")
         params.append(porte)
     if regiao and regiao != "Todas":
         clauses.append("regiao_elegivel = ?")
@@ -1265,10 +1306,17 @@ def linhas_filtros():
                 f"SELECT DISTINCT {col} FROM linhas_incentivadas WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col}"
             ).fetchall()]
 
+        # Portes: bucket canonico (porte_grupo, ver _linhas_where acima), numa ordem
+        # de faixa crescente em vez de alfabetica -- "Nao informado"/"Todos os portes"
+        # ficam nas pontas de proposito (nem excluem nem sao uma faixa especifica).
+        ORDEM_PORTE = ["Micro/Pequena", "Média", "Grande", "Todos os portes", "Não informado"]
+        portes_existentes = set(valores("porte_grupo"))
+        portes = [p for p in ORDEM_PORTE if p in portes_existentes]
+
         return {
             "instituicoes": valores("instituicao"),
             "setores": valores("setor_padronizado"),
-            "portes": valores("porte_padronizado"),
+            "portes": portes,
             "regioes": valores("regiao_elegivel"),
             "status": valores("status"),
             "fluxos": valores("fluxo"),
@@ -1436,7 +1484,7 @@ def enriquecimento_corrigir(body: dict, request: Request):
 # resolve isso e o rewrite em vercel.json direto na CDN -- estas rotas aqui so
 # importam pro modo local (`uvicorn webapp.main:app`), onde nao existe CDN
 # reescrevendo nada antes de chegar no FastAPI.
-_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas"]
+_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "potenciais-linhas"]
 
 
 @app.get("/{pagina}", include_in_schema=False)
