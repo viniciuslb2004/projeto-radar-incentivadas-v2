@@ -4,6 +4,24 @@
 
 let ultimosResultados = [];
 
+// Paginacao (2026-09-22): CLIENT-SIDE de proposito, nao no backend -- decisao medida ao
+// vivo antes de implementar, nao suposta. /api/busca ja capa em 200 resultados (limite
+// default de buscar_texto(), src/search_fts.py, nunca exposto pro caller hoje) e uma
+// bateria real de queries (energia/hospital/software/ltda/transporte/banco) mediu payload
+// de ~115-150KB e tempo de resposta de ~4,3-5,2s -- ou seja, o CUSTO real de uma busca e
+// quase todo a query em si (tiers 1-3 fazem seq scan, piso de ~3-4s ja documentado em
+// docs/motor-busca.md), nao o tamanho do payload nem o render no navegador. Paginar no
+// backend (OFFSET) exigiria RE-EXECUTAR essa mesma query cara a cada troca de pagina --
+// regressao clara do que temos hoje (1 fetch por busca, resto e so scroll). Alem disso, o
+// "ordenar por" (data/valor/agencia) ja e 100% client-side e so funciona corretamente com
+// o conjunto INTEIRO de resultados em memoria (senao cada pagina ordenaria so a propria
+// fatia) -- mover so a paginacao pro backend sem mover a ordenacao junto quebraria essa
+// feature existente. Paginar em memoria sobre `ultimosResultados` (ja limitado a 200)
+// evita as duas armadilhas: troca de pagina e instantanea (zero fetch novo) e a
+// ordenacao continua correta em qualquer pagina.
+const BUSCA_RESULTADOS_POR_PAGINA = 20;
+let buscaPaginaAtual = 1;
+
 // Historico de buscas: pessoal e temporario (so no navegador da propria pessoa,
 // via localStorage -- nunca vai pro servidor). Substitui os chips de exemplo
 // fixos que existiam antes (pedido do usuario).
@@ -99,13 +117,25 @@ function ordenarResultados(lista, criterio) {
 
 function renderListaResultados() {
   const criterio = document.getElementById("busca-ordenar").value;
-  const lista = ordenarResultados(ultimosResultados, criterio);
+  const listaCompleta = ordenarResultados(ultimosResultados, criterio);
   const container = document.getElementById("busca-lista");
+  const pagContainer = document.getElementById("busca-paginacao");
 
-  if (!lista.length) {
+  if (!listaCompleta.length) {
     container.innerHTML = '<p class="empty-state">Nenhuma operação parecida encontrada.</p>';
+    if (pagContainer) pagContainer.innerHTML = "";
     return;
   }
+
+  // Paginacao client-side (ver comentario no topo do arquivo) -- so recorta o array ja
+  // ordenado, nunca refaz a busca. Clampa buscaPaginaAtual pro caso de a ordenacao/lista
+  // ter mudado de tamanho (ex: nova busca com menos resultados que a pagina em que o
+  // usuario estava).
+  const totalPaginas = Math.max(1, Math.ceil(listaCompleta.length / BUSCA_RESULTADOS_POR_PAGINA));
+  if (buscaPaginaAtual > totalPaginas) buscaPaginaAtual = totalPaginas;
+  if (buscaPaginaAtual < 1) buscaPaginaAtual = 1;
+  const inicio = (buscaPaginaAtual - 1) * BUSCA_RESULTADOS_POR_PAGINA;
+  const lista = listaCompleta.slice(inicio, inicio + BUSCA_RESULTADOS_POR_PAGINA);
 
   container.innerHTML = lista
     .map((r) => `<div class="result-card" data-id="${r.id}">
@@ -122,10 +152,66 @@ function renderListaResultados() {
   container.querySelectorAll(".result-card").forEach((card) => {
     card.addEventListener("click", () => openOperacaoDetalhe(card.dataset.id));
   });
+
+  renderPaginacaoBusca(listaCompleta.length, totalPaginas);
+}
+
+// Controles de pagina (Anterior/1 2 3.../Proxima) -- cada clique so troca
+// buscaPaginaAtual e chama renderListaResultados() de novo (nenhum fetch novo, ver
+// comentario no topo do arquivo). Preserva automaticamente busca/filtros/ordenacao:
+// nenhum desses 3 estados e tocado por uma troca de pagina.
+function renderPaginacaoBusca(totalItens, totalPaginas) {
+  const container = document.getElementById("busca-paginacao");
+  if (!container) return;
+  if (totalPaginas <= 1) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const irPara = (p) => {
+    if (p < 1 || p > totalPaginas || p === buscaPaginaAtual) return;
+    buscaPaginaAtual = p;
+    renderListaResultados();
+    document.getElementById("busca-resultado").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Janela de numeros ao redor da pagina atual + primeira/ultima, com "..." nos
+  // buracos -- com o teto atual de 200 resultados/20 por pagina (max 10 paginas) isso
+  // hoje sempre mostra todas as paginas, mas continua correto se o limite do backend
+  // crescer no futuro.
+  const paginas = [];
+  const janela = 1;
+  for (let p = 1; p <= totalPaginas; p++) {
+    if (p === 1 || p === totalPaginas || Math.abs(p - buscaPaginaAtual) <= janela) {
+      paginas.push(p);
+    } else if (paginas[paginas.length - 1] !== "...") {
+      paginas.push("...");
+    }
+  }
+
+  const estiloDesativado = "opacity:0.4; cursor:not-allowed;";
+  const estiloInativa = "background:#fff; color:var(--navy); border:1px solid var(--border);";
+
+  let html = `<span class="progress-label" style="align-self:center; margin-right:6px;">Página ${buscaPaginaAtual} de ${totalPaginas} (${fmtNum(totalItens)} resultados)</span>`;
+  html += `<button class="acao-btn busca-pag-nav" data-p="${buscaPaginaAtual - 1}" style="padding:6px 12px; margin-top:0; ${buscaPaginaAtual === 1 ? estiloDesativado : ""}" ${buscaPaginaAtual === 1 ? "disabled" : ""}>‹ Anterior</button>`;
+  html += paginas
+    .map((p) => {
+      if (p === "...") return '<span style="padding:0 4px; color:var(--text-muted);">…</span>';
+      const ativa = p === buscaPaginaAtual;
+      return `<button class="acao-btn busca-pag-nav" data-p="${p}" style="padding:6px 12px; margin-top:0; ${ativa ? "" : estiloInativa}" ${ativa ? "disabled" : ""}>${p}</button>`;
+    })
+    .join("");
+  html += `<button class="acao-btn busca-pag-nav" data-p="${buscaPaginaAtual + 1}" style="padding:6px 12px; margin-top:0; ${buscaPaginaAtual === totalPaginas ? estiloDesativado : ""}" ${buscaPaginaAtual === totalPaginas ? "disabled" : ""}>Próxima ›</button>`;
+
+  container.innerHTML = html;
+  container.querySelectorAll(".busca-pag-nav").forEach((btn) => {
+    btn.addEventListener("click", () => irPara(Number(btn.dataset.p)));
+  });
 }
 
 function renderResultados(data) {
   ultimosResultados = data.resultados || [];
+  buscaPaginaAtual = 1; // toda busca nova (texto/filtro) volta pra pagina 1
   let html = "";
 
   if (data.confianca_baixa) {
@@ -167,9 +253,13 @@ function renderResultados(data) {
     </div>
   </div>`;
   html += '<div id="busca-lista"></div>';
+  html += '<div id="busca-paginacao" style="display:flex; gap:6px; justify-content:center; align-items:center; margin-top:16px; flex-wrap:wrap;"></div>';
 
   document.getElementById("busca-resultado").innerHTML = html;
-  document.getElementById("busca-ordenar").addEventListener("change", renderListaResultados);
+  document.getElementById("busca-ordenar").addEventListener("change", () => {
+    buscaPaginaAtual = 1; // trocar o criterio de ordenacao tambem volta pra pagina 1
+    renderListaResultados();
+  });
   renderListaResultados();
 }
 
