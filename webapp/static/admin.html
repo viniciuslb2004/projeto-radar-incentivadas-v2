@@ -94,6 +94,9 @@
         <tbody id="admin-usuarios-site-tbody">
           <tr><td colspan="7">Carregando...</td></tr>
         </tbody>
+        <!-- Clique no nome (ver admin.js::renderUsuariosSite) abre o mesmo modal de
+             drill-down usado pra contas de staff, com perfil, timeline de
+             atividade, edicao e exclusao -- ver admin-usuario-modal mais abaixo. -->
       </table>
     </section>
 
@@ -121,27 +124,11 @@
       </table>
     </section>
 
-    <section class="admin-secao">
-      <h2>Atividade</h2>
-      <p class="admin-secao-desc">
-        Sessões de uso do site principal — entrada, saída (ou próximo login, se não houve
-        logout explícito), duração aproximada e páginas visitadas nesse intervalo.
-      </p>
-      <table class="admin-tabela">
-        <thead>
-          <tr>
-            <th>Usuário</th>
-            <th>Entrada</th>
-            <th>Saída</th>
-            <th>Duração aprox.</th>
-            <th>Páginas visitadas</th>
-          </tr>
-        </thead>
-        <tbody id="admin-atividade-tbody">
-          <tr><td colspan="5">Carregando...</td></tr>
-        </tbody>
-      </table>
-    </section>
+    <!-- A tela GERAL "Atividade" (sessoes de TODOS os usuarios, sem filtro) foi
+         removida daqui em 2026-09 -- a funcionalidade continua existindo (GET
+         /admin/api/atividade, agora com filtro opcional usuario_id), so' que
+         exclusivamente dentro do modal de drill-down por usuario (ver
+         admin-usuario-modal mais abaixo e admin.js). -->
 
     <section class="admin-secao">
       <div class="admin-secao-header">
@@ -248,21 +235,29 @@
       <button id="admin-usuario-modal-fechar" class="admin-btn-secundario">Fechar</button>
     </div>
     <div id="admin-usuario-modal-resumo" class="admin-cards"></div>
-    <h4>Acessos e navegação</h4>
-    <table class="admin-tabela">
-      <thead>
-        <tr>
-          <th>Origem</th>
-          <th>Evento</th>
-          <th>Detalhe</th>
-          <th>IP</th>
-          <th>Quando</th>
-        </tr>
-      </thead>
-      <tbody id="admin-usuario-modal-tbody">
-        <tr><td colspan="5">Carregando...</td></tr>
-      </tbody>
-    </table>
+
+    <!-- So visivel no drill-down de USUARIO DO SITE (ver admin.js::abrirModalUsuarioSite)
+         -- staff continua sendo editado/excluido so pela tabela "Contas do painel",
+         ver instrucao explicita de nao mexer nesse CRUD. -->
+    <div id="admin-usuario-modal-site-form" class="admin-form-usuario hidden">
+      <input type="text" id="admin-modal-site-nome" placeholder="Nome">
+      <input type="text" id="admin-modal-site-empresa" placeholder="Empresa">
+      <input type="text" id="admin-modal-site-cargo" placeholder="Cargo">
+      <input type="email" id="admin-modal-site-email" placeholder="E-mail">
+      <button type="button" id="admin-modal-site-salvar-btn" class="admin-toggle-btn">Salvar alterações</button>
+      <button type="button" id="admin-modal-site-excluir-btn" class="admin-toggle-btn">Excluir usuário</button>
+      <span id="admin-modal-site-erro" class="admin-form-erro hidden"></span>
+    </div>
+
+    <!-- So' faz sentido pra usuario do site (staff nao manifesta "quero saber
+         mais") -- ver admin.js, escondido/mostrado conforme o tipo de drill-down. -->
+    <div id="admin-usuario-modal-interesses-wrap" class="hidden">
+      <h4>Interesse comercial ("Quero saber mais")</h4>
+      <div id="admin-usuario-modal-interesses" class="admin-timeline"></div>
+    </div>
+
+    <h4>Atividade (sessões, páginas visitadas)</h4>
+    <div id="admin-usuario-modal-timeline" class="admin-timeline"></div>
   </div>
 </div>
 

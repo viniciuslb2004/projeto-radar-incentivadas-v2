@@ -119,7 +119,13 @@ async function fetchJSON(url, timeoutMs) {
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
   try {
     const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
-    if (r.status === 401) {
+    if (!r.ok) {
+      // Nao so 401: qualquer erro numa rota protegida (500, 502, timeout do
+      // backend etc) tem que voltar pra tela de identificacao em vez de deixar a
+      // tela num estado inconsistente -- 401 e a UNICA saida de erro esperada
+      // dessas rotas (ver verificar_acesso_principal em webapp/admin/auth.py, que
+      // agora nunca deixa uma falha de checagem de acesso vazar como 500), mas
+      // blindamos aqui tambem contra qualquer outra falha de rede/servidor.
       _mostrarLanding();
       throw new ErroAutenticacao("nao autenticado");
     }
@@ -143,7 +149,9 @@ async function postJSON(url, body, timeoutMs) {
       credentials: "include",
       signal: controller.signal,
     });
-    if (r.status === 401) {
+    if (!r.ok) {
+      // Mesmo raciocinio de fetchJSON acima: qualquer erro (nao so 401) numa
+      // rota protegida forca a volta pra tela de identificacao.
       _mostrarLanding();
       throw new ErroAutenticacao("nao autenticado");
     }

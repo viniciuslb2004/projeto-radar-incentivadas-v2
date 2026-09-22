@@ -18,7 +18,6 @@
   const buscaUsuarioSiteInput = document.getElementById("admin-busca-usuario-site");
   const usuariosSiteTbody = document.getElementById("admin-usuarios-site-tbody");
   const leadsTbody = document.getElementById("admin-leads-tbody");
-  const atividadeTbody = document.getElementById("admin-atividade-tbody");
   const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
   const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
@@ -39,9 +38,20 @@
   const usuarioModal = document.getElementById("admin-usuario-modal");
   const usuarioModalTitulo = document.getElementById("admin-usuario-modal-titulo");
   const usuarioModalResumo = document.getElementById("admin-usuario-modal-resumo");
-  const usuarioModalTbody = document.getElementById("admin-usuario-modal-tbody");
+  const usuarioModalTimeline = document.getElementById("admin-usuario-modal-timeline");
   const usuarioModalFechar = document.getElementById("admin-usuario-modal-fechar");
+  const usuarioModalSiteForm = document.getElementById("admin-usuario-modal-site-form");
+  const usuarioModalSiteNome = document.getElementById("admin-modal-site-nome");
+  const usuarioModalSiteEmpresa = document.getElementById("admin-modal-site-empresa");
+  const usuarioModalSiteCargo = document.getElementById("admin-modal-site-cargo");
+  const usuarioModalSiteEmail = document.getElementById("admin-modal-site-email");
+  const usuarioModalSiteSalvarBtn = document.getElementById("admin-modal-site-salvar-btn");
+  const usuarioModalSiteExcluirBtn = document.getElementById("admin-modal-site-excluir-btn");
+  const usuarioModalSiteErro = document.getElementById("admin-modal-site-erro");
+  const usuarioModalInteressesWrap = document.getElementById("admin-usuario-modal-interesses-wrap");
+  const usuarioModalInteresses = document.getElementById("admin-usuario-modal-interesses");
   let operacaoSelecionada = null;
+  let usuarioSiteModalId = null; // id do usuario do site atualmente aberto no modal (null = drill-down de staff)
 
   async function apiFetch(path, options) {
     const resp = await fetch(API + path, Object.assign({ credentials: "same-origin" }, options));
@@ -171,7 +181,7 @@
     usuariosSiteTbody.innerHTML = usuarios
       .map(
         (u) => `<tr>
-          <td>${u.nome || "--"}</td>
+          <td><button type="button" class="admin-usuario-link admin-usuario-site-link" data-id="${u.id}">${u.nome || u.email || "(sem nome)"}</button></td>
           <td>${u.email || "--"}</td>
           <td>${u.empresa || "--"}</td>
           <td>${u.cargo || "--"}</td>
@@ -195,6 +205,148 @@
     buscaUsuarioSiteTimeout = setTimeout(function () {
       carregarUsuariosSite(buscaUsuarioSiteInput.value);
     }, 250);
+  });
+
+  // ============ Timeline (sessoes + interesses) reaproveitada nos 2 drill-downs ============
+  // Reaproveita GET /atividade?usuario_id=... (mesma rota da antiga tela GERAL
+  // "Atividade", removida do admin -- ver CLAUDE.md/routes.py) pra montar uma
+  // timeline all-in-one, tanto pro drill-down de staff quanto pro de usuario do
+  // site (item pedido pelo usuario), em vez de uma lista de eventos crus.
+  function renderTimeline(sessoes) {
+    if (!sessoes || !sessoes.length) {
+      return '<div class="admin-timeline-vazio">Nenhuma atividade registrada ainda.</div>';
+    }
+    return sessoes
+      .map(function (s) {
+        const paginas = s.paginas && s.paginas.length ? s.paginas.join(", ") : "--";
+        const saida = s.saida ? formatarData(s.saida) : "(sessão em aberto)";
+        const duracao = s.duracao_min != null ? `${s.duracao_min} min` : "--";
+        const origem = s.origem === "admin" ? "Painel admin" : "Site principal";
+        const interesses =
+          s.interesses && s.interesses.length
+            ? s.interesses
+                .map((i) => `<div class="admin-timeline-lead">Manifestou "Quero saber mais" em ${formatarData(i)}</div>`)
+                .join("")
+            : "";
+        return `<div class="admin-timeline-item">
+          <div class="admin-timeline-periodo">${formatarData(s.entrada)} → ${saida} <span class="admin-timeline-duracao">(${origem} · ${duracao})</span></div>
+          <div class="admin-timeline-paginas">Páginas visitadas: ${paginas}</div>
+          ${interesses}
+        </div>`;
+      })
+      .join("");
+  }
+
+  async function carregarTimeline(usuarioId) {
+    const resp = await apiFetch(`/atividade?usuario_id=${usuarioId}&limit=50`);
+    const dado = await resp.json();
+    usuarioModalTimeline.innerHTML = renderTimeline(dado.sessoes);
+  }
+
+  // ============ Drill-down: usuario do SITE (nome/e-mail/empresa/cargo + editar/excluir) ============
+  function preencherFormularioSite(u) {
+    usuarioModalSiteNome.value = u.nome || "";
+    usuarioModalSiteEmpresa.value = u.empresa || "";
+    usuarioModalSiteCargo.value = u.cargo || "";
+    usuarioModalSiteEmail.value = u.email || "";
+  }
+
+  function renderInteresses(interesses) {
+    if (!interesses || !interesses.length) {
+      return '<div class="admin-timeline-vazio">Nenhuma manifestação de interesse ainda.</div>';
+    }
+    return interesses
+      .map(function (i) {
+        const classe = i.contatado ? "admin-timeline-lead contatado" : "admin-timeline-lead";
+        const status = i.contatado ? "Contatado" : "Precisa ser abordado";
+        return `<div class="admin-timeline-item">
+          <div class="admin-timeline-periodo">${formatarData(i.criado_em)}</div>
+          <div class="${classe}">${status}</div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  async function abrirModalUsuarioSite(usuarioId) {
+    usuarioSiteModalId = usuarioId;
+    usuarioModalTitulo.textContent = "Carregando...";
+    usuarioModalResumo.innerHTML = "";
+    usuarioModalTimeline.innerHTML = "Carregando...";
+    usuarioModalSiteErro.classList.add("hidden");
+    usuarioModalSiteForm.classList.remove("hidden");
+    usuarioModalInteressesWrap.classList.remove("hidden");
+    usuarioModal.classList.remove("hidden");
+    const resp = await apiFetch(`/usuarios-site/${usuarioId}`);
+    const dado = await resp.json();
+    usuarioModalTitulo.textContent = dado.usuario.nome || dado.usuario.email || "Usuário do site";
+    usuarioModalResumo.innerHTML = `
+      <div class="admin-card"><div class="valor">${dado.qtd_acessos}</div><div class="rotulo">Total de logins</div></div>
+      <div class="admin-card"><div class="valor">${formatarData(dado.primeiro_acesso)}</div><div class="rotulo">Primeiro acesso</div></div>
+      <div class="admin-card"><div class="valor">${formatarData(dado.ultimo_acesso)}</div><div class="rotulo">Último acesso</div></div>
+    `;
+    preencherFormularioSite(dado.usuario);
+    usuarioModalInteresses.innerHTML = renderInteresses(dado.interesses);
+    await carregarTimeline(usuarioId);
+  }
+
+  usuariosSiteTbody.addEventListener("click", function (ev) {
+    const link = ev.target.closest(".admin-usuario-site-link[data-id]");
+    if (!link) return;
+    abrirModalUsuarioSite(Number(link.dataset.id));
+  });
+
+  usuarioModalSiteSalvarBtn.addEventListener("click", async function () {
+    if (!usuarioSiteModalId) return;
+    usuarioModalSiteErro.classList.add("hidden");
+    const payload = {
+      nome: usuarioModalSiteNome.value.trim(),
+      empresa: usuarioModalSiteEmpresa.value.trim(),
+      cargo: usuarioModalSiteCargo.value.trim(),
+      email: usuarioModalSiteEmail.value.trim(),
+    };
+    usuarioModalSiteSalvarBtn.disabled = true;
+    try {
+      const resp = await apiFetch(`/usuarios-site/${usuarioSiteModalId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const dado = await resp.json();
+      if (!resp.ok) {
+        usuarioModalSiteErro.textContent = dado.detail || "Não foi possível salvar as alterações.";
+        usuarioModalSiteErro.classList.remove("hidden");
+        return;
+      }
+      await carregarUsuariosSite(buscaUsuarioSiteInput.value);
+      usuarioModal.classList.add("hidden");
+    } finally {
+      usuarioModalSiteSalvarBtn.disabled = false;
+    }
+  });
+
+  usuarioModalSiteExcluirBtn.addEventListener("click", async function () {
+    if (!usuarioSiteModalId) return;
+    const nomeAtual = usuarioModalTitulo.textContent;
+    if (!confirm(`Excluir o usuário "${nomeAtual}" definitivamente? Essa ação não pode ser desfeita.`)) {
+      return;
+    }
+    usuarioModalSiteExcluirBtn.disabled = true;
+    try {
+      // Reaproveita a MESMA rota generica de exclusao ja usada pra staff (ver
+      // webapp/admin/routes.py::excluir_usuario) -- funciona por id em
+      // admin_usuarios, sem distincao de tipo de conta.
+      const resp = await apiFetch(`/usuarios/${usuarioSiteModalId}`, { method: "DELETE" });
+      if (!resp.ok) {
+        const dado = await resp.json();
+        usuarioModalSiteErro.textContent = dado.detail || "Não foi possível excluir este usuário.";
+        usuarioModalSiteErro.classList.remove("hidden");
+        return;
+      }
+      usuarioModal.classList.add("hidden");
+      await carregarUsuariosSite(buscaUsuarioSiteInput.value);
+    } finally {
+      usuarioModalSiteExcluirBtn.disabled = false;
+    }
   });
 
   // ============ Interessados / Leads ("Quero saber mais") ============
@@ -243,33 +395,6 @@
       btn.disabled = false;
     }
   });
-
-  // ============ Atividade (sessoes agregadas) ============
-  function renderAtividade(sessoes) {
-    if (!sessoes.length) {
-      atividadeTbody.innerHTML = '<tr><td colspan="5">Nenhuma atividade registrada ainda.</td></tr>';
-      return;
-    }
-    atividadeTbody.innerHTML = sessoes
-      .map(function (s) {
-        const duracao = s.duracao_min != null ? `${s.duracao_min} min` : "--";
-        const paginas = s.paginas && s.paginas.length ? s.paginas.join(", ") : "--";
-        return `<tr>
-          <td>${s.username}</td>
-          <td>${formatarData(s.entrada)}</td>
-          <td>${s.saida ? formatarData(s.saida) : "(sessão em aberto)"}</td>
-          <td>${duracao}</td>
-          <td title="${paginas}">${s.paginas_visitadas}</td>
-        </tr>`;
-      })
-      .join("");
-  }
-
-  async function carregarAtividade() {
-    const resp = await apiFetch("/atividade?limit=200");
-    const dado = await resp.json();
-    renderAtividade(dado.sessoes);
-  }
 
   function renderAcessos(acessos) {
     if (!acessos.length) {
@@ -367,16 +492,22 @@
     }
   });
 
-  const EVENTO_ROTULO = { login: "Login", logout: "Logout", view_aba: "Abriu aba" };
-
-  // Drill-down por usuario (pedido do usuario): clicar no nome abre um modal
-  // reunindo login/logout + navegacao por aba (ambas em admin_acessos_log).
+  // Drill-down por CONTA DE STAFF (pedido do usuario): clicar no nome abre o
+  // MESMO modal usado pro drill-down de usuario do site (ver
+  // abrirModalUsuarioSite acima), so' que sem formulario de editar/excluir (CRUD
+  // de staff ja e' feito direto na tabela "Contas do painel", nao precisa
+  // duplicar aqui) e sem bloco de interesse comercial (staff nao manifesta
+  // "quero saber mais"). A timeline agora reaproveita GET /atividade?usuario_id=
+  // (sessoes agregadas) em vez de listar os eventos crus de admin_acessos_log.
   usuariosTbody.addEventListener("click", async function (ev) {
     const link = ev.target.closest(".admin-usuario-link[data-id]");
     if (!link) return;
+    usuarioSiteModalId = null;
+    usuarioModalSiteForm.classList.add("hidden");
+    usuarioModalInteressesWrap.classList.add("hidden");
     usuarioModalTitulo.textContent = "Carregando...";
     usuarioModalResumo.innerHTML = "";
-    usuarioModalTbody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
+    usuarioModalTimeline.innerHTML = "Carregando...";
     usuarioModal.classList.remove("hidden");
     const resp = await apiFetch(`/usuarios/${link.dataset.id}/acessos`);
     const dado = await resp.json();
@@ -386,21 +517,7 @@
       <div class="admin-card"><div class="valor">${formatarData(dado.primeiro_acesso)}</div><div class="rotulo">Primeiro acesso</div></div>
       <div class="admin-card"><div class="valor">${formatarData(dado.ultimo_acesso)}</div><div class="rotulo">Último acesso</div></div>
     `;
-    if (!dado.eventos.length) {
-      usuarioModalTbody.innerHTML = '<tr><td colspan="5">Nenhum acesso registrado ainda.</td></tr>';
-    } else {
-      usuarioModalTbody.innerHTML = dado.eventos
-        .map(
-          (e) => `<tr>
-            <td>${e.origem === "admin" ? "Painel admin" : "Site principal"}</td>
-            <td>${EVENTO_ROTULO[e.evento] || e.evento}</td>
-            <td>${e.detalhe || "--"}</td>
-            <td>${e.ip || "--"}</td>
-            <td>${formatarData(e.criado_em)}</td>
-          </tr>`
-        )
-        .join("");
-    }
+    await carregarTimeline(link.dataset.id);
   });
 
   usuarioModalFechar.addEventListener("click", function () {
@@ -647,7 +764,6 @@
       carregarDashboard(),
       carregarUsuariosSite(""),
       carregarLeads(),
-      carregarAtividade(),
       carregarUsuarios(""),
       carregarAcessos(),
       carregarCorrecoes(),

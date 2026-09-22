@@ -14,6 +14,7 @@ abaixo para como uma conta nova (criada pelo painel) gera o hash dela.
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request, Response
 
 from db import get_connection
+
+logger = logging.getLogger("radar")
 
 SESSION_COOKIE = "admin_session"
 SESSION_TTL_HORAS = 24
@@ -195,16 +198,29 @@ def verificar_acesso_principal(request: Request):
       2. Pelo menos uma conta existe -- exige sessao valida (qualquer role; so as
          rotas do painel /admin, via exigir_admin, exigem role='admin' especificamente).
     Levanta HTTPException(401) se autenticacao for necessaria e a sessao for
-    invalida/ausente; devolve None (silenciosamente) nos outros dois casos."""
-    conn = get_connection(pooled=True)
+    invalida/ausente; devolve None (silenciosamente) nos outros dois casos.
+
+    Qualquer excecao NAO tratada aqui dentro (conexao com o banco fora do ar,
+    timeout, etc) e capturada e tambem vira HTTPException(401) -- nunca deixamos
+    propagar como 500. Principio: "nao sei se a sessao e valida" tem que se
+    comportar exatamente como "sessao invalida" (o frontend so sabe reagir a 401,
+    ver fetchJSON/postJSON em common.js), nunca como "deixo passar" nem como um erro
+    generico que trava a tela sem voltar pra tela de identificacao."""
     try:
-        tem_conta = conn.execute("SELECT 1 FROM admin_usuarios LIMIT 1").fetchone() is not None
-        if not tem_conta:
-            return None
-        token = request.cookies.get(SESSION_COOKIE)
-        usuario = validar_sessao_token(conn, token)
-    finally:
-        conn.close()
+        conn = get_connection(pooled=True)
+        try:
+            tem_conta = conn.execute("SELECT 1 FROM admin_usuarios LIMIT 1").fetchone() is not None
+            if not tem_conta:
+                return None
+            token = request.cookies.get(SESSION_COOKIE)
+            usuario = validar_sessao_token(conn, token)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Falha ao verificar acesso principal -- tratando como sessao invalida (401)")
+        raise HTTPException(status_code=401, detail="Acesso restrito")
     if usuario is None:
         raise HTTPException(status_code=401, detail="Acesso restrito")
     return usuario

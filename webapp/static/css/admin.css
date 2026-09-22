@@ -30,6 +30,11 @@
   gap: 4px;
   color: #fff;
 }
+/* Sem isso a imagem renderiza no tamanho nativo do arquivo (gigante) -- altura
+   parecida com .topbar-logo (28px, mesma pagina) e .landing-logo (38px,
+   style.css), width:auto pra nao distorcer, max-width como cinto de seguranca
+   em telas bem estreitas. */
+.login-logo { height: 44px; width: auto; max-width: 100%; margin-bottom: 8px; }
 .admin-login-card label {
   align-self: flex-start;
   font-size: 11px;
@@ -292,3 +297,21 @@
   cursor: pointer;
 }
 .admin-toggle-btn:hover { background: var(--blue-lightest); }
+
+/* Timeline de atividade (sessoes + interesses) no modal de drill-down por
+   usuario -- substitui a antiga tabela de eventos crus (ver admin.js). */
+.admin-modal h4 { margin: 18px 0 8px; font-size: 13px; color: var(--text-muted); }
+.admin-timeline { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.admin-timeline-vazio { color: var(--text-muted); font-size: 12px; font-style: italic; }
+.admin-timeline-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.admin-timeline-periodo { font-weight: 600; color: var(--navy); }
+.admin-timeline-duracao { font-weight: 400; color: var(--text-muted); }
+.admin-timeline-paginas { margin-top: 4px; color: var(--text-muted); }
+.admin-timeline-lead { margin-top: 4px; color: var(--negative); }
+.admin-timeline-lead.contatado { color: var(--positive); }

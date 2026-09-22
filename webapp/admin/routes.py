@@ -23,6 +23,7 @@ Fora essa excecao documentada, nada neste painel toca em `operations`,
 """
 import logging
 import os
+import re
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -48,6 +49,16 @@ router = APIRouter()
 
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "viniciuslb2004/Projeto-Radar-Incentivadas")
 GITHUB_ACTIONS_TOKEN = os.environ.get("GITHUB_ACTIONS_TOKEN")
+
+# Mesmo padrao simples usado por webapp/main.py::_email_valido (so confere "@" +
+# "." na parte depois do @, sem verificar entrega) -- duplicado aqui (nao
+# importado de main.py) pra nao criar import circular (main.py e' quem importa
+# este pacote, nao o contrario).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _email_valido(email: str) -> bool:
+    return bool(_EMAIL_RE.match(email or ""))
 
 
 def _ip_do_request(request: Request) -> str:
@@ -209,6 +220,104 @@ def listar_usuarios_site(q: str = "", usuario: dict = Depends(exigir_admin)):
     return {"usuarios": [dict(zip(campos, r)) for r in rows]}
 
 
+@router.get("/api/usuarios-site/{usuario_id}")
+def detalhe_usuario_site(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    """Drill-down por USUARIO DO SITE (lead/pessoa identificada via passwordless) --
+    mesmo espirito do drill-down de staff (GET /api/usuarios/{id}/acessos), mas
+    trazendo o perfil certo pra esse tipo de conta (nome/e-mail/empresa/cargo, sem
+    username/role/senha, que nao existem de verdade pra esse fluxo) + o historico
+    de manifestacoes de interesse comercial ('quero saber mais', mesma tabela
+    usada por GET /api/leads). A timeline de sessoes/paginas fica numa chamada
+    separada do frontend (GET /api/atividade?usuario_id=...), mesma rota
+    reaproveitada pelo drill-down de staff (ver atividade() abaixo)."""
+    conn = get_connection(pooled=True)
+    try:
+        row = conn.execute(
+            "SELECT id, nome, email, empresa, cargo, criado_em FROM admin_usuarios "
+            "WHERE id = ? AND password_hash = ''",
+            (usuario_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Usuario do site nao encontrado")
+        primeiro_acesso = conn.execute(
+            "SELECT MIN(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        ultimo_acesso = conn.execute(
+            "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        qtd_acessos = conn.execute(
+            "SELECT COUNT(*) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            (usuario_id,),
+        ).fetchone()[0]
+        leads = conn.execute(
+            "SELECT id, criado_em, contatado FROM admin_acessos_log "
+            "WHERE usuario_id = ? AND evento = 'interesse_lead' ORDER BY criado_em DESC",
+            (usuario_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    campos_usuario = ["id", "nome", "email", "empresa", "cargo", "criado_em"]
+    campos_lead = ["id", "criado_em", "contatado"]
+    return {
+        "usuario": dict(zip(campos_usuario, row)),
+        "primeiro_acesso": primeiro_acesso,
+        "ultimo_acesso": ultimo_acesso,
+        "qtd_acessos": qtd_acessos,
+        "interesses": [dict(zip(campos_lead, r)) for r in leads],
+    }
+
+
+@router.post("/api/usuarios-site/{usuario_id}")
+def editar_usuario_site(usuario_id: int, payload: dict, usuario: dict = Depends(exigir_admin)):
+    """Edita nome/empresa/cargo/e-mail de uma conta do SITE (password_hash = '',
+    ver comentario em /api/dashboard). Username/role/senha NAO sao editaveis aqui
+    -- username continua sendo o e-mail ORIGINAL do cadastro (ver
+    webapp/main.py::site_cadastrar); trocar o e-mail aqui de proposito nao
+    reescreve o username junto (evitaria duplicidade sem o mesmo loop de fallback
+    que so existe no cadastro -- se um dia precisar sincronizar os dois, e'
+    trabalho novo). Valida formato de e-mail (mesmo padrao simples de
+    webapp/main.py::_email_valido) e checa duplicidade contra QUALQUER outra conta
+    (site ou staff) com o mesmo e-mail antes de salvar."""
+    nome = (payload.get("nome") or "").strip() or None
+    empresa = (payload.get("empresa") or "").strip() or None
+    cargo = (payload.get("cargo") or "").strip() or None
+    email = (payload.get("email") or "").strip().lower()
+    if not email or not _email_valido(email):
+        raise HTTPException(status_code=400, detail="E-mail invalido")
+    conn = get_connection(pooled=True)
+    try:
+        alvo = conn.execute(
+            "SELECT id FROM admin_usuarios WHERE id = ? AND password_hash = ''", (usuario_id,)
+        ).fetchone()
+        if alvo is None:
+            raise HTTPException(status_code=404, detail="Usuario do site nao encontrado")
+        duplicado = conn.execute(
+            "SELECT 1 FROM admin_usuarios WHERE lower(email) = ? AND id != ?", (email, usuario_id)
+        ).fetchone()
+        if duplicado:
+            raise HTTPException(status_code=409, detail="Ja existe uma conta com esse e-mail")
+        conn.execute(
+            "UPDATE admin_usuarios SET nome = ?, empresa = ?, cargo = ?, email = ? WHERE id = ?",
+            (nome, empresa, cargo, email, usuario_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# Exclusao de usuario do site: reaproveita DE PROPOSITO a MESMA rota generica
+# usada pra excluir conta de staff (DELETE /api/usuarios/{usuario_id}, mais
+# abaixo neste arquivo) -- ela ja opera sobre `admin_usuarios` por id, sem
+# filtrar por password_hash, e ja trata o FK corretamente (admin_sessoes ON
+# DELETE CASCADE, admin_acessos_log ON DELETE SET NULL + username_snapshot). A
+# guarda do "ultimo admin ativo" daquela rota nunca dispara pra um usuario do
+# site (role sempre 'usuario' nesse fluxo), entao nao ha necessidade de uma rota
+# separada -- ver excluir_usuario() abaixo.
+
+
 # ============ Interessados / Leads ("Quero saber mais") ============
 @router.get("/api/leads")
 def listar_leads(usuario: dict = Depends(exigir_admin)):
@@ -248,41 +357,68 @@ def marcar_lead_contatado(log_id: int, payload: dict, usuario: dict = Depends(ex
 
 # ============ Atividade (sessoes agregadas: login -> logout/proximo login) ============
 @router.get("/api/atividade")
-def atividade(limit: int = 300, usuario: dict = Depends(exigir_admin)):
+def atividade(limit: int = 300, usuario_id: int = None, usuario: dict = Depends(exigir_admin)):
     """Visao agregada e legivel de 'quem entrou, quando, o que visitou, por quanto
-    tempo' -- reaproveita admin_acessos_log (login/logout/view_aba do SITE
-    principal, ja gravados por outros fluxos), sem nenhum sistema de analytics
-    novo. Uma 'sessao' comeca num evento 'login' e termina no proximo 'logout' OU
-    no proximo 'login' da MESMA pessoa (o que vier primeiro) -- cobre o caso comum
-    de fechar a aba sem clicar em nada (nao ha botao de Sair no site publico, ver
-    CLAUDE.md). Agrupamento feito em Python (nao SQL) de proposito -- o volume de
+    tempo' -- reaproveita admin_acessos_log (login/logout/view_aba/interesse_lead,
+    ja gravados por outros fluxos), sem nenhum sistema de analytics novo. Uma
+    'sessao' comeca num evento 'login' e termina no proximo 'logout' OU no proximo
+    'login' da MESMA pessoa (o que vier primeiro) -- cobre o caso comum de fechar
+    a aba sem clicar em nada (nao ha botao de Sair no site publico, ver CLAUDE.md).
+    Agrupamento feito em Python (nao SQL) de proposito -- o volume de
     admin_acessos_log e pequeno o suficiente pra isso ser simples e correto, em vez
-    de uma janela SQL correlacionada mais dificil de revisar."""
+    de uma janela SQL correlacionada mais dificil de revisar.
+
+    `usuario_id` (opcional): restringe a MESMA logica de agrupamento a uma pessoa
+    so -- usado pelo modal de drill-down por usuario (staff E site, ver admin.js)
+    pra montar uma timeline all-in-one (sessoes + paginas visitadas + manifestacoes
+    de interesse) em vez de uma lista de eventos crus. Sem esse filtro, mantem o
+    comportamento antigo: so origem='site' (pensado originalmente pra uma visao
+    GERAL, que nao tem mais tela propria no admin -- ver CLAUDE.md -- mas a rota
+    continua servindo o drill-down por pessoa). COM o filtro, nao restringe mais
+    por origem (drill-down de staff usa origem='admin', que ficaria de fora do
+    filtro antigo)."""
     limit = max(1, min(limit, 1000))
     conn = get_connection(pooled=True)
     try:
+        condicoes = ["evento IN ('login', 'logout', 'view_aba', 'interesse_lead')"]
+        params = []
+        if usuario_id is not None:
+            condicoes.append("usuario_id = ?")
+            params.append(usuario_id)
+        else:
+            condicoes.append("origem = 'site'")
         rows = conn.execute(
-            "SELECT usuario_id, username_snapshot, evento, detalhe, criado_em "
-            "FROM admin_acessos_log WHERE origem = 'site' AND evento IN ('login', 'logout', 'view_aba') "
-            "ORDER BY usuario_id, criado_em"
+            "SELECT usuario_id, username_snapshot, origem, evento, detalhe, criado_em "
+            "FROM admin_acessos_log WHERE " + " AND ".join(condicoes) + " ORDER BY usuario_id, criado_em",
+            tuple(params),
         ).fetchall()
     finally:
         conn.close()
 
     sessoes = []
     atual = None
-    for usuario_id, username, evento, detalhe, criado_em in rows:
+    for usuario_id_linha, username, origem, evento, detalhe, criado_em in rows:
         if evento == "login":
             if atual:
                 sessoes.append(atual)
-            atual = {"usuario_id": usuario_id, "username": username, "entrada": criado_em, "saida": None, "paginas": []}
-        elif atual is not None and atual["usuario_id"] == usuario_id:
+            atual = {
+                "usuario_id": usuario_id_linha,
+                "username": username,
+                "origem": origem,
+                "entrada": criado_em,
+                "saida": None,
+                "paginas": [],
+                "interesses": [],
+            }
+        elif atual is not None and atual["usuario_id"] == usuario_id_linha:
             if evento == "logout":
                 atual["saida"] = criado_em
                 sessoes.append(atual)
                 atual = None
             elif evento == "view_aba":
                 atual["paginas"].append(detalhe)
+            elif evento == "interesse_lead":
+                atual["interesses"].append(criado_em)
     if atual:
         sessoes.append(atual)
 
@@ -304,11 +440,13 @@ def atividade(limit: int = 300, usuario: dict = Depends(exigir_admin)):
         resultado.append(
             {
                 "username": s["username"],
+                "origem": s["origem"],
                 "entrada": s["entrada"],
                 "saida": s["saida"],
                 "duracao_min": duracao_min,
                 "paginas_visitadas": len(s["paginas"]),
                 "paginas": s["paginas"][:20],
+                "interesses": s["interesses"],
             }
         )
     return {"sessoes": resultado}
@@ -430,6 +568,11 @@ def alterar_senha(usuario_id: int, payload: dict, usuario: dict = Depends(exigir
 
 @router.delete("/api/usuarios/{usuario_id}")
 def excluir_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    """Exclusao de conta em admin_usuarios -- generica por `id`, entao tambem e'
+    reaproveitada pelo frontend pra excluir um USUARIO DO SITE (password_hash = '',
+    ver /api/usuarios-site acima), nao so conta de staff. A guarda do "ultimo admin
+    ativo" abaixo so tem efeito quando role == 'admin' (nunca o caso de um usuario
+    do site), entao nenhum comportamento muda pra esse uso novo."""
     conn = get_connection(pooled=True)
     try:
         row = conn.execute("SELECT id, role FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
