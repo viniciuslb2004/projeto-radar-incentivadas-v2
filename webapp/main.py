@@ -524,33 +524,51 @@ def status():
 
 @app.get("/api/filtros")
 def filtros():
+    # Antes: 8 SELECTs sequenciais (1 round trip de rede cada) -- medido ao vivo
+    # contra o Aiven de producao (ver relatorio de performance 2026-09-22): ~180-
+    # 400ms de RTT de rede POR round trip a partir de uma regiao distante do banco,
+    # entao 8 round trips sequenciais custavam ~2-3s so nesta rota, sem nenhum ganho
+    # de dado mais fresco (mesma transacao/mesmo instante). Combinado num UNICO
+    # round trip via subqueries escalares -- o Postgres ainda executa os mesmos 8
+    # scans internamente (mesmo custo de CPU/IO do lado do banco, confirmado por
+    # EXPLAIN ANALYZE), so paga o RTT de rede uma vez em vez de oito. Resultado
+    # (colunas/ordem/filtro NULL) confirmado identico ao das 8 queries separadas
+    # antes de aplicar.
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
-
-        def col_values(col):
-            return [r[0] for r in cur.execute(f"SELECT DISTINCT {col} FROM operations WHERE {col} IS NOT NULL ORDER BY {col}").fetchall()]
+        row = cur.execute(f"""
+            SELECT
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT agencia AS x FROM operations WHERE agencia IS NOT NULL) t) AS agencias,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT setor_bndes AS x FROM operations WHERE setor_bndes IS NOT NULL) t) AS setores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT subsetor_bndes AS x FROM operations WHERE subsetor_bndes IS NOT NULL) t) AS subsetores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT uf AS x FROM operations WHERE uf IS NOT NULL) t) AS ufs,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT instrumento AS x FROM operations WHERE instrumento IS NOT NULL) t) AS instrumentos,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT produto AS x FROM operations WHERE produto IS NOT NULL) t) AS produtos,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT ano AS x FROM operations WHERE ano IS NOT NULL) t) AS anos,
+              (SELECT array_agg(DISTINCT ({PORTE_NORMALIZADO_SQL})) FROM operations) AS portes_presentes,
+              (SELECT MIN(data_contratacao) FROM operations) AS data_min,
+              (SELECT MAX(data_contratacao) FROM operations) AS data_max
+        """).fetchone()
+        (agencias, setores, subsetores, ufs, instrumentos, produtos, anos, portes_presentes, data_min, data_max) = row
 
         # Portes: categorias CANONICAS (ver PORTE_NORMALIZADO_SQL), nao os 7 valores
         # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
         # informado" so aparece se alguma operacao realmente cair nela.
-        portes_presentes = {
-            r[0] for r in cur.execute(f"SELECT DISTINCT ({PORTE_NORMALIZADO_SQL}) FROM operations").fetchall()
-        }
+        portes_presentes = set(portes_presentes or [])
         portes = [p for p in ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "Não informado") if p in portes_presentes]
 
-        min_max = cur.execute("SELECT MIN(data_contratacao), MAX(data_contratacao) FROM operations").fetchone()
         return {
-            "agencias": col_values("agencia"),
-            "setores": col_values("setor_bndes"),
-            "subsetores": col_values("subsetor_bndes"),
-            "ufs": col_values("uf"),
-            "instrumentos": col_values("instrumento"),
-            "produtos": col_values("produto"),
+            "agencias": agencias or [],
+            "setores": setores or [],
+            "subsetores": subsetores or [],
+            "ufs": ufs or [],
+            "instrumentos": instrumentos or [],
+            "produtos": produtos or [],
             "portes": portes,
-            "anos": col_values("ano"),
-            "data_min": min_max[0],
-            "data_max": min_max[1],
+            "anos": anos or [],
+            "data_min": data_min,
+            "data_max": data_max,
         }
     finally:
         conn.close()

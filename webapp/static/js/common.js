@@ -885,6 +885,17 @@ async function initFiltersAndTabs() {
 
 async function _initFiltersAndTabsImpl() {
   const pill = document.getElementById("status-pill");
+  // /api/status e /api/filtros sao independentes (nenhum usa o resultado do
+  // outro) mas eram esperados em SEQUENCIA -- medido ao vivo (relatorio de
+  // performance 2026-09-22): cada round trip de rede custa ~180-400ms contra o
+  // Aiven, entao 2 chamadas sequenciais no caminho critico pos-login custavam o
+  // dobro do necessario. Disparando os dois fetches JUNTOS aqui (chamar
+  // _fetchFiltrosCompartilhado() so inicia o fetch e devolve a promise
+  // cacheada, ver definicao acima) -- o tratamento de erro de cada um continua
+  // exatamente como antes, cada await abaixo so espera a resposta que ja esta
+  // a caminho.
+  const filtrosPromise = _fetchFiltrosCompartilhado();
+
   let status;
   try {
     status = await fetchJSON("/api/status");
@@ -907,7 +918,7 @@ async function _initFiltersAndTabsImpl() {
 
   let filtros;
   try {
-    filtros = await _fetchFiltrosCompartilhado();
+    filtros = await filtrosPromise;
   } catch (e) {
     _esconderLoadingOverlay();
     return;
