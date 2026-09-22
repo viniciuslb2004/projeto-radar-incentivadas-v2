@@ -88,6 +88,32 @@ function obterSessaoAtual() {
   return _sessaoAtualPromise;
 }
 
+// "Quero saber mais" (substitui usuario logado + Sair na topbar, ver CLAUDE.md) --
+// so aparece pra LEAD PUBLICO ja identificado (staff=false), nunca pra sessao de
+// staff (area interna tem seu proprio indicativo, "Modo interno" + botoes de
+// Salvar/Notas/Exportar). Sem ninguem identificado (ou identificacao ainda nao
+// configurada, dev local sem nenhuma conta), a rota devolve username=null e o
+// botao fica escondido. Extraida pra funcao propria (era so um `.then` inline no
+// DOMContentLoaded) pra poder ser chamada de novo depois de
+// _entrarNaPlataformaSemReload -- sem isso, a topbar ficaria com a leitura
+// ANTIGA de /api/me (sem sessao) pelo resto da visita, ja que _sessaoAtualPromise
+// so busca uma vez (ver invalidacao em _entrarNaPlataformaSemReload).
+function _atualizarTopbarSessao() {
+  obterSessaoAtual().then((sessao) => {
+    if (sessao.username && !sessao.staff) {
+      document.getElementById("topbar-interesse-btn").classList.remove("hidden");
+    }
+    // "Modo interno" (indicacao visual discreta, pedido explicito do escopo de
+    // /interno-artica) + botao de exportar operacoes salvas -- SO' pra sessao de
+    // staff, em QUALQUER aba (a mesma sessao/cookie vale nas URLs publicas
+    // tambem, ver MODO_INTERNO acima).
+    if (sessao.staff) {
+      document.getElementById("topbar-interno-badge").classList.remove("hidden");
+      document.getElementById("topbar-exportar-salvos-btn").classList.remove("hidden");
+    }
+  });
+}
+
 // Username logado (ou null) -- mantido por compatibilidade dos chamadores
 // existentes (busca.js, log de navegacao) que so precisam do username, nunca do
 // flag `staff`.
@@ -247,6 +273,103 @@ async function _cadastrarLead(dados) {
   }
 }
 
+// ============ Entrada sem reload completo (pos-identificacao/cadastro) ============
+// Ate 2026-09-22, sucesso em /api/identificar ou /api/cadastrar disparava
+// location.reload() -- reload da pagina INTEIRA, jogando fora todo o trabalho ja
+// feito (scripts ja carregados, tab-btns ja ligados) e forcando o browser a
+// refazer em SERIE tudo que initFiltersAndTabs() + cada aba ja tinham TENTADO (e
+// falhado com 401, sem sessao) na carga original: /api/status, /api/filtros,
+// primeiro fetch de cada aba. O cookie de sessao (Set-Cookie da resposta) ja esta
+// salvo pelo navegador no momento em que _identificarEmail/_cadastrarLead
+// retornam `ok: true` (r.json() so resolve depois do corpo inteiro, entao os
+// headers/cookie ja foram aplicados) -- ou seja, a MESMA pagina, sem reload
+// nenhum, ja pode repetir essas chamadas com sessao valida.
+//
+// NAO da pra chamar de novo o wrapper initFiltersAndTabs(): ele chama
+// _ligarBotoesDeAba(), que NAO e idempotente (religaria um 2o listener de click
+// em cada tab-btn, disparando _ativarView em duplicidade a cada clique dali em
+// diante). Por isso chama _initFiltersAndTabsImpl() direto, e refaz manualmente o
+// que cada aba faz no proprio DOMContentLoaded (consolidado.js/tendencias.js/
+// editais.js/linhas.js) -- via funcoes ja globais (top-level `function`/`async
+// function` em scripts SEM `type="module"` viram propriedade de `window`
+// automaticamente), guardadas com typeof por seguranca. Busca/Potenciais Linhas
+// ficam de fora de proposito: so buscam sob clique explicito do usuario, nunca
+// no DOMContentLoaded, entao nao ha fetch inicial nenhum pra refazer.
+
+// Aba padrao (Consolidado) -- essa e a UNICA parte que atrasa a decisao de
+// mostrar/esconder o loading-overlay (ver _entrarNaPlataformaSemReload abaixo).
+async function _carregarAbaPadraoPosLogin() {
+  await _initFiltersAndTabsImpl();
+  if (typeof window._repopularSubsetorCascata === "function") {
+    await window._repopularSubsetorCascata(true);
+  }
+  if (typeof window.refreshConsolidado === "function") {
+    await window.refreshConsolidado();
+  }
+}
+
+// Demais abas que tambem carregam incondicional no proprio DOMContentLoaded --
+// fire-and-forget DE PROPOSITO (nao atrasa a aba padrao aparecer): se o usuario
+// trocar de aba antes disso terminar, na pior das hipoteses ve por um instante o
+// mesmo estado vazio que a tentativa sem sessao (antes do login) ja tinha
+// deixado, ate estas chamadas terminarem -- nunca dado desatualizado exibido
+// como se fosse novo, so um estado "ainda carregando" um pouco mais longo.
+function _atualizarOutrasAbasPosLogin() {
+  if (typeof window.refreshTendencias === "function") {
+    window.refreshTendencias(currentFilters());
+  }
+  if (typeof window.loadEditaisFiltrosOpcoes === "function") {
+    window.loadEditaisFiltrosOpcoes().then(() => {
+      if (typeof window.refreshEditais === "function") window.refreshEditais();
+    });
+  } else if (typeof window.refreshEditais === "function") {
+    window.refreshEditais();
+  }
+  if (typeof window.initLinhasFiltros === "function") {
+    window.initLinhasFiltros().then(() => {
+      if (typeof window.loadLinhas === "function") window.loadLinhas(0);
+    });
+  } else if (typeof window.loadLinhas === "function") {
+    window.loadLinhas(0);
+  }
+}
+
+// Janela de tolerancia: se a rede responder dentro desse tempo, o usuario nunca
+// chega a ver o loading-overlay (entra direto com dado real, sem loading nenhum
+// -- pedido explicito); se demorar mais, mostra o overlay so pelo tempo que FALTA
+// (nunca o ciclo inteiro que um location.reload() exigiria).
+const JANELA_SEM_LOADING_MS = 200;
+
+async function _entrarNaPlataformaSemReload() {
+  // /api/me so e buscado uma vez por carregamento de pagina (ver
+  // obterSessaoAtual acima) -- a 1a chamada, ainda pre-login, ficou cacheada como
+  // "ninguem logado" pro resto da visita. Sem invalidar aqui, a topbar (botao
+  // "Quero saber mais"/badge "Modo interno") e o log de navegacao (obterUsuarioAtual,
+  // usado em _ativarView) ficariam permanentemente errados depois do login, ja
+  // que nunca mais reconsultariam /api/me sem um reload completo.
+  _sessaoAtualPromise = null;
+  _atualizarTopbarSessao();
+
+  document.getElementById("landing-overlay").classList.add("hidden");
+  const overlay = document.getElementById("loading-overlay");
+  const pronto = _carregarAbaPadraoPosLogin()
+    .then(() => _atualizarOutrasAbasPosLogin())
+    .catch((e) => {
+      // fetchJSON/postJSON ja mostram a landing de novo em caso de 401 (sessao
+      // criada mas por algum motivo invalida) -- aqui so evita um erro nao
+      // tratado no console em qualquer outra falha inesperada.
+      console.error("Falha ao carregar a plataforma apos login:", e);
+    });
+  let terminou = false;
+  pronto.then(() => { terminou = true; });
+  await Promise.race([pronto, new Promise((resolve) => setTimeout(resolve, JANELA_SEM_LOADING_MS))]);
+  if (!terminou) {
+    overlay.classList.remove("hidden");
+    await pronto;
+    overlay.classList.add("hidden");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("identificar-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -271,10 +394,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (!resultado.precisaDados) {
       // E-mail ja conhecido e usado recentemente -- acesso concedido, sessao ja
-      // criada pelo backend. Recarrega a pagina inteira em vez de tentar
-      // re-disparar manualmente a inicializacao de cada aba (consolidado.js,
-      // tendencias.js etc, cada um so roda seu proprio DOMContentLoaded uma vez).
-      location.reload();
+      // criada pelo backend. Sem reload da pagina inteira -- ver
+      // _entrarNaPlataformaSemReload acima.
+      await _entrarNaPlataformaSemReload();
       return;
     }
     // E-mail novo OU ultimo acesso ha mais de 3 meses -- pede os dados completos.
@@ -316,28 +438,10 @@ document.addEventListener("DOMContentLoaded", () => {
       erroEl.classList.remove("hidden");
       return;
     }
-    location.reload();
+    await _entrarNaPlataformaSemReload();
   });
 
-  // "Quero saber mais" (substitui usuario logado + Sair na topbar, ver CLAUDE.md)
-  // -- so aparece pra LEAD PUBLICO ja identificado (staff=false), nunca pra
-  // sessao de staff (area interna tem seu proprio indicativo, "Modo interno" +
-  // botoes de Salvar/Notas/Exportar -- ver bloco abaixo). Sem ninguem
-  // identificado (ou identificacao ainda nao configurada, dev local sem nenhuma
-  // conta), a rota devolve username=null e o botao fica escondido.
-  obterSessaoAtual().then((sessao) => {
-    if (sessao.username && !sessao.staff) {
-      document.getElementById("topbar-interesse-btn").classList.remove("hidden");
-    }
-    // "Modo interno" (indicacao visual discreta, pedido explicito do escopo de
-    // /interno-artica) + botao de exportar operacoes salvas -- SO' pra sessao de
-    // staff, em QUALQUER aba (a mesma sessao/cookie vale nas URLs publicas
-    // tambem, ver MODO_INTERNO acima).
-    if (sessao.staff) {
-      document.getElementById("topbar-interno-badge").classList.remove("hidden");
-      document.getElementById("topbar-exportar-salvos-btn").classList.remove("hidden");
-    }
-  });
+  _atualizarTopbarSessao();
 
   document.getElementById("topbar-interesse-btn").addEventListener("click", async () => {
     const modal = document.getElementById("interesse-modal-overlay");
