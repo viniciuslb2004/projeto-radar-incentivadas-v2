@@ -17,5 +17,6 @@
     "api/index.py": {
       "excludeFiles": "{webapp/static/**,data/raw/**,data/rfb_tmp/**,data/embeddings.npz,scripts/**,.github/**}"
     }
-  }
+  },
+  "regions": ["sfo1"]
 }
