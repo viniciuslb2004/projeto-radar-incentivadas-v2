@@ -144,7 +144,6 @@ async function openLinhaDetalhe(id) {
   document.getElementById("modal-title").textContent = "Linha incentivada";
   const ordenarSelect = document.getElementById("modal-ordenar");
   ordenarSelect.style.display = "none";
-  document.getElementById("modal-favoritar-btn").style.display = "none";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';

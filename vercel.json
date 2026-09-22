@@ -9,12 +9,6 @@
     { "source": "/busca", "destination": "/index.html" },
     { "source": "/editais", "destination": "/index.html" },
     { "source": "/linhas-incentivadas", "destination": "/index.html" },
-    { "source": "/transacoes-salvas", "destination": "/index.html" },
-    { "source": "/primario", "destination": "/index.html" },
-    { "source": "/primario/consolidado", "destination": "/index.html" },
-    { "source": "/primario/tendencias", "destination": "/index.html" },
-    { "source": "/primario/busca", "destination": "/index.html" },
-    { "source": "/primario/transacoes-salvas", "destination": "/index.html" },
     { "source": "/admin", "destination": "/admin.html" }
   ],
   "functions": {

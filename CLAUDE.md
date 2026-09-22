@@ -17,14 +17,6 @@ operações desde 2002); há também um catálogo separado de **linhas de crédi
 alguém analisando o mercado de crédito incentivado brasileiro (ex: para prospecção, benchmarking,
 inteligência de mercado) — não é uma ferramenta de originação/contratação de crédito.
 
-**Segundo "modo" em construção desde 2026-09-16: "Radar de Crédito Primário"**, cobrindo o
-mercado de capitais primário (debêntures, CRI, CRA, notas comerciais, letras financeiras, CDCA,
-CCB, CPR-F) via dados da CVM — DUAS fontes/staging tables diferentes (o dataset principal de
-Ofertas Públicas E um segundo CSV do rito automático/Resolução CVM 160, que sozinho cobre a
-maior parte da atividade de 2023 em diante) — ver seção própria "Radar de Crédito Primário —
-Pipeline CVM" mais abaixo. Só a CAMADA DE DADOS existe até aqui (staging + `operations_primario`);
-rotas de API, motor de busca e frontend são trabalho de sessões seguintes.
-
 100% online: front-end (SPA vanilla JS) + backend (FastAPI) + banco (Postgres/Aiven)
 hospedados juntos na Vercel. Não existe mais "modo local" com banco separado (SQLite) — tanto
 rodando localmente (`uvicorn`, para desenvolvimento) quanto em produção, o app fala com o MESMO
@@ -128,10 +120,6 @@ Postgres via `DATABASE_URL`.
 - **`operations_correcoes_manuais`**: correções manuais pontuais em campos de `operations`,
   reaplicadas automaticamente a cada refresh (ver `unify.py::_reaplicar_correcoes_manuais`).
 - **`refresh_log`**: histórico de cada rodada do pipeline semanal (`src/refresh.py`).
-- **`cvm_oferta_distribuicao_raw`**/**`cvm_oferta_resolucao_160_raw`**/**`operations_primario`**/
-  **`refresh_primario_log`**: DUAS staging tables (uma por CSV/fonte CVM) + UMA tabela unificada
-  + log do Radar de Crédito Primário (CVM) — ver seção própria "Radar de Crédito Primário —
-  Pipeline CVM" mais abaixo.
 
 ## Pipeline de dados (operações BNDES/FINEP)
 
@@ -333,14 +321,13 @@ listas `_XXX_MANUAL`.
 
 ## Frontend: roteamento e abas
 
-6 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
-Insights, Busca, Editais, Linhas Incentivadas, Transações Salvas (esta última só faz sentido
-logado — ver seção própria mais abaixo). A URL reflete qual aba está aberta como CAMINHO
-(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`,
-`/transacoes-salvas`), via `history.pushState`/`popstate` em `common.js` (`_ativarView`/
-`_ligarBotoesDeAba`/`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 6 URLs
-(digitar/recarregar) funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro
-modo local `uvicorn`) + rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
+(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
+`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
+`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 5 URLs (digitar/recarregar)
+funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
++ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
 
 **Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
 mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
@@ -375,13 +362,10 @@ acabou de mudar pra igualar o que o usuário escolheu, com um aviso visual breve
 
 Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador — substituiu 3
 chips de exemplo fixos que existiam antes (`busca.js`, `registrarHistoricoBusca`/
-`renderHistoricoBusca`). **Decisão original ("nunca vai pro servidor") revista em 2026-09-15**:
-agora que existem contas reais, o mesmo histórico também é gravado no servidor por usuário
-LOGADO (mostrado na aba "Transações Salvas", ver seção própria abaixo) — o localStorage
-continua existindo em paralelo, como fallback pra quando ninguém está logado, e sua CHAVE
-passou a ser sufixada por usuário (`obterUsuarioAtual()`, cacheado numa Promise em `common.js`)
-depois de um bug real (2026-09-11): chave fixa = duas contas diferentes no MESMO navegador
-viam o mesmo histórico local, já que `localStorage` é por origem, não por sessão/conta.
+`renderHistoricoBusca`). Sua CHAVE é sufixada por usuário (`obterUsuarioAtual()`, cacheado numa
+Promise em `common.js`) depois de um bug real (2026-09-11): chave fixa = duas contas diferentes
+no MESMO navegador viam o mesmo histórico local, já que `localStorage` é por origem, não por
+sessão/conta.
 
 Card "Por UF" do Consolidado (`loadUF()` em `consolidado.js`) era um bar chart Chart.js
 mostrando só o top-12 (`/api/uf` sempre devolveu as 27 UFs sem limite — o corte era só no
@@ -422,7 +406,7 @@ pra qualquer lugar que já abre esse modal, não só Linhas Incentivadas.
 - **Parâmetro de URL próprio, nunca misturado com os filtros da aba**: `?operacao=<id>`,
   gravado/removido via `_definirOperacaoNaURL(id)` — ao contrário de `sincronizarFiltrosNaURL`
   (que RECONSTRÓI a query string inteira a partir dos filtros de UMA aba), esta função só
-  seta/apaga essa UMA chave, preservando o resto da URL (path da aba + mercado + filtros já
+  seta/apaga essa UMA chave, preservando o resto da URL (path da aba + filtros já
   ativos) — o modal é um OVERLAY por cima de qualquer aba, nunca uma troca de view, então não
   faz sentido ele reescrever o que já estava lá. Gravado assim que o modal abre
   (`openOperacaoDetalhe`, ANTES do fetch — mesmo se o id não existir, "detalhe não encontrado"
@@ -432,13 +416,13 @@ pra qualquer lugar que já abre esse modal, não só Linhas Incentivadas.
   funções podem reescrever a query string via `sincronizarFiltrosNaURL` (cada aba normaliza
   seus próprios filtros ao carregar), o que apagaria `operacao` da URL antes de eu conseguir
   ler, já que essa função não sabe desse parâmetro. Guardado numa variável local, o modal só
-  abre DEPOIS que mercado/aba/filtros terminarem de resolver (sucesso ou erro — mesmo espírito
+  abre DEPOIS que aba/filtros terminarem de resolver (sucesso ou erro — mesmo espírito
   do `_resolverFiltrosProntos` no `finally`, nunca bloqueia o resto do boot).
-- **Botão "🔗 Copiar link"** (`#modal-copiar-link-btn`, ao lado do "☆ Salvar"): mesmo padrão de
-  visibilidade do botão de favoritar — só aparece em `openOperacaoDetalhe` (as outras 3 funções
-  que reusam o MESMO modal — `openOperacoesModal`, `editais.js::openEditalDetalhe`,
-  `linhas.js::openLinhaDetalhe` — escondem os dois de novo explicitamente, já que reusam o
-  elemento). Copia `window.location.href` (já contém `?operacao=<id>` na hora do clique — nunca
+- **Botão "🔗 Copiar link"** (`#modal-copiar-link-btn`): só aparece em `openOperacaoDetalhe` (as
+  outras 3 funções que reusam o MESMO modal — `openOperacoesModal`, `editais.js::
+  openEditalDetalhe`, `linhas.js::openLinhaDetalhe` — escondem o botão de novo explicitamente,
+  já que reusam o elemento). Copia `window.location.href` (já contém `?operacao=<id>` na hora do
+  clique — nunca
   reconstrói a URL de novo aqui, uma única fonte de verdade) via `navigator.clipboard.writeText`,
   com feedback textual temporário (2s) e fallback de erro se o clipboard falhar.
   **Achado de ambiente ao testar**: `navigator.clipboard.writeText` falha com
@@ -462,8 +446,6 @@ Todos em `.github/workflows/`, usando o secret `DATABASE_URL`:
 - `refresh-operacoes.yml` — semanal, segunda 06:00 UTC, timeout 180min, roda `src/refresh.py`.
 - `refresh-editais.yml` — diário, 08:00 UTC, timeout 15min, roda `src/refresh_editais.py`.
 - `enrich-cnae.yml` — mensal, roda `src/enrich_cnae.py`.
-- `refresh-primario.yml` — diário, 09:00 UTC, timeout 30min, roda `src/refresh_primario.py`
-  (Radar de Crédito Primário/CVM — ver seção própria).
 
 Se o "refresh automático parece não estar funcionando", antes de caçar bug: confira 1) se
 `DATABASE_URL` está configurada há tempo suficiente pro cron já ter tido uma janela real pra
@@ -952,8 +934,8 @@ tracking novo — explicitamente MENOR que uma V2 de analytics (que continua for
 ver acima). **V2 construída depois (2026-09-16), pedido explícito do usuário confirmando o
 que antes estava marcado como fora de escopo** — ver bloco abaixo.
 
-**Log de navegação por aba + histórico de busca no drill-down (V2, aprovado 2026-09-16)**:
-o mesmo modal de drill-down por usuário passou a reunir 3 fontes:
+**Log de navegação por aba no drill-down (V2, aprovado 2026-09-16)**:
+o mesmo modal de drill-down por usuário passou a reunir 2 fontes:
 1. **Login/logout** (já existia, `admin_acessos_log`).
 2. **Navegação por aba** (`evento='view_aba'`) — NÃO virou tabela nova; reaproveita
    `admin_acessos_log` com uma coluna genérica nova, `detalhe` (`ALTER TABLE ... ADD COLUMN
@@ -964,11 +946,11 @@ o mesmo modal de drill-down por usuário passou a reunir 3 fontes:
    a troca de aba é de verdade (`mudouDeAba` — não duplica evento reabrindo a mesma aba já
    ativa) — fire-and-forget (`.catch(() => {})`), nunca atrasa nem trava a troca de aba em
    si, e o backend (`registrar_navegacao`) também nunca deixa uma falha de log virar erro
-   pro cliente (best-effort dos dois lados, mesmo espírito de
-   `_registrar_busca_se_logado`/histórico de busca).
-3. **Histórico de busca** (`usuario_busca_historico`, já existia pra Transações Salvas —
-   ver seção própria abaixo) — só exposto no mesmo endpoint/modal via
-   `salvos.listar_busca_historico`, nenhuma duplicação de lógica.
+   pro cliente (best-effort dos dois lados).
+
+Um 3º item (histórico de busca, `usuario_busca_historico`) chegou a fazer parte deste
+drill-down, mas essa tabela foi removida junto da funcionalidade Transações Salvas — o
+drill-down volta a mostrar só login/logout/navegação por aba.
 
 **Cuidado real de volume, levantado ANTES de construir**: navegação por aba gera MUITO mais
 linhas que login/logout (uma por troca de aba, de cada usuário logado, toda visita) — bem
@@ -1059,1194 +1041,6 @@ admin_usuarios;`; 3) apagar a pasta `webapp/admin/` + `webapp/static/admin.html`
 `spa_pagina()`); 5) remover as 2 entradas de rewrite de `vercel.json`. Fora essa exceção
 documentada, nada disso toca em `operations`, `linhas_incentivadas` ou `editais_raw`.
 
-## Transações Salvas (favoritos de operação + histórico de busca por usuário)
-
-Aba própria (`webapp/static/js/salvos.js`, rotas `/api/salvos*`, backend em `webapp/salvos.py`)
-adicionada em 2026-09-15, DEPOIS que o login por conta individual (`admin_usuarios`, ver seção
-"Painel de Admin" acima) já estava valendo pro site inteiro. Duas coisas, as duas escopadas por
-CONTA LOGADA (nunca por navegador/dispositivo — decisão de produto explícita do usuário:
-"individualizar os históricos, favoritos, entre outros"):
-
-1. **Favoritar uma operação** (`usuario_operacoes_salvas`: `usuario_id`, `operation_id` — FK
-   de verdade pra `operations(id)`, `ON DELETE CASCADE` —, `nota` opcional, `criado_em`, UNIQUE
-   `(usuario_id, operation_id)`). Botão ☆/★ (`#modal-favoritar-btn`) embutido no MESMO modal de
-   detalhe de operação que já existia (`common.js::openOperacaoDetalhe`/
-   `_configurarBotaoFavoritar`) — reaproveitado de qualquer lugar que já abre esse modal (Busca,
-   tabela de operações, grupo econômico), não duplicado por página. Os outros 3 lugares que
-   reusam o MESMO elemento de modal (`openOperacoesModal`, detalhe de edital, detalhe de linha
-   incentivada) escondem o botão explicitamente ao abrir — ele só faz sentido no detalhe de UMA
-   operação. Nota pessoal é um campo de texto livre por operação salva, só o dono vê
-   (`textarea` com `PATCH /api/salvos/operacoes/{id}`, salva no `blur`).
-   **Estrutura pensada pra uma extensão futura** (pedido explícito do usuário, não implementada
-   ainda): "buscar por empresa" a partir das operações salvas — como `usuario_operacoes_salvas`
-   só guarda `operation_id` e a tabela `operations` já tem `cnpj`/`cliente`, listar/agrupar as
-   operações salvas por empresa é um JOIN direto (`listar_operacoes_salvas` já devolve esses
-   campos hoje), sem precisar de coluna nova nem migração.
-   **Estrelinha mini em cada card da Busca** (2026-09-16, `webapp/static/js/busca.js`,
-   `.fav-btn-mini` em `style.css`): favoritar sem precisar abrir o modal de detalhe — um
-   botão pequeno, posicionado absoluto no canto superior direito de cada `.result-card`,
-   visível só no `:hover` do card (`opacity:0` → `1`), EXCETO quando a operação já está
-   salva (`.fav-btn-mini.ativo` fica sempre visível, senão não haveria como notar que já
-   está salva sem passar o mouse por cima). Clique tem `stopPropagation()` (o card já tem
-   seu próprio `click` que abre o modal — os dois nunca podem disparar juntos) e reusa a
-   MESMA lógica de alternar favorito que o botão do modal usa
-   (`common.js::alternarFavoritoOtimista`, extraída dos dois pra não duplicar a chamada a
-   `POST`/`DELETE /api/salvos/operacoes/{id}`). **Problema técnico resolvido antes de
-   implementar**: pra saber o estado inicial (★/☆) de até 200 resultados de uma vez, sem
-   200 checagens individuais, existe uma rota em lote —
-   `GET /api/salvos/operacoes/ids` (`webapp/main.py::salvos_ids` +
-   `salvos.py::listar_ids_salvos`) devolve só os `operation_id` já salvos do usuário
-   logado; `busca.js` chama isso 1x por busca (`_carregarIdsSalvos()`, dentro de
-   `runBusca()`, nunca em `renderListaResultados()` — que também roda a cada troca de
-   ordenação, sem precisar buscar de novo) e cruza localmente com `ultimosResultados`.
-   Dependency OPCIONAL (`_usuario_atual`, não `_exigir_usuario_logado`) nessa rota
-   especificamente: ninguém logado devolve `{"ids": []}` em vez de 401, pra Busca
-   continuar funcionando igual pra visitante anônimo (raro em produção, já que
-   `_verificar_acesso` — gate global — já barra `/api/*` inteiro assim que existe pelo
-   menos uma conta; na prática só importa no caso de sessão expirar NO MEIO do uso, onde
-   o catch de `_carregarIdsSalvos()` já cobria isso de qualquer forma). **Limitação aceita
-   de propósito**: a lista de resultados já renderizada na tela NÃO se atualiza sozinha se
-   a mesma operação for favoritada pelo OUTRO caminho (o botão do modal) — só uma busca
-   nova (`runBusca()`) re-consulta `/api/salvos/operacoes/ids` e re-renderiza os cards.
-   Isso nunca causa inconsistência de DADO (o backend faz upsert idempotente dos dois
-   lados), só um estado visual estático até a próxima busca — mesmo espírito de "as duas
-   fontes não se misturam" já documentado no item 2 abaixo pro histórico de busca.
-   **UI otimista + animação de "pop"** (2026-09-16, `common.js::alternarFavoritoOtimista`):
-   ambos os botões de favoritar (modal E estrelinha mini) pintavam o novo estado (★/☆) SÓ
-   depois da resposta do `POST`/`DELETE` voltar — perceptível como um clique "travado"/com
-   delay contra a latência real do Aiven (ver "Coisas a saber antes de mexer" acima).
-   Corrigido: `renderizar(novoEstado)` (callback fornecido por cada chamador — texto+classe
-   no modal, só ícone+título+classe na mini) roda IMEDIATAMENTE no clique, ANTES de
-   `await`ar a chamada à API; se a chamada falhar (`ErroAutenticacao` ou qualquer outro
-   erro), reverte pra `renderizar(estavaAtiva)` e mostra o mesmo alerta de sempre — o
-   servidor continua sendo a fonte da verdade, só a PINTURA acontece adiantada.
-   **Verificado ao vivo simulando alta latência** (`time.sleep()` temporário nas rotas
-   `POST`/`DELETE /api/salvos/operacoes/{id}`, removido depois do teste): o botão já
-   reflete o novo estado antes da requisição completar (confirmado comparando o timestamp
-   da mudança visual com o da resposta de rede); e simulando falha (sessão invalidada no
-   meio do clique) o botão reverte pro estado anterior + mostra o alerta de login, como
-   esperado. Acompanha um "pop" rápido e discreto (`@keyframes fav-pop`, `transform:
-   scale(1) -> scale(1.18) -> scale(1)`, 0.2s, reiniciado via remove+reflow+readiciona a
-   classe `.fav-pop` — funciona mesmo em cliques rápidos em sequência) disparado nas DUAS
-   direções (favoritar e desfavoritar, inclusive no revert de uma falha) — mesma família de
-   timing das outras transitions de 0.15s já usadas no site (`.fav-btn`/`.fav-btn-mini`),
-   sem inventar um ritmo novo.
-2. **Histórico de busca no SERVIDOR** (`usuario_busca_historico`: `usuario_id`, `query`,
-   `fixada` BOOLEAN, `criado_em`) — grava a cada busca de um usuário LOGADO
-   (`webapp/main.py::_registrar_busca_se_logado`, chamado tanto pela rota GET padrão sem IA
-   quanto pela rota POST do modo IA opcional). Upsert por texto da query (case-insensitive):
-   pesquisar a MESMA query de novo só atualiza `criado_em`, nunca duplica linha
-   (`salvos.py::registrar_busca_historico`). Uma entrada pode ser FIXADA (`fixada=TRUE`) pra
-   ficar no topo da lista independente de recência — `listar_busca_historico` ordena
-   `fixada DESC, criado_em DESC`. Na aba Transações Salvas, cada item tem "Buscar de novo"
-   (preenche a query na aba Busca e dispara `runBusca()`), "Fixar"/"Desafixar" e "Remover";
-   "Limpar não fixadas" (`DELETE /api/salvos/historico`) nunca apaga o que foi fixado —
-   remoção de um item fixado é sempre individual, por decisão deliberada (nunca em massa por
-   engano).
-   **Decisão de escopo tomada nesta implementação, confirmada explicitamente com o usuário**:
-   o histórico pessoal em `localStorage` da aba Busca (ver seção "Frontend: roteamento e abas"
-   acima) CONTINUA existindo em paralelo, como fallback pra quando ninguém está logado — não
-   foi substituído. As duas fontes não se misturam na UI: o chip-based history da aba Busca
-   sempre lê/escreve local (`busca.js`), a lista da aba Transações Salvas sempre lê/escreve
-   servidor (`salvos.js`) — ambas são alimentadas pela MESMA ação de buscar, cada uma pelo seu
-   próprio caminho, sem um sincronizar o outro.
-
-**Por que as tabelas não têm FK pra `admin_usuarios`** (mesma segregação já documentada na
-seção "Painel de Admin"): `admin_usuarios` só existe depois que `webapp/admin/seed.py` roda —
-uma FK de verdade em `usuario_operacoes_salvas`/`usuario_busca_historico` (definidas em
-`src/db.py`, junto do resto do schema `operations`) quebraria `init_db()` (chamado pelo
-pipeline semanal via GitHub Actions, `src/refresh.py`) em qualquer ambiente onde
-`admin_usuarios` ainda não existe. `usuario_id` aqui é só um INTEGER solto, mesmo padrão já
-usado por `operations_correcoes_manuais.usuario` (esse é TEXT, não FK) — a validade do
-`usuario_id` é garantida pelo backend, nunca pelo banco: toda rota de `/api/salvos/*` exige
-`Depends(_exigir_usuario_logado)` (`webapp/main.py`), que resolve o usuário a partir do MESMO
-cookie de sessão (`admin_session` → `admin_sessoes` → `admin_usuarios.id`) que
-`_verificar_acesso`/`verificar_acesso_principal` já usam pro gate geral de `/api/*` — ou seja,
-`usuario_id` vem sempre de uma sessão de conta real validada no servidor, nunca de um
-identificador de dispositivo/navegador/sessão anônima enviado pelo cliente. Isso é o que
-garante o isolamento entre contas (testado ao vivo: duas contas de teste diferentes, cada uma
-só via os próprios favoritos/histórico).
-
-**Lembrete de infraestrutura pra quem for aplicar isso num ambiente novo**: como `init_db()`
-só é chamado pelos scripts de pipeline (nunca pela webapp em runtime), as duas tabelas novas só
-passam a existir de fato depois de rodar `python src/db.py` manualmente (ou o próximo
-`refresh.py`/`refresh_editais.py` agendado) contra o `DATABASE_URL` daquele ambiente — mesmo
-padrão de qualquer mudança de schema neste projeto, nada automático no deploy da Vercel.
-
-## Radar de Crédito Primário — Pipeline CVM
-
-Segundo "modo" da plataforma, construído a partir de 2026-09-16, cobrindo o **mercado de
-capitais primário brasileiro** (debêntures, CRI, CRA, notas comerciais/promissórias, letras
-financeiras, CDCA, CCB) — complementa o crédito incentivado de fomento (BNDES/FINEP) com o
-outro grande canal de captação de dívida das empresas brasileiras. **Esta seção documenta só a
-CAMADA DE DADOS** (staging + tabela unificada `operations_primario`) — rotas `/api/primario/*`,
-motor de busca e frontend são trabalho de sessões seguintes, construído em cima deste schema.
-
-### Fonte: CVM — Portal de Dados Abertos, dataset "Ofertas Públicas de Distribuição"
-
-Licença ODbL, mantido pela SRE/CVM (órgão regulador oficial), atualizado diariamente.
-**ACHADO REAL (2026-09-16)**: a URL do dado esperada terminava em `.csv`
-(`.../DADOS/oferta_distribuicao.csv`) — devolve 404 ao vivo. O arquivo de verdade é um `.zip`
-no mesmo caminho (`oferta_distribuicao.zip`, ~5.3MB), que **contém DOIS CSVs** dentro (achado
-real #2, também só confirmado baixando de verdade): `oferta_distribuicao.csv` (o dataset
-pedido) E `oferta_resolucao_160.csv` (dataset relacionado mas diferente — RCVM 160, o rito de
-oferta que sucedeu a ICVM 400/476, fora do escopo deste pedido). `src/download_cvm.py` extrai
-por NOME do arquivo dentro do zip (nunca por posição/índice — a CVM não documenta nem garante
-ordem estável dos membros do zip). Mesmo achado (zip com 2 membros) no `.zip` do dicionário de
-dados (`meta_oferta_distribuicao.zip` → `meta_oferta_distribuicao.txt` +
-`meta_oferta_resolucao_160.txt`). Encoding **latin-1** (não utf-8), delimitador `;` — confirmado
-decodificando e reencodando uma amostra real (`"DEBÊNTURES SIMPLES"` decodifica certo com
-`encoding="latin-1"`; o mojibake que aparece em terminais/logs ao longo deste processo é só a
-própria console não sabendo renderizar utf-8, não corrupção do dado).
-
-Dataset completo: ~48,9 mil linhas (TODAS as ofertas públicas já registradas/dispensadas desde
-1989 — ações, cotas de fundo, BDR, CRI/CRA, debênture etc., republicado por inteiro a cada
-atualização, sem filtro nenhum de data). Filtrando só instrumentos de DÍVIDA (ver escopo
-abaixo): **12.239 linhas** (confirmado ao vivo, 2026-09-16), cobrindo 1989–2025.
-
-### Instrumentos em escopo (`src/parse_cvm.py::_ESCOPO_REGEX`)
-
-Filtro por regex com `\b` (word boundary) sobre `Tipo_Ativo` normalizado (sem acento,
-maiúsculo) — bate tanto o nome por extenso quanto a sigla, mas com boundary nas siglas curtas
-(CRI/CRA/CDCA/CCB) para não arriscar falso-positivo por substring cru. Contagem real por
-`Tipo_Ativo` no CSV de 2026-09-16 (13 valores distintos observados, todos em escopo):
-DEBÊNTURES SIMPLES (4.936), CERTIFICADOS DE RECEBÍVEIS IMOBILIÁRIOS - CRI (3.298), NOTAS
-PROMISSÓRIAS (1.753), CERTIFICADOS DE RECEBÍVEIS DO AGRONEGÓCIO - CRA (839), CERTIFICADO DE
-RECEBÍVEIS IMOBILIÁRIOS (710, grafia alternativa sem "S" — mesma coisa, mesmo regex bate as
-duas), DEBÊNTURES CONVERSÍVEIS (222), CERTIFICADO DE RECEBÍVEIS DO AGRONEGÓCIO (182), NOTAS
-COMERCIAIS (168), LETRAS FINANCEIRAS (115), CERTIFICADOS DE DIREITOS CREDITÓRIOS DO
-AGRONEGÓCIO - CDCA (11), TOKENS REPRESENTATIVOS DE DEBÊNTURES/SANDBOX REGULATÓRIO (3), CÉDULAS
-DE CRÉDITO BANCÁRIO - CCB (1), DEBÊNTURES PERMUTÁVEIS (1).
-
-**Deliberadamente FORA de escopo**: ações, cotas/quotas de fundos (a maioria absoluta das ~49
-mil linhas totais — FIDC/FIP/FII/fundo fechado etc., incluindo cotas SÊNIOR/SUBORDINADA de
-FIDC, que tecnicamente financiam recebíveis mas são "fundo", não um título de dívida direto),
-BDR, warrants (incl. "WARRANTS AGROPECUÁRIOS"), certificado de investimento audiovisual. As 3
-linhas com `Tipo_Ativo = "CERTIFICADOS DE RECEBÍVEIS"` (sem qualificador IMOBILIÁRIOS/
-AGRONEGÓCIO) ficam de fora de propósito — não dá para saber se é CRI ou CRA sem inventar, e a
-regra de ouro deste projeto (ver seção "Linhas Incentivadas") é nunca inferir.
-
-**CORREÇÃO REAL (2026-09-16, sessão de integração do `oferta_resolucao_160.csv` abaixo)**: a
-entrada original desta seção dizia que **CPR-F** (Cédula de Produto Rural Financeira) tinha
-sido excluído por falta de fonte aberta, e que "CPR não é valor mobiliário registrado na CVM".
-**Isso estava ERRADO.** CPR-F *é* um valor mobiliário registrado na CVM — só não aparece neste
-arquivo (`oferta_distribuicao.csv`, confirmado: 0 ocorrências de "PRODUTO RURAL"/"CPR" em
-`Tipo_Ativo`) porque esse instrumento passa pelo rito automático (Resolução CVM 160), reportado
-no SEGUNDO CSV do mesmo zip. Corrigido: 18 linhas reais de CPR-F (Klabin, Suzano, Duratex,
-Adami, Eldorado Brasil Celulose, Agropecuária Maggi etc.) agora entram via
-`cvm_oferta_resolucao_160_raw` — ver seção "Segunda fonte CVM" abaixo.
-
-### `cvm_oferta_distribuicao_raw` (staging, quase 1:1 com o CSV oficial)
-
-**Escopo de colunas deliberadamente reduzido**: o CSV oficial tem ~30 colunas adicionais de
-COMPOSIÇÃO DE INVESTIDORES (`Nr_Pessoa_Fisica`, `Qtd_Fundos_Investimento`,
-`Qtd_Investidor_Estrangeiro` etc.) que descrevem QUEM comprou o ativo, não o crédito em si —
-fora do escopo de um radar de crédito (poderiam ser adicionadas depois, sem migração nenhuma
-nos dados já gravados, se um dia isso virar requisito real — basta estender
-`parse_cvm.py::CVM_COLUMNS` e rodar de novo, o CSV de origem continua tendo tudo). Mantidas:
-identificação da oferta/processo, emissor/líder/ofertante, datas, classe/série/forma do ativo,
-quantidade/preço/valor, flags S/N (incentivo fiscal/regime fiduciário/oferta inicial),
-juros/atualização monetária (texto cru, fonte do `indexador_padronizado`).
-
-**`numero_registro_oferta` NÃO é chave natural viável** (achado real, verificado contra o CSV
-inteiro antes de desenhar o pipeline) — parecia óbvio (é literalmente "o número de registro da
-oferta"), mas **75,8% das linhas de dívida (9.277 de 12.242 candidatas) têm esse campo NULO**:
-são ofertas com DISPENSA de registro (`Modalidade_Dispensa_Registro`/`Data_Dispensa_Oferta`
-preenchidos nesses casos, nunca um número de registro — a CVM só atribui esse número a ofertas
-que de fato passam pelo rito de registro pleno). `Numero_Processo` também não serve sozinho: um
-único processo administrativo pode conter **dezenas de séries/emissões diferentes** (confirmado
-um processo com 55 séries de debênture, cada uma sua própria linha). Por isso o staging usa a
-MESMA estratégia já validada para BNDES/FINEP (ver `incremental.py`): **hash de conteúdo da
-linha inteira** (`row_hash`, sobre as colunas de negócio mantidas, não sobre as ~30 excluídas) —
-o dataset da CVM também é republicado por inteiro a cada atualização diária, não incremental na
-origem. Rodando pela primeira vez (2026-09-16): 12.239 linhas em escopo no CSV, **12.232
-inseridas** (7 descartadas por `row_hash` idêntico dentro do mesmo lote — linhas que só
-diferiam nas colunas de composição de investidores excluídas do staging, portanto
-indistinguíveis nos campos que este projeto de fato guarda).
-
-### `operations_primario` (tabela unificada, mesmo espírito de `operations`)
-
-`src/unify_primario.py::build_operations_primario()` — incremental por `raw_table`+`raw_id`
-(nunca por `numero_registro_oferta`, pelos motivos acima), mesmo padrão de
-`unify.py::build_operations()`. Diferença de design: `operations` tem 3 estados de
-`setor_origem` (nativo/enriquecido/pendente) porque o BNDES tem setor NATIVO na própria
-planilha; aqui **todo emissor depende do MESMO caminho de enriquecimento via CNPJ**, então não
-existe uma coluna `setor_origem` — o estado "pendente" é só `setor_emissor IS NULL`.
-
-- **`instrumento_padronizado`**: mapa fixo (`INSTRUMENTO_PADRONIZADO_MAP`, chave exata pós-
-  normalização, não regex — a essa altura a linha já passou pelo filtro de escopo) para
-  `'Debênture'|'CRI'|'CRA'|'Nota Comercial'|'Letra Financeira'|'CDCA'|'CCB'|'Outro'`. Nota
-  Promissória e Nota Comercial são **o MESMO instrumento sob nomes diferentes** (a Lei
-  14.195/2021 renomeou "nota promissória comercial" para "nota comercial" e trocou o registro
-  da B3 pelo da CVM/escritural — mesma natureza econômica) — unificadas sob `'Nota Comercial'`.
-- **`setor_emissor`/`subsetor_emissor`/`segmento_emissor`/`porte_emissor`/
-  `natureza_juridica_emissor`/`uf_emissor`/`municipio_emissor`/`razao_social_oficial_emissor`**:
-  via JOIN contra `cnpj_cnae` (o MESMO cache já usado para enriquecer a FINEP) por
-  `cnpj_emissor`. **Extensão feita em `cnpj_cnae` para viabilizar isso**: a tabela nunca teve
-  `uf`/`municipio` (BNDES/FINEP já trazem UF/município direto na própria planilha de origem,
-  nunca precisaram disso via CNPJ) — adicionadas via `MIGRACOES_COLUNAS` (`ALTER TABLE`,
-  nullable, sem backfill retroativo: linhas de `cnpj_cnae` já existentes de BNDES/FINEP ficam
-  com `uf`/`municipio` NULL para sempre, o que é aceitável — nada mais consome esses dois campos
-  a partir de `cnpj_cnae` hoje). Populadas via `enrich_cnae.py::enrich_pendentes_via_api`
-  (BrasilAPI) — a API já devolvia `uf`/`municipio` na mesma chamada usada para CNAE/porte/
-  natureza jurídica, só não eram gravados até esta mudança; o job MENSAL em lote
-  (`enrich()`, que escaneia `Estabelecimentos*.zip` da RFB) **não foi estendido** para isso
-  (`ESTAB_COLS` tem `uf`/`municipio` disponíveis no zip, mas `KEEP_COLS` não os inclui) — só o
-  caminho BrasilAPI (usado neste pipeline, volume pequeno o suficiente: ~1,2 mil CNPJs
-  distintos) grava esses dois campos por enquanto.
-- **`data_referencia`/`ano`/`trimestre`**: `Data_Emissao` (o campo "óbvio") está **ausente em
-  82% das linhas em escopo** (achado real — ofertas antigas/dispensadas raramente têm essa data
-  digitalizada), então `data_referencia` usa o primeiro campo preenchido nesta ordem de
-  preferência (ver `unify_primario.py::_data_referencia`, todos já normalizados para
-  `AAAA-MM-DD`): `data_emissao` → `data_registro_oferta` → `data_inicio_oferta` →
-  `data_encerramento_oferta` → `data_protocolo` → `data_abertura_processo`. NUNCA inventada — se
-  os 6 campos estiverem vazios, fica NULL. `ano`/`trimestre` derivados de `data_referencia`,
-  mesmo padrão de `operations.ano`/`operations.trimestre`.
-- **`indexador_padronizado`: MELHOR ESFORÇO, propositalmente impreciso — documentado aqui para
-  quem for consumir este campo não confiar demais nele.** `Juros`/`Atualização_Monetária` são
-  texto livre da CVM desde 1989 (771 e 98 valores distintos só no subconjunto em escopo, ex:
-  `"12% A.A."`, `"DI + 2%"`, `"TAXA ANBID"`, `"IGP-M"`, `"VARIAÇÃO CAMBIAL DÓLAR"`, `"NIHIL"`) —
-  impossível parsear com precisão total sem inventar. `_indexador_padronizado()` reconhece só os
-  4 padrões mais comuns/inequívocos por regex simples: `IPCA+` (contém IPCA/IPCR na atualização
-  monetária), `SELIC` (contém SELIC em qualquer um dos dois campos), `CDI` (atualização
-  monetária vazia/"NÃO" E juros contém "DI"/"CDI" como palavra inteira — cuidado real evitado
-  aqui: `\bC?DI\b` NÃO bate "ANBID" nem "RODI", que não têm a subsequência literal "DI" com
-  boundary), `Prefixado` (atualização monetária vazia E juros é uma taxa numérica pura, sem
-  DI/CDI/SELIC). Qualquer outro conteúdo real (IGPM, TR, TJLP, ANBID — histórica, uma taxa
-  distinta de CDI, NUNCA tratada como equivalente aqui —, variação cambial, IGP-DI, INCC etc.)
-  cai em `'Outro'` — nunca em NULL nesse caso, para não parecer "sem indexador" quando na
-  verdade só não reconhecemos qual é. NULL fica reservado para quando os dois campos de origem
-  estão genuinamente vazios. **Se um dia este campo precisar de mais precisão**: expandir os
-  padrões reconhecidos em `_indexador_padronizado()` é seguro (função pura, sem migração), mas
-  qualquer expansão deve continuar seguindo a mesma regra de ouro do resto do projeto — nunca
-  inventar/inferir um indexador que o texto de origem não afirma claramente.
-- **`taxa_valor`/`taxa_tipo` (pedido adicional do usuário, chegou no meio desta mesma sessão,
-  logo depois do `indexador_padronizado` acima já estar pronto)**: além de SABER que o
-  indexador é CDI, o usuário quer o NÚMERO da taxa/spread (ex: para "CDI + 2,50% a.a." — ver o
-  indexador `CDI` E o número `2.5`; para "12,5% a.a." — ver só o número `12.5`). MESMA filosofia
-  de melhor esforço do `indexador_padronizado` — `src/unify_primario.py::_extrair_taxa()`, regex
-  sobre `juros` (`Atualização_Monetária` carrega o NOME do índice, quase nunca um número de taxa
-  junto). `taxa_tipo` tem **3 valores possíveis** (uma extensão deliberada sobre o que foi pedido
-  — o usuário sugeriu só `spread`/`taxa_fixa`, mas os dados reais mostraram um terceiro padrão
-  genuíno demais pra forçar em uma das duas categorias sem inventar semântica):
-  - `'spread'`: aditivo (`+`/`-` explícito, ou a palavra "acrescid[ao] de", ou o número vindo
-    ANTES do indexador tipo `"0,75% a.a. + CDI"`) — funciona independente de qual indexador
-    precede/segue, então também cobre um spread sobre um indexador que caiu em `'Outro'`
-    (IGPM/TR/TJLP/LIBOR/ANBID etc.) — o índice de base continua disponível em
-    `indexador_padronizado` + `juros`/`atualizacao_monetaria` crus, nunca escondido atrás do
-    número extraído. O `"%"` é **opcional** neste padrão de propósito: `"CDI + 1,75"`/
-    `"DI + 2,85 aa"` são spreads reais sem o símbolo — convenção do mercado de crédito privado
-    brasileiro é cotar spread sobre DI/CDI/SELIC sempre em pontos percentuais a.a., mesmo quando
-    o `%` some do texto (o campo `juros` só existe pra descrever uma taxa de dívida — qualquer
-    número aqui depois de um sinal `+`/`-` é uma taxa, nunca outra coisa).
-  - `'percentual_indexador'`: **MULTIPLICATIVO, não aditivo** (ex: `"108% do CDI"`,
-    `"104% da taxa DI"`) — deliberadamente um `taxa_tipo` DIFERENTE de `'spread'`: tratar
-    `"108% do CDI"` como "spread de 108" seria uma leitura errada e enganosa (não são 108 pontos
-    percentuais SOMADOS ao CDI, é 108% do próprio CDI — quase o dobro do indexador). Só
-    reconhecido quando `indexador_padronizado` já é `'CDI'`/`'SELIC'` (evita ambiguidade com
-    outros usos de `%`).
-  - `'taxa_fixa'`: prefixado puro (`indexador_padronizado == 'Prefixado'`, número seguido de
-    `%`).
-  - **BUG REAL corrigido antes de terminar**: as primeiras versões das regex tinham os
-    conectivos (`"spread"`, `"sobretaxa"`, `"acrescida"`, `"taxa"`) escritos em minúsculo, mas
-    `juros` chega já normalizado em MAIÚSCULO (`remover_acentos(...).upper()`, mesma função
-    usada pelo filtro de escopo) — sem `re.IGNORECASE`, nenhuma delas batia contra o texto real
-    (`"SPREAD DE 1,5%"` nunca casava com o padrão em minúsculo). Corrigido adicionando
-    `re.IGNORECASE` em todas as regex de taxa.
-  - **Cobertura real medida** (contra as 12.239 linhas em escopo do CSV de 2026-09-16):
-    **515 linhas (~4,2%) com `taxa_valor` extraído** — a grande maioria das linhas tem `juros`
-    vazio/`"NAO"`/`"-"` (a mesma razão pela qual `indexador_padronizado` também é `None` em
-    10.603 linhas — dado realmente ausente na fonte, não falha de regex). Do subconjunto onde
-    `juros` tem conteúdo reconhecível, a cobertura é bem maior; o que ainda fica de fora é
-    fraseado raro demais pra valer regex novo agora (ex: `"105% das taxas médias diárias dos
-    DI"`, `"101,75 da Taxa DI"` sem `%`) — **documentado aqui, não escondido**: `taxa_valor`
-    fica `NULL` nesses casos, nunca um valor chutado.
-- **`prazo_dias`/`prazo_meses` (pedido adicional do usuário, mesma sessão)**: diferente de
-  indexador/taxa, isso é **dado EXATO, não melhor esforço** — `Data_Vencimento - Data_Emissao`,
-  duas datas reais da própria CVM (`src/unify_primario.py::_prazo_dias_e_meses`).
-  `prazo_meses` = `prazo_dias / 30,44` (média de dias por mês), arredondado a 1 casa — conversão
-  documentada, não inventada, só pra ficar comparável com `operations.prazo_amortizacao_meses`
-  (BNDES/FINEP, já em meses). **Só calculável quando AMBAS as datas existem** — confirmado
-  contra o CSV real: apenas **1.859 de 12.239 linhas em escopo (15,2%)** têm as duas datas
-  preenchidas (`Data_Emissao` sozinha já falta em 82% das linhas, ver `data_referencia` acima).
-  **Achado real de qualidade de dado NA PRÓPRIA FONTE**: das 1.903 linhas com as duas datas (nº
-  ligeiramente diferente de 1.859 porque conta antes do dedup por `row_hash`), **44 (2,3%) têm
-  `Data_Vencimento` ANTERIOR OU IGUAL a `Data_Emissao`** — inconsistência de digitação da CVM,
-  não bug deste pipeline (um caso extremo mediu -35.429 dias, quase 97 anos "ao contrário").
-  Essas 44 linhas ficam com `prazo_dias`/`prazo_meses` `NULL` de propósito — nunca um prazo
-  negativo/zero, que quebraria qualquer comparação/gráfico no frontend depois.
-- **Carência: NÃO existe em NENHUMA das duas fontes CVM, confirmado contra os DOIS dicionários
-  de dados** (`meta_oferta_distribuicao.txt` E `meta_oferta_resolucao_160.txt`) — nenhum dos
-  dois tem um campo equivalente a `prazo_carencia_meses` do BNDES. Diferente do BNDES (que
-  declara carência explicitamente na própria planilha), carência de um título de dívida privado
-  normalmente só consta na escritura/prospecto do papel, não em nenhum destes registros
-  estruturados da CVM. **Deliberadamente não extraído de texto livre** (não há um campo de
-  referência que sirva de âncora, ao contrário de indexador/taxa que pelo menos partem de
-  `Juros`/`Atualização_Monetária` — tentar inferir carência de descrição livre sem estrutura
-  nenhuma seria risco alto de dado errado) — mesma regra de ouro do resto do projeto: sem fonte
-  estruturada, sem campo. **Atualização (2026-09-16)**: `oferta_resolucao_160.csv` foi
-  integrado (ver seção "Segunda fonte CVM: rito automático/Resolução 160" abaixo) — suas 47
-  colunas relevantes foram conferidas uma a uma contra as 71 colunas oficiais do dataset, e
-  nenhuma delas descreve carência (o schema é focado em ESTRUTURA/garantia da oferta —
-  `Descricao_garantias`/`Agente_fiduciario`/`Titulo_incentivado`/`Tipo_lastro`/`Custodiante` —
-  não em condições financeiras do título). Confirmado, não é mais uma suposição: carência
-  continua indisponível em ambas as fontes CVM deste pipeline.
-
-Rodando pela primeira vez (2026-09-16) contra produção (Aiven, mesmo `DATABASE_URL` de sempre):
-12.232 linhas inseridas em `operations_primario` (1:1 com o staging, nenhuma linha rejeitada),
-8.249 emissores ficaram pendentes de enriquecimento (1.472 linhas sem `cnpj_emissor` — nunca vão
-resolver, é dado ausente na própria oferta, não erro deste pipeline — + linhas cujo CNPJ ainda
-não estava em `cnpj_cnae`), reduzido para **1.242 CNPJs distintos** a resolver via
-`enrich_cnae.py::enrich_pendentes_via_api` (BrasilAPI, mesmo mecanismo/rate-limit já usado pela
-FINEP — ~0,6s por CNPJ).
-
-### Segunda fonte CVM: rito automático / Resolução 160 (`oferta_resolucao_160.csv`)
-
-**Achado real do coordenador (2026-09-16), DEPOIS que a integração acima já tinha rodado uma
-vez**: o MESMO zip oficial (`oferta_distribuicao.zip`) contém um SEGUNDO CSV,
-`oferta_resolucao_160.csv` — dataset relacionado mas de **schema DIFERENTE**, focado no rito
-automático da Resolução CVM 160 (sucessora da ICVM 400/476 para a maior parte das emissões
-modernas). Achado crítico: esse segundo arquivo tem **14.493 linhas cobrindo EXATAMENTE
-2023–2026**, contra só **7 linhas** de `cvm_oferta_distribuicao_raw` nesse mesmo período — sem
-integrar este arquivo, o radar ficava praticamente cego para a atividade de mercado mais
-recente (exatamente o que mais importa para um "radar"). Integrado na mesma sessão que
-corrigiu a exclusão indevida do CPR-F (ver acima).
-
-- **`src/download_cvm.py`**: `download_all()` agora baixa o zip principal e o de metadados
-  **cada um UMA vez só** e extrai os DOIS membros de cada (antes só extraía
-  `oferta_distribuicao.csv`/`meta_oferta_distribuicao.txt` e descartava o resto) — evita baixar
-  os mesmos ~5.3MB duas vezes. Novos caminhos: `RESOLUCAO160_CSV_PATH`/`RESOLUCAO160_META_PATH`.
-- **`cvm_oferta_resolucao_160_raw`** (staging nova, `src/parse_cvm_resolucao160.py`): MESMO
-  padrão de `cvm_oferta_distribuicao_raw` — encoding latin-1, delimitador `;`, incremental por
-  `row_hash` (não por chave natural), colunas de composição de investidores excluídas (aqui:
-  ~24 colunas `Num_Invest_*`/`Qtde_VM_*`, mesmo critério). **Diferença real encontrada**:
-  `Numero_Requerimento` **É confirmado único e não-nulo** nas 14.493 linhas (ao contrário de
-  `numero_registro_oferta` no arquivo principal, 76% nulo) — mesmo assim, mantido como coluna
-  INFORMATIVA, não como chave de upsert, por consistência com o resto do pipeline (o dataset
-  também é republicado por inteiro a cada atualização, não incremental na origem).
-- **Escopo de instrumentos**: reaproveita a MESMA regex de `parse_cvm.py`
-  (`ESCOPO_REGEX_DIVIDA`, exportada — antes privada `_ESCOPO_REGEX`), estendida com o termo do
-  CPR-F (`PRODUTO RURAL FINANCEIRA|\bCPR-F\b`) — inofensivo para o arquivo principal (confirmado
-  ao vivo: 0 ocorrências desse termo em `Tipo_Ativo`). Contagem real (CSV de 2026-09-16, campo
-  `Valor_Mobiliario` — nomenclatura **diferente** da de `Tipo_Ativo` para o MESMO instrumento,
-  ex: "Debêntures" em vez de "DEBÊNTURES SIMPLES", sem sufixo "- CRI"/"- CRA"/"- CDCA", exigiu
-  chaves novas em `unify_primario.py::INSTRUMENTO_PADRONIZADO_MAP`): Debêntures 1.938 +
-  Debêntures Conversíveis 1, Certificados de Recebíveis Imobiliários 1.868, Notas Comerciais
-  770, Certificados de Recebíveis do Agronegócio 587, **Cédula de Produto Rural Financeira
-  (CPR-F) 18**, Certificado de Direitos Creditórios do Agronegócio 4, Notas Promissórias 2 —
-  **5.188 linhas em escopo** de 14.493 totais (9.305 fora de escopo: majoritariamente Cotas de
-  FIDC/FII/FIF/FIP/FIAGRO, Ações, "Outros títulos de securitização" — ambíguo demais, mesmo
-  critério de nunca inventar que já exclui "Certificados de Recebíveis" sem qualificador no
-  arquivo principal — e as 3 linhas ambíguas "Certificados de Recebíveis").
-- **Checagem de DUPLICIDADE entre os dois arquivos (item 5 do pedido, verificado ao vivo)**:
-  **ZERO overlap de `Numero_Processo`** entre os dois CSVs (14.493 processos distintos no
-  segundo arquivo, nenhum aparece no principal). Uma coincidência de `(CNPJ_Emissor, Emissao)`
-  apareceu em 312 combinações, mas inspecionar várias mostrou que são operações DIFERENTES do
-  MESMO emissor reaproveitando o número de emissão em programas distintos (ex: um emissor
-  serial de securitização com "Emissão 96" de CRI num arquivo e "Emissão 96" de CRA totalmente
-  diferente no outro — valores e datas não batem). **Conclusão: os dois arquivos são conjuntos
-  DISJUNTOS na prática** — nenhuma lógica de dedup entre eles foi necessária.
-- **Campos que este arquivo NÃO tem** (confirmado contra as 71 colunas oficiais):
-  `Data_Emissao`/`Data_Vencimento`/`Juros`/`Atualização_Monetária`/`Serie`/`Classe_Ativo`/
-  `Especie_Ativo`/`Forma_Ativo`. Por isso, para linhas com `raw_table =
-  'cvm_oferta_resolucao_160_raw'`: **`data_emissao`/`data_vencimento`/`prazo_dias`/
-  `prazo_meses`/`indexador_padronizado`/`taxa_valor`/`taxa_tipo`/`juros`/
-  `atualizacao_monetaria`/`serie`/`classe_ativo`/`especie_ativo`/`forma_ativo` ficam SEMPRE
-  `NULL`** (nunca inferidos — em especial, prazo NUNCA foi aproximado a partir das datas de
-  PROCESSO deste arquivo, que são conceitos diferentes de vencimento do título). Isso é
-  **esperado, documentado, não é bug** — resolve o problema de VOLUME/RECÊNCIA, não o de
-  remuneração/prazo do título.
-- **`data_referencia` (fallback próprio, `unify_primario.py::_data_referencia_r160`)**: usa os
-  campos de data que ESTE arquivo realmente tem, em ordem de preferência: `data_registro` →
-  `data_encerramento` → `data_deliberacao_aprovou_oferta` → `data_requerimento` (último recurso,
-  mas o ÚNICO campo sem nenhum nulo no dataset inteiro — garante `data_referencia` preenchida
-  para praticamente 100% das linhas).
-- **6 colunas novas em `operations_primario`** (sempre `NULL` para linhas de
-  `cvm_oferta_distribuicao_raw`, que não tem equivalente a nenhuma): `numero_requerimento`
-  (traçabilidade — namespace DIFERENTE de `numero_registro_oferta`, nunca confundidos),
-  `status_requerimento`, `tipo_lastro` (`'Pulverizado'`/`'Concentrado'`), `agente_fiduciario`,
-  `custodiante`, `descricao_garantias`. `titulo_incentivado`/`regime_fiduciario` do arquivo NÃO
-  viraram colunas novas — mapeados para as colunas booleanas JÁ existentes `incentivada`/
-  `regime_fiduciario` (mesmo significado econômico, Lei 12.431/regime fiduciário).
-- **`status_requerimento`: decisão deliberada de NUNCA filtrar silenciosamente.** ~1,1% das
-  linhas em escopo (57 de 5.188) têm um status que indica que o requerimento NÃO chegou a virar
-  uma oferta efetivamente concluída (`'Oferta Revogada'` 24, `'Requerimento Expirado'` 17,
-  `'Registro Caducado'` 15, `'Oferta Suspensa'` 1) — mantidas em `operations_primario` (nunca
-  descartadas), mas com o status EXPOSTO nesta coluna nova para quem for construir rotas/
-  frontend (fora do escopo desta sessão) poder filtrar se quiser. A maioria é `'Oferta
-  Encerrada'` (4.877) ou `'Registro Concedido'`/`'Aguardando Bookbuilding'` (254, em processo
-  mas já registrados).
-- **Resultado da integração** (rodado ao vivo em produção, 2026-09-16, DEPOIS da primeira
-  rodada documentada acima): **5.188 linhas novas** inseridas em `operations_primario` (0
-  rejeitadas), total da tabela sobe de 12.232 para **17.420**. Cobertura 2023–2026 sobe de 7
-  para **5.193 linhas** (7 do arquivo principal + 5.186 deste novo, 2 linhas do novo arquivo
-  ficaram fora da janela por `data_referencia` cair fora dela). Por `instrumento_padronizado`
-  na tabela inteira (as duas fontes somadas) depois da integração: Debênture 7.099, CRI 5.873,
-  Nota Comercial 2.692, CRA 1.607, Letra Financeira 115, **CPR-F 18**, CDCA 15, CCB 1.
-  **Enriquecimento de emissor rodado até o fim nesta sessão** (não deixado para depois): **792
-  CNPJs distintos** pendentes resolvidos via `enrich_cnae.py::enrich_pendentes_via_api`
-  (BrasilAPI, mesmo mecanismo já usado pela FINEP) — **791/792 resolvidos** (1 não encontrado
-  na BrasilAPI, tratado como falha isolada de CNPJ, não interrompe o restante — mesmo
-  comportamento já documentado da função), **1.169 linhas reclassificadas** (pendente →
-  resolvido; mais que 792 porque um mesmo CNPJ emissor aparece em várias operações). Estado
-  final: de 17.420 linhas totais, **1.473 seguem pendentes** — **1.472 delas por não terem
-  `cnpj_emissor` na própria oferta** (dado ausente na fonte, nunca vai resolver, não é bug) e
-  **1 por CNPJ ainda não resolvido** (o único miss da BrasilAPI nesta rodada).
-
-### Pipeline (`src/refresh_primario.py`)
-
-Orquestrador PRÓPRIO e SEPARADO de `refresh.py` (BNDES/FINEP) — fonte, staging e tabela final
-são completamente independentes, só compartilham o cache `cnpj_cnae` (por design, já pensado
-para múltiplas fontes). Sequência: `download_cvm.download_all()` (baixa AMBOS os CSVs, ver
-seção acima) → `parse_cvm.parse_cvm()` (arquivo principal) →
-`parse_cvm_resolucao160.parse_cvm_resolucao160()` (segundo arquivo, rito automático) →
-`unify_primario.build_operations_primario()` (processa as DUAS raw tables, cada uma
-incrementalmente por `raw_table`+`raw_id` própria, inserindo na MESMA `operations_primario`) →
-se sobrar emissor pendente, `enrich_cnae.enrich_pendentes_via_api()` (BrasilAPI, mesma função já
-usada pelo refresh semanal da FINEP, só que alvo = CNPJs de `operations_primario`, de QUALQUER
-uma das duas fontes) → `unify_primario.reclassificar_emissores_pendentes()`. Log em
-`refresh_primario_log` (mesmo formato de `refresh_log`/`refresh_editais_log`;
-`cvm_raw_rows` agora soma as linhas novas das DUAS staging tables). **NÃO roda** o job pesado
-mensal de `enrich_cnae.py::enrich()`/`enrich_empresas()` (bulk RFB, vários GB) — o volume de
-emissores da CVM (milhares, não dezenas de milhares) é resolvido inteiramente pelo caminho leve
-via BrasilAPI, sem precisar do job pesado. Automação: `.github/workflows/refresh-primario.yml`,
-diário (09:00 UTC, 1h depois do refresh de editais — mesmo secret `DATABASE_URL`), com
-`workflow_dispatch` para rodar manualmente.
-
-### Corte de escopo temporal: 2010+ (pedido do usuário, 2026-09-17)
-
-Decisão de produto: o Radar de Crédito Primário passa a focar em emissões a partir de
-**2010-01-01** — dado mais antigo removido de propósito, com backup (nunca descartado, mesmo
-espírito do Supabase mantido como rede de segurança na migração pro Aiven).
-
-- **Backup antes de apagar**: `operations_primario_pre2010_backup` (mesmas colunas de
-  `operations_primario`, criada via `CREATE TABLE ... AS SELECT * FROM operations_primario
-  WHERE data_referencia < '2010-01-01'` antes do `DELETE`) — **2.358 linhas** preservadas
-  intactas, cobrindo 1989-09-01 a 2009-12-29.
-- **`DELETE FROM operations_primario WHERE data_referencia < '2010-01-01'`**: rodado contra
-  produção (Aiven) em 2026-09-17, confirmado via `raw_table`+`raw_id` que TODA linha removida
-  já estava coberta pelo backup antes do delete (0 linhas órfãs). Linhas com
-  `data_referencia IS NULL` **nunca são removidas** por este corte (hoje, 2026-09-17, esse
-  caso não ocorre na base real — 0 linhas — mas o filtro preserva o caso de qualquer forma:
-  sem data resolvida, não há como confirmar que a linha é de fato anterior a 2010, então
-  destruí-la seria apagar dado real sem justificativa).
-- **Corte tornado PERMANENTE no pipeline** (`src/unify_primario.py::_filtrar_corte_temporal`,
-  `DATA_CORTE_MINIMA = "2010-01-01"`) — aplicado dentro de `_build_primario_ops`/
-  `_build_primario_ops_r160`, logo depois de `data_referencia` já calculada e ANTES do
-  insert. **Sem isso, o próximo refresh reintroduziria as mesmas 2.358 linhas**: as staging
-  tables (`cvm_oferta_distribuicao_raw`/`cvm_oferta_resolucao_160_raw`) continuam com o
-  histórico completo (nunca truncadas), e o mecanismo incremental por `raw_id` trata qualquer
-  linha ausente de `operations_primario` como "ainda não processada", reinserindo-a na
-  próxima rodada — **isso realmente aconteceu uma vez** durante esta mudança (a primeira
-  tentativa de `DELETE` foi desfeita por um refresh que rodou antes do filtro permanente
-  estar pronto/commitado) e foi corrigido repetindo o `DELETE` só depois do filtro já estar
-  em vigor. **Confirmado ao vivo**: rodar `build_operations_primario()` de novo depois do
-  filtro entrar em vigor reporta `0 linhas novas` (nenhuma reintrodução).
-- Total de `operations_primario` após o corte: **15.076** (era 17.434 — a contagem sobe e
-  desce um pouco ao longo do dia com o refresh diário automático, não é um erro de conta).
-
-### Pesquisa de fontes adicionais + melhoria de extração de taxa (2026-09-17)
-
-Pedido do usuário: pesquisar outras fontes ABERTAS/GRATUITAS que cubram o mesmo universo
-(debêntures/CRI/CRA/notas comerciais/letras financeiras/CDCA/CCB) e, complementarmente,
-melhorar a qualidade de extração das 2 fontes CVM já integradas.
-
-**Pesquisa de fontes novas — conclusão: nenhuma fonte aberta genuinamente melhor foi
-encontrada, esforço redirecionado pra qualidade da extração (ver abaixo).** Três candidatos
-investigados ao vivo (WebFetch/download real, não só a descrição da página):
-- **CVM — "Distribuições de Débentures - Planilha Individualizada"**
-  (`dados.cvm.gov.br/dataset/distrpubl`, arquivo `.ods` baixado e inspecionado com
-  `pandas`+`odfpy`): é uma série histórica ESTÁTICA/LEGADA, com a própria planilha
-  declarando `Data da Atualização do último Período: 02/01/2023` — **não é atualizada desde
-  2023-01**, cobre só debêntures sob rito ICVM 400/03 (nem CRI/CRA/CDCA/CCB/notas
-  comerciais, nem o rito automático da Resolução 160 que hoje domina o volume recente) e o
-  único campo de estrutura é "Garantia" (texto livre, sem carência nem taxa numérica
-  separada de "Juros" — mesma limitação que os 2 CSVs já integrados). Conclusão: **pior**
-  que o que já temos em cobertura, atualidade E granularidade — descartado.
-- **ANBIMA Data** (`data.anbima.com.br`/`developers.anbima.com.br`): API de preços/taxas
-  indicativas de MERCADO SECUNDÁRIO (marcação a mercado diária de CRI/CRA/debêntures já
-  emitidos) — dado de natureza DIFERENTE do que este radar cobre (ofertas PRIMÁRIAS, o
-  evento de emissão em si, não a negociação depois de emitido); também não cobre CDCA/CCB/
-  notas comerciais. Mesmo se fosse integrada um dia, seria uma tabela/conceito NOVO
-  ("cotação secundária"), não um substituto/complemento direto de `operations_primario` —
-  fora do escopo deste pedido (melhorar a mesma extração já existente).
-- **B3 — Hub de Dados Públicos** (`b3.com.br/pt_br/dados/hub-de-dados-publicos/`): mesmo
-  problema do ANBIMA Data — "fechamento diário por emissor"/"histórico de negócios" é
-  MERCADO SECUNDÁRIO (preço de negociação do papel já emitido), não dado de oferta
-  primária. Também não cobre CDCA/CCB.
-- **Conclusão prática**: a CVM (`oferta_distribuicao.csv` + `oferta_resolucao_160.csv`, já
-  integrados) continua sendo a única fonte aberta, gratuita e verificável de OFERTAS
-  PRIMÁRIAS deste universo de instrumentos — nenhuma integração nova feita. Esforço
-  redirecionado pra extrair MAIS informação útil das 2 fontes já existentes (abaixo).
-
-**Melhoria real de extração: `taxa_valor`/`taxa_tipo` — fallback "spread implícito"
-(`src/unify_primario.py::_extrair_taxa`, `_RE_TAXA_BARE`/`_RE_JUROS_AMBIGUO`)**. Investigado
-relendo o CSV principal linha a linha (não só o dicionário de dados): das 12.239 linhas em
-escopo, **1.012 tinham `juros` preenchido mas `taxa_valor` ficava `NULL`** mesmo antes deste
-fix — o padrão mais comum de longe era `juros` ser só um número seco (`"12% A.A."`, `"6%"`,
-`"13,5% A.A. - MENSAL"`, 265+54+34+... ocorrências) **enquanto `atualizacao_monetaria` já
-tinha um índice real preenchido** (IGPM 330, IPCA 135, TR 71, ANBID 56, IGP-M 50, TJLP 18,
-variação cambial/dólar etc. — confirmado amostrando as combinações reais). **Achado-chave**:
-a CVM grava índice e taxa em DOIS CAMPOS SEPARADOS desde 1989 — quando o campo de índice
-tem conteúdo real e `juros` é só um número seco sem operador `+`/`-` nem menção a índice
-nenhum dentro do próprio texto, a convenção do mercado de renda fixa brasileiro (e a própria
-separação dos dois campos oficiais) é ADITIVA (índice + juros), exatamente a mesma lógica
-que `'taxa_fixa'` já usava pra número seco quando o índice está VAZIO — só que aqui o índice
-existe. Implementado como um NOVO fallback (`taxa_tipo='spread'`), rodando só depois de todos
-os padrões anteriores falharem, e só quando `indexador_padronizado != "Prefixado"` (senão
-duplicaria a lógica de `'taxa_fixa'`, que já cobre exatamente esse caso quando não há
-índice). **Exclusão deliberada de ambiguidade**: `juros` contendo `" OU "` (ex: `"12% A.A.
-OU LIBOR + 3,5%"`, `"11,2% ou 9,4% aa, antes ou após 01/12/2003"` — duas taxas alternativas
-no mesmo campo) fica de fora de propósito — escolher uma das duas seria inventar qual se
-aplica. **BUG REAL corrigido pelo coordenador antes do merge (2026-09-17)**: a guarda de
-`"OU"` implementada nesta sessão só protegia o fallback NOVO acima — os 3 padrões de
-`'spread'` já EXISTENTES antes desta sessão (`_RE_SPREAD_SINAL_ANTES`/`_RE_SPREAD_ACRESCIDA`/
-`_RE_SPREAD_SINAL_DEPOIS`) rodavam ANTES da guarda e extraíam o número de qualquer jeito
-quando havia um sinal `+`/`-` explícito, mesmo com `"OU"` no meio do texto (reproduzido ao
-vivo: `_extrair_taxa("12% A.A. OU LIBOR + 3,5%", "Outro")` devolvia `(3.5, 'spread')` em vez
-de `(None, None)`). Corrigido movendo a guarda pra antes de TODOS os padrões (não só o
-último). **Confirmado que isso não afetou nenhuma linha real**: 0 linhas em produção têm
-`taxa_valor` extraído E `"OU"` no texto de `juros` (checado direto contra o banco) — o gap
-era real mas latente, sem impacto nos dados já gravados; ficava como risco pro próximo
-refresh diário trazer um caso assim. **Nunca inventa nada**: o número sempre vem literalmente
-do texto de `juros`, nunca calculado/estimado — mesma regra de ouro de sempre.
-
-**Cobertura medida (antes → depois, mesmas 12.239 linhas em escopo do CSV de 2026-09-17)**:
-**515 (~4,2%) → 1.373 (~11,2%)** — quase o triplo, `taxa_tipo` novo contribuindo 1.146
-`'spread'` (a maioria do ganho), 144 `'percentual_indexador'` e 83 `'taxa_fixa'` já
-existentes antes (números totais depois do fix, não só o delta). **Backfill rodado contra
-produção** (`unify_primario.backfill_taxa_e_prazo()`, já existia — reaproveitado, nenhuma
-função nova precisou ser escrita pra isso): sobre as 15.076 linhas já em `operations_primario`
-(pós-corte 2010+), `taxa_valor` preenchido subiu de **87 para 239** (86 `'spread'` implícito
-+ 14 `'percentual_indexador'` + 9 `'taxa_fixa'` já existentes, dos 239 totais — o ganho
-relativo é menor que no CSV completo porque o padrão "número seco + índice legado tipo
-IGPM/TR/BTN" era mais comum em ofertas ANTIGAS, que o corte 2010+ já removeu; instrumentos
-modernos tendem a escrever a taxa já com operador `+`/`-` explícito, capturado pelos padrões
-`'spread'` anteriores). `prazo_dias` não mudou (534 preenchidos, mesmo valor de antes) — o
-backfill recalcula os dois juntos mas a lógica de prazo não foi alterada nesta sessão (ver
-abaixo).
-
-**`prazo_dias`/`prazo_meses`: nenhuma melhoria segura encontrada.** Investigado se havia
-mais campos de data utilizáveis nos 2 dicionários de dados oficiais (`meta_oferta_
-distribuicao.txt`/`meta_oferta_resolucao_160.txt`, os 2 relidos por completo nesta sessão,
-71+41 campos conferidos um a um) — confirmado que `Data_Emissao`/`Data_Vencimento`
-continuam sendo os ÚNICOS dois campos de data que descrevem o TÍTULO em si (todas as outras
-datas — `Data_Registro_Oferta`/`Data_Protocolo`/`Data_Requerimento` etc. — descrevem o
-PROCESSO administrativo, não o vencimento do papel; usar essas pra aproximar prazo seria
-inventar). A baixa cobertura (15,2% no CSV completo, ver seção acima) é uma limitação REAL
-da fonte (ofertas antigas/dispensadas raramente têm essas 2 datas digitalizadas), não um gap
-de código a corrigir — nenhuma mudança feita aqui, documentado pra não reabrir essa
-investigação à toa numa sessão futura.
-
-**Nenhuma mudança em `.github/workflows/refresh-primario.yml`**: o fix de `_extrair_taxa` é
-puramente computacional (nova regra de regex sobre colunas já lidas), sem migração de
-schema nem novo download/fonte — o próximo refresh diário automático já aplica a regra nova
-em qualquer linha nova via `_build_primario_ops` normalmente, sem precisar de nenhum passo
-extra no workflow. O backfill acima (`backfill_taxa_e_prazo()`) foi rodado manualmente UMA
-VEZ contra produção para corrigir o histórico já gravado — mesmo padrão de
-`backfill_busca_primario()` (ver seção "API e Busca" abaixo), não é algo que o workflow
-precisa repetir automaticamente.
-
-### Escopo desta sessão (fundação — outras sessões constroem em cima)
-
-Esta sessão entregou SÓ a camada de dados (staging + `operations_primario` + schema +
-enriquecimento de emissor), deliberadamente sem tocar em: rotas `/api/primario/*` (FastAPI),
-motor de busca, frontend/abas novas. O schema de `operations_primario` já está estável o
-suficiente para outra sessão começar a codificar contra ele em paralelo, mesmo antes do
-enriquecimento de 100% dos emissores pendentes terminar (o campo `setor_emissor`/`uf_emissor`
-IS NULL é um estado normal e esperado, não um bug a esperar sumir). **Motor de busca + rotas
-construídos na sessão seguinte, mesmo dia — ver seção própria abaixo, "Radar de Crédito
-Primário — API e Busca".** **A integração do segundo arquivo CVM
-(`oferta_resolucao_160.csv`, ver seção própria acima) foi feita por OUTRA sessão seguinte,
-também no mesmo dia** — mesmo espírito: só camada de dados, nenhuma rota/busca/frontend
-tocada, schema aditivo (6 colunas novas, todas nullable, nenhuma coluna existente removida ou
-renomeada) para não quebrar quem já estivesse codificando contra o schema anterior em paralelo.
-
-## Radar de Crédito Primário — API e Busca
-
-Segunda camada do Radar de Crédito Primário (ver seção acima para a camada de dados),
-construída em sessão separada no mesmo dia (2026-09-16): motor de busca sem IA + rotas
-FastAPI que consomem `operations_primario`. **Deliberadamente sem frontend/toggle de
-mercado/Transações Salvas generalizada** — isso é trabalho de uma sessão futura, que
-consome as rotas documentadas aqui.
-
-### Motor de busca (`src/search_fts_primario.py`)
-
-Espelha `src/search_fts.py` (BNDES/FINEP), **mais simples**: não há dicionário de
-sinônimos/taxonomia curado para o emissor da CVM (`setor_emissor`/`subsetor_emissor` usam a
-MESMA taxonomia BNDES via `cnpj_cnae`, mas ninguém curou sinônimos especificos pra isso),
-então não existe uma coluna equivalente a `search_taxonomia_termos`. 4 tiers (contra 6 do
-motor BNDES/FINEP):
-1. CNPJ do emissor (só se o fragmento numérico tiver ≥8 dígitos, mesma guarda contra
-   falso-positivo já documentada para o motor BNDES/FINEP) ou prefixo de `nome_emissor`.
-2. `instrumento_padronizado` OU `setor_emissor`/`subsetor_emissor` (keyword, `LIKE`).
-3. Full-text (`search_vector @@ websearch_to_tsquery`, query PRÓPRIA com `@@` direto no
-   `WHERE` — NUNCA dentro de um CASE avaliado sobre a tabela inteira, mesma disciplina de
-   performance já documentada em detalhe na seção "Bugs reais já corrigidos" pro motor
-   BNDES/FINEP, reaplicada aqui desde o primeiro commit). Confirmado com `EXPLAIN ANALYZE`
-   ao vivo: `Bitmap Index Scan` no índice GIN (`idx_operations_primario_search_vector`),
-   ~0.4ms de execução.
-4. Trigrama (`pg_trgm`) em `nome_emissor`/`segmento_emissor`, só roda se as tiers 1-3
-   voltarem com poucos resultados (mesmo `MINIMO_ANTES_DE_TRIGRAMA` do motor BNDES/FINEP).
-
-`instrumento`/`uf`/`setor`/`valor_minimo` são FILTROS ESTRUTURADOS (`AND`, nunca dentro do
-ranking de texto) — mesmo princípio já documentado pro filtro de UF do motor BNDES/FINEP.
-`setor` combina `setor_emissor` (4 categorias amplas) e `subsetor_emissor` (mais granular)
-num `OR` simples, mesmo padrão do filtro `setor` do motor BNDES/FINEP (o front não precisa
-saber se o valor escolhido é setor ou subsetor).
-
-**`search_document`/`search_vector` NÃO existiam no schema quando esta sessão começou** —
-a tarefa original assumia que sim ("confirme antes de assumir"); confirmado ao vivo
-(`information_schema.columns`) que as 12.232 linhas gravadas na sessão anterior não tinham
-essas duas colunas. Adicionadas via `MIGRACOES_COLUNAS` (`src/db.py`) + populadas por
-`src/unify_primario.py::backfill_busca_primario()` (rodado uma única vez contra produção,
-em lotes de 2.000 — mesmo motivo de cautela com o Aiven free tier já documentado em
-`scripts/backfill_search_taxonomia.py` — confirmado: 12.232/12.232 linhas populadas).
-Índices criados: `idx_operations_primario_search_vector` (GIN sobre `search_vector`),
-`idx_operations_primario_nome_trgm`/`idx_operations_primario_segmento_trgm` (GIN trigram,
-para a tier 4).
-
-**Diferença deliberada de design frente a `unify.py`** (documentada no próprio código,
-`src/unify_primario.py::_atualizar_busca_primario`): no motor BNDES/FINEP,
-`search_document`/`search_taxonomia_termos` são calculados ANTES do insert (o BNDES já
-chega com setor NATIVO, que não muda depois). Aqui, TODO emissor depende do enriquecimento
-via CNPJ — uma linha recém-inserida quase sempre começa com `setor_emissor`/`uf_emissor`
-NULL (pendente) e só ganha valor depois, via `_reclassificar_emissores_pendentes`.
-`_atualizar_busca_primario(conn, ids)` roda depois de QUALQUER mudança (insert OU
-reclassificação), sempre lendo o estado ATUAL da linha direto do banco, em vez de manter
-duas cópias da lógica de `search_document` (uma pré-insert, outra pós-reclassificação) —
-`build_operations_primario()` já chama essa função nos dois pontos.
-
-### Rotas FastAPI (`webapp/primario/`, prefixo `/api/primario/*`)
-
-Pacote ISOLADO, mesmo espírito de `webapp/admin/` — nunca misturado com `webapp/main.py`
-(grande, do outro mercado). A ÚNICA mudança em `webapp/main.py` é o
-`app.include_router(primario_router, prefix="/api/primario")`, logo após o include do
-router do painel de admin.
-
-**Autenticação**: nenhuma dependency própria — o prefixo começa com `/api/`, então o gate
-global (`_verificar_acesso`, `dependencies=[Depends(_verificar_acesso)]` do `FastAPI(...)`
-em `webapp/main.py`) já cobre qualquer rota sob `/api/primario/*` automaticamente (mesmo
-mecanismo que já protege `/api/operacoes`, `/api/busca` etc.). **Confirmado ao vivo**: uma
-chamada sem sessão válida contra `/api/primario/filtros` devolve 401; com uma sessão válida
-(mintada via `webapp.admin.auth.criar_sessao`, mesmo caminho documentado na seção "Coisas a
-saber antes de mexer" para testar localmente), devolve os dados normalmente.
-
-- **`GET /api/primario/filtros`**: valores distintos para popular selects (instrumentos,
-  setores, subsetores, ufs, indexadores, anos, `data_min`/`data_max` sobre
-  `data_referencia`) — espelha `GET /api/filtros`. `setores`/`subsetores` só têm os valores
-  já resolvidos via CNPJ (um emissor pendente não aparece nesses selects até resolver, mas
-  continua contável em `kpis`/`operacoes`).
-- **`GET /api/primario/kpis`**: agregados básicos (`n_operacoes`, `valor_total_total`,
-  `cheque_medio`) + `por_instrumento` (troca `por_agencia` do motor BNDES/FINEP — não existe
-  conceito de agência neste mercado, ver pedido original: "não invente um conceito
-  equivalente"). Mesmos filtros estruturados de `operacoes`/`busca` (`instrumento`, `uf`,
-  `setor`, `data_inicio`/`data_fim` sobre `data_referencia`).
-- **`GET /api/primario/operacoes`**: listagem paginada/ordenável (`order_by`:
-  `valor`|`data`|`prazo`|`taxa`|`nome`), espelha `GET /api/operacoes`.
-- **`GET /api/primario/busca`**: motor de busca acima.
-- **`GET /api/primario/operacoes/{id}`**: detalhe — mais simples que
-  `GET /api/operacoes/{op_id}` (sem `montar_detalhe_amigavel`, específico do schema
-  `bndes_raw`/`finep_*_raw`, ver `webapp/detalhe.py`): devolve as colunas de
-  `operations_primario` (já é dado tratado/legível, com `search_document`/`search_vector`
-  removidos da resposta — campos internos do motor de busca, nunca úteis num detalhe) +
-  campos crus adicionais de `cvm_oferta_distribuicao_raw` que não viraram coluna própria
-  (`nome_ofertante`, `modalidade_registro` etc., em `raw_extra`) + identificação da empresa
-  via `cnpj_cnae` quando o CNPJ já foi resolvido (mesmo padrão do detalhe BNDES/FINEP, campo
-  `empresa`).
-
-### Testado ao vivo (2026-09-16, contra produção/Aiven)
-
-Bateria real (servidor local `uvicorn`, sessão de teste mintada e apagada depois, ver
-"Coisas a saber antes de mexer"): nome de emissor real (`VALE S.A.` → 20 resultados, tier 1,
-inclui o nome histórico `CIA VALE DO RIO DOCE` sob o MESMO CNPJ — confirma que a base
-realmente registra o rebrand da empresa ao longo do tempo, não é bug), CNPJ completo
-(`33592510000154` → `eh_busca_cnpj: true`, mesmos resultados), filtro estruturado de
-instrumento (`instrumento=Debênture` + busca por nome → só debêntures daquele emissor),
-filtro de UF (`uf=SP` combinado com `instrumento` em `kpis`/`operacoes`), filtro de setor
-(`setor=COMERCIO/SERVICOS` em `busca` → só resultados daquele setor), CNPJ curto/fragmento
-numérico sem 8 dígitos (`abc123nada` → 0 resultados na tier 1, confirma que a guarda contra
-falso-positivo já documentada pro motor BNDES/FINEP também vale aqui). `EXPLAIN ANALYZE` na
-tier 3 confirmou `Bitmap Index Scan` no GIN (não seq scan).
-
-### Rotas completadas (reconciliação com o frontend, 2026-09-16)
-
-Duas sessões paralelas construíram no mesmo dia (1) só as 5 rotas acima e (2) todo o
-frontend do modo Primário (ver seção "Radar de Crédito Primário — Frontend" abaixo) —
-mas o frontend foi escrito assumindo um contrato de API bem mais completo (tabela
-"Todos os endpoints `/api/primario/*` assumidos por este frontend" na seção Frontend),
-já que as duas sessões nunca se viram. Esta sessão (reconciliação) implementou as 14
-rotas que faltavam em `webapp/primario/routes.py` (nenhum arquivo novo, nenhuma mudança
-em `src/search_fts_primario.py` foi necessária — todas as agregações novas cabem em SQL
-direto, mesmo padrão das 5 rotas que já existiam):
-
-- **`GET /api/primario/status`** -- espelha `/api/status`. `setores_pendentes` é a
-  contagem de `setor_emissor IS NULL` (não existe `setor_origem` em
-  `operations_primario`, ver seção Pipeline CVM). `busca_ia_ativa` é sempre `False`
-  (não existe motor de embeddings pro Primário, só FTS).
-- **`GET /api/primario/serie_temporal`** -- espelha `/api/serie_temporal`, trocando o
-  agrupamento por `agencia` (não existe neste mercado) por `instrumento_padronizado` --
-  `instrumento` continua funcionando também como filtro (mesma dualidade do original
-  com `agencia`).
-- **`GET /api/primario/instrumentos`** -- mesmo formato de `/api/setores`, agrupando por
-  `instrumento_padronizado`.
-- **`GET /api/primario/uf`** -- espelha `/api/uf`, via `uf_emissor`. Decisão tomada após
-  reler a seção "Frontend: roteamento e abas" (o tratamento especial de `IE` do motor
-  BNDES/FINEP): `IE` é uma categoria REAL da planilha do BNDES (abrangência nacional,
-  ex: Petrobras) sem equivalente na CVM -- **não replicado aqui**, seria inventar um
-  conceito que a fonte não tem. `uf_emissor` só tem 2 estados (UF real resolvida via
-  CNPJ, ou NULL) -- o NULL usa o mesmo sentinela `NI` do motor original.
-- **`GET /api/primario/porte`** -- espelha `/api/porte`, via `porte_emissor`. Decisão:
-  **não usa `PORTE_NORMALIZADO_SQL`** (`src/search_fts.py`) -- aquele CASE existe pra
-  unificar o vocabulário heterogêneo de `porte_cliente` (BNDES nativo + FINEP via RFB,
-  misturando `MICRO`/`PEQUENA`/`GRANDE`/`MÉDIA` com `"Micro Empresa"`/`"Empresa de
-  Pequeno Porte"`). `porte_emissor` vem de UMA SÓ fonte (sempre `cnpj_cnae` via
-  BrasilAPI/RFB, ver `enrich_cnae.py::PORTE_EMPRESA_RFB`) com vocabulário próprio já
-  homogêneo (`Micro Empresa`/`Empresa de Pequeno Porte`/`Demais`/`Não informado pela
-  fonte`/NULL) -- aplicar aquele CASE aqui só devolveria `'Não informado'` pra tudo, e
-  não existe distinção `GRANDE`/`MÉDIA` nesse layout simplificado da RFB pra inventar.
-- **`GET /api/primario/operacoes/{id}/grupo-economico`** -- espelha o equivalente em
-  `webapp/main.py`, agrupando por raiz de `cnpj_emissor` (8 primeiros dígitos). Chaves
-  de resposta (`emissor`/`instrumento`/`valor_emissao`) escolhidas pra bater direto no
-  fallback que `common.js::openOperacaoDetalhe` já tinha escrito
-  (`o.cliente ?? o.emissor`, `o.agencia ?? o.instrumento`,
-  `o.valor_contratado ?? o.valor_emissao`) -- não precisou mudar o frontend.
-- **`GET /api/primario/tendencias/{setores,subsetores,segmentos}`** -- espelham os
-  equivalentes em `webapp/main.py` (`_ranking_variacao`/`_periodo_anterior`,
-  reimplementados como `_ranking_variacao_primario`/`_periodo_anterior_primario` sobre
-  `operations_primario`/`data_referencia`), mesmo formato exato (`comparavel`,
-  `periodo_atual`/`periodo_anterior`, `variacao_pp`, `participacao_atual_pct`/
-  `participacao_anterior_pct`). **Achado de design**: o parâmetro `setor` aqui precisa
-  ser um filtro EXATO (é o PAI de quem se quer o detalhe -- ex: ranking de subsetores
-  DENTRO de um setor escolhido), nunca o `OR` combinado (setor OU subsetor) que
-  `_filters_clause_primario` usa pro dropdown compartilhado -- criada uma segunda
-  função de filtro, `_filters_clause_primario_exato`, só pra este caso (mesma
-  distinção que já existe em `webapp/main.py` entre `_filters_clause`/tendências e o
-  `OR` combinado exclusivo do motor de busca).
-- **`GET /api/primario/tendencias/indexadores`** -- endpoint NOVO (não espelha nome
-  nenhum do motor original), agrupa por `indexador_padronizado`, mesmo shape simples
-  `[{indexador, valor_total}]` de `/api/tendencias/produtos` (sem ranking de variação --
-  só composição atual, conforme `tendencias.js::loadProdutos`).
-- **`GET /api/primario/subsetores`/`segmentos`** (nível superior, distintos de
-  `/tendencias/*`) -- espelham `/api/subsetores`/`/api/segmentos`, usando a MESMA
-  `_filters_clause_primario_exato` (o `setor`/`subsetor` vem do mesmo select próprio
-  de drill-down do `tendencias.js`, nunca do dropdown compartilhado).
-- **`GET /api/primario/graficos/taxas`** e **`/graficos/prazos`** -- os dois endpoints
-  NOVOS pedidos como foco central desta reconciliação. Implementados com
-  `percentile_cont(0.5) WITHIN GROUP` (mediana real, não média) sobre `taxa_valor`/
-  `prazo_meses`, `cobertura_pct` sempre calculada a partir de contagens reais (nunca
-  chumbada). `/graficos/taxas` exclui `taxa_tipo='percentual_indexador'` do
-  agrupamento (multiplicativo, unidade diferente de `spread`/`taxa_fixa` -- ver seção
-  Pipeline CVM).
-
-**Bug real encontrado e corrigido nesta sessão, fora da lista original de 14 (mas no
-mesmo arquivo, `webapp/primario/routes.py`)**: `GET /api/primario/kpis` já existia (de
-uma sessão anterior) mas devolvia `valor_total_total` (chave que nenhum consumidor lê)
-em vez de `valor_contratado_total` (a chave que `consolidado.js::loadKPIs` de fato lê,
-com fallback pra `valor_total`), e nunca calculava `n_emissores_distintos` -- os cards
-"Volume total emitido" e "Emissores distintos" apareciam vazios (`-`) na tela,
-confirmado ao vivo pelo Browser pane ANTES da correção. Corrigido adicionando
-`COUNT(DISTINCT cnpj_emissor)` e renomeando/duplicando a chave de valor total pro nome
-que o contrato documentado (tabela da seção Frontend) e o frontend já esperavam.
-
-**Nota do coordenador ao reconciliar esta sessão com outra em paralelo**: esta sessão
-notou (corretamente, no momento em que rodou) que `GET /api/primario/instrumentos`/
-`/filtros` devolvem `"CPR-F"` e flagou isso como possível bug de classificação, porque
-seu worktree tinha sido criado ANTES de uma sessão irmã (rodando ao mesmo tempo, ver
-"Segunda fonte CVM" mais acima) corrigir a exclusão indevida de CPR-F e confirmar as 18
-linhas reais (Klabin, Suzano, Duratex, Adami, Eldorado Brasil Celulose, Agropecuária
-Maggi etc., vindas do segundo arquivo `oferta_resolucao_160.csv`). Não é um bug: CPR-F
-é um instrumento real da base, já documentado em detalhe na seção "Segunda fonte CVM"
-acima — nenhuma ação adicional necessária aqui.
-
-**Testado ao vivo nesta sessão (2026-09-16, contra produção/Aiven)**: as 14 rotas novas
-+ o fix de `kpis` foram testadas por 2 caminhos: (1) via `curl`/`urllib` direto, com uma
-conta de teste temporária criada e apagada depois (mesmo procedimento documentado em
-"Coisas a saber antes de mexer") -- todas devolveram `200` com dados reais, incluindo
-os parâmetros exatos que o frontend manda (`data_inicio`/`data_fim`/`granularidade`,
-filtros combinados `uf`+`instrumento`, `setor` exato pra tendências/subsetores/
-segmentos, erro `422` esperado quando `setor` obrigatório falta em
-`/tendencias/subsetores`); (2) **end-to-end pelo Browser pane**, logado de verdade
-(`fetch('/api/login', ...)`, mesmo caminho documentado em "Coisas a saber antes de
-mexer"), servindo `webapp/static/` via `uvicorn` local contra o MESMO banco de
-produção: cliquei no toggle de mercado (`#brand-toggle`), confirmei visualmente que o
-Consolidado do modo Primário carrega KPIs/gráficos reais (incluindo os 2 dashboards
-novos "Taxas por indexador" -- amostra 371/17.420, 2,1% -- e "Prazos por instrumento" --
-1.859/17.420, 10,7%), e abri a aba Tendências & Insights confirmando que a exceção JS
-relatada pelo coordenador (`Cannot read properties of undefined (reading 'filter')` em
-`tendencias.js`, por causa de `/api/primario/tendencias/setores` 404) **não ocorre
-mais** -- a aba renderiza corretamente (`Setores do emissor em alta/queda`, `Detalhe
-por subsetor/segmento`), confirmado tanto visualmente (screenshot) quanto via
-`read_network_requests` (todas as chamadas `/api/primario/tendencias/*` retornando
-`200`). Conta de teste e sessão apagadas ao final (ver "Coisas a saber antes de mexer").
-**Não testado**: comportamento de favoritar/histórico de busca no modo Primário (já
-documentado como limitação conhecida na seção Frontend, não faz parte desta
-reconciliação) e o formato exato que o frontend de fato RENDERIZA nos gráficos de
-Chart.js pixel a pixel (só confirmado que os elementos aparecem com dado real, sem
-exceção JS -- não uma inspeção visual detalhada de cada gráfico).
-
-## Radar de Crédito Primário — Frontend
-
-Construído em 2026-09-16, em cima do schema de `operations_primario` (ver seção "Radar de
-Crédito Primário — Pipeline CVM" acima) — **100% frontend** (`webapp/static/*`), sem tocar em
-`webapp/primario/`, `webapp/main.py`, `src/parse_cvm.py`, `src/unify_primario.py` nem
-`src/db.py` (trabalho de outras duas sessões em paralelo: uma terminando a integração do 2º
-lote de dados 2023-2026, outra construindo `/api/primario/*` + motor de busca). **Consequência
-direta**: TUDO que este frontend espera do backend abaixo é uma **suposição de contrato**,
-não uma integração testada contra rotas reais — nenhuma delas existia em `webapp/main.py` no
-momento em que este frontend foi escrito (confirmado via `grep primario webapp/main.py` →
-vazio). Todo consumo desses endpoints no frontend confere `Array.isArray`/tipo antes de
-desenhar qualquer gráfico e trata 404/formato inesperado como "sem dado ainda" (nunca uma
-exceção JS) — ver `_MERCADOS`/comentário no topo de `webapp/static/js/common.js`.
-
-### Mecânica de troca de mercado
-
-Um único SPA/roteador (nunca duas páginas) — `_mercadoAtivo` (`"incentivado"` | `"primario"`)
-em `common.js` é a fonte da verdade; tudo deriva dela:
-
-- **Gatilho**: clique em `#brand-toggle` (a `.brand` da topbar, ver `index.html`) chama
-  `alternarMercado()` — alterna `_mercadoAtivo`, sempre pousa no Consolidado do mercado de
-  destino (nunca tenta preservar a aba atual se ela não existir lá, ex: saindo de Editais) e
-  cria uma entrada de **histórico nova** (`pushState` via `_ativarView(..., true)`), então
-  "Voltar" no navegador volta pro mercado anterior — testado ao vivo (ver seção "Testado ao
-  vivo" abaixo).
-- **URL**: prefixo `/primario/...` pros 4 slugs visíveis nesse mercado (`/primario`,
-  `/primario/consolidado`, `/primario/tendencias`, `/primario/busca`,
-  `/primario/transacoes-salvas`) — `_mercadoESlugDaURL()` lê o mercado do 1º segmento do path
-  e devolve o slug restante pro `_SLUG_PARA_VIEW` já existente (que não precisou mudar).
-  `_ativarView()` monta o path final prefixando com `_MERCADOS[mercado].prefixoUrl`.
-  `vercel.json` ganhou os rewrites equivalentes (`/primario`, `/primario/consolidado`,
-  `/primario/tendencias`, `/primario/busca`, `/primario/transacoes-salvas` → `/index.html`) —
-  **não** ajustei `webapp/main.py::spa_pagina` (catch-all do modo local `uvicorn`) por estar
-  fora do escopo desta sessão; sem esse ajuste, digitar/recarregar uma URL `/primario/...`
-  direto no `uvicorn` local provavelmente cai no catch-all genérico e funciona igual (serve
-  `index.html`), mas **não testei isso ao vivo** (ver seção de testes) — se a rota local não
-  cobrir esse caso, é um ajuste de uma linha em `spa_pagina`, a cargo de quem tocar
-  `webapp/main.py`.
-- **Abas visíveis** (`_MERCADOS[mercado].abasVisiveis`, também controla quais `.tab-btn`
-  ficam com `display:none`): Incentivado = todas as 6; Primário = Consolidado, Tendências &
-  Insights, Busca, Transações Salvas (Editais e Linhas Incentivadas escondidas — sem
-  equivalente conceitual, decisão já dada pelo usuário). `_ativarView()` também **redireciona**
-  pro Consolidado do mercado ativo se a view pedida não existir lá (testado: sair de Editais
-  incentivado e trocar pro Primário cai em `/primario/consolidado`, nunca deixa uma aba
-  escondida "ativa" por baixo dos panos).
-- **Identidade textual/visual** (`_aplicarIdentidadeMercado()` em `common.js`, chamada antes
-  de qualquer `_ativarView`/gráfico): `document.title`, todo elemento `.brand-texto` (topbar,
-  `#loading-overlay .loading-brand`, título do `#login-card` — **não** o do `#registrar-card**,
-  que continua sempre "Criar conta"), classe `body.mercado-primario` (liga os tokens de cor —
-  ver "Identidade visual" abaixo) e visibilidade de qualquer elemento `[data-mercado-only]`.
-- **Filtro compartilhado (`#f-agencia`)**: mesmo `<select>` físico reaproveitado com
-  significado diferente — "Agência" (BNDES/FINEP) no Incentivado, "Instrumento" (Debênture/
-  CRI/CRA/Nota Comercial/Letra Financeira/CDCA/CCB) no Primário — `currentFilters()`,
-  `_sincronizarFiltrosCompartilhadosNaURL()` e a leitura de filtro-por-URL em
-  `_initFiltersAndTabsImpl` mandam/leem a chave `instrumento` em vez de `agencia` quando
-  `_mercadoAtivo==="primario"`. O rótulo (`#f-agencia-label`) troca junto. As opções do select
-  são repopuladas do zero (`_repopularFiltrosCompartilhados()`, chamada por
-  `alternarMercado()`) a partir de `filtros.instrumentos` em vez de `filtros.agencias` —
-  **suposição de contrato**: `GET /api/primario/filtros` devolve o MESMO formato de
-  `GET /api/filtros` (`agencias`→`instrumentos`, `setores`, `ufs`, `portes`, `anos`,
-  `data_min`/`data_max`), com `setor`/`uf`/datas com o MESMO significado (setor do emissor via
-  `cnpj_cnae`, `uf_emissor`).
-- **Filtro próprio da Busca** (`#bu-f-agencia`/`#bu-f-produto`, grupo separado): mesmos 2
-  selects reaproveitados — "Entidade"→"Instrumento", "Tipo de linha"→"Indexador" (CDI/IPCA+/
-  SELIC/Prefixado/Outro) — chaves de URL/API viram `instrumento`/`indexador` em vez de
-  `agencia`/`produto` (ver `busca.js::_filtrosBusca`/`_sincronizarFiltrosBuscaNaURL`/
-  `_aplicarFiltrosBuscaDaURL`). `_popularFiltrosBusca()` foi tornada segura de chamar de novo
-  (`_limparOpcoesBuscaFiltro`, remove tudo além da 1ª `<option>` antes de repopular) — chamada
-  de novo por `alternarMercado()`.
-- **Cache de filtro por grupo de aba** (`_ultimaQueryPorGrupo`, já existia pra não vazar filtro
-  entre Consolidado/Tendências vs. Busca/Editais/Linhas): passou a ser **também** escopado por
-  mercado (`_chaveCacheGrupo(view)` = `"{mercado}:{grupo}"`) — sem isso, voltar pro Incentivado
-  depois de mexer em filtros no Primário restauraria uma query com `instrumento=Debênture`
-  como se fosse `agencia=Debênture` (bug real que eu mesmo peguei revisando antes de testar).
-
-### Identidade visual (accent color)
-
-Nenhuma duplicação de CSS — 3 variáveis novas (`--accent-900`, `--accent`, `--accent-light`
-em `style.css`) por padrão **iguais** a `--navy-900`/`--navy`/`--steel-2` (Incentivado fica
-visualmente idêntico a antes); `body.mercado-primario` redefine as 3 pra um verde-petróleo
-(`#0E2E27`/`#16463C`/`#1F6656`, mesma luminosidade aproximada da rampa navy, só o matiz muda de
-azul pra verde — mantém o MESMO contraste com texto branco). Só as regras que já usavam
-`--navy`/`--navy-900`/`--steel-2` pra elementos "de marca" foram trocadas pras variáveis
-`--accent*` (`#loading-overlay`, `#login-overlay`, `.topbar`, `.tabs-wrap::before/::after`,
-`.tab-btn.active`, `.kpi-card .value`, `.card-header`) — tipografia/espaçamento/o resto da
-paleta (`--border`, `--bg`, `--card-bg` etc) são 100% compartilhados, nunca duplicados.
-Testado ao vivo (ver abaixo): `getComputedStyle(topbar).backgroundColor` bate com o hex novo
-assim que `body.mercado-primario` é aplicado.
-
-### Labels/nomenclatura própria (Consolidado/Tendências)
-
-Decisões de produto tomadas nesta sessão (não copiado 1:1 do Incentivado):
-
-| Card | Incentivado | Primário | Motivo |
-|---|---|---|---|
-| Série temporal (Consolidado) | "Evolução temporal — BNDES x FINEP", agrupado por `agencia` | "Evolução temporal — por instrumento", agrupado por `instrumento` | Não há "agências" no mercado de capitais; instrumento é a dimensão mais informativa |
-| Ranking (Consolidado) | "Ranking de setores" (`setor_bndes`) | "Ranking por instrumento" (`instrumento_padronizado`) | Pedido explícito do usuário como exemplo; instrumento (Debênture/CRI/CRA/...) é a dimensão mais distintiva de renda fixa |
-| Mapa (Consolidado) | "Por UF" (`uf`) | "Por UF do emissor" (`uf_emissor`) | Mesmo conceito, mantido (mesma decisão que o usuário deixou em aberto: "ou mantendo o de UF se uf_emissor fizer sentido igual") |
-| Doughnut (Consolidado) | "Por porte do cliente" | "Por porte do emissor" | Mesmo vocabulário de porte (`cnpj_cnae`), só troca de quem é classificado |
-| "Destinação de recursos" (Tendências) | produto/instrumento BNDES/FINEP | "Distribuição por indexador" (CDI/IPCA+/SELIC/Prefixado/Outro) | Evita redundância com o ranking por instrumento do Consolidado — mostra a composição por indexador em vez de repetir instrumento |
-| "Setores em alta/queda" (Tendências) | `setor_bndes` | Mesmo card, rótulo "Setores do emissor em alta/queda" (`setor_emissor`) | Setor do EMISSOR (não do "tomador de financiamento") — mesma taxonomia via `cnpj_cnae`, só a entidade classificada muda |
-| Detalhe por subsetor/segmento (Tendências) | mantido | mantido, sem mudança de rótulo | `setor_emissor`/`subsetor_emissor`/`segmento_emissor` espelham a MESMA hierarquia de 3 níveis — reaproveitado sem duplicar lógica, só via `apiMercado()` |
-| KPI "Volume desembolsado/pago" | mantido | substituído por "Emissores distintos" | Não existe desembolso parcelado numa oferta pública (capta de uma vez) — "emissores distintos" é mais informativo |
-| Tabela "Operações do período" | Cliente/Agência | Emissor/Instrumento | Colunas renomeadas via `id` (`#tabela-maiores-th-cliente`/`#tabela-maiores-th-agencia`) |
-| Modal de detalhe/drill-down (`common.js`) | Cliente/Agência/Setor/Valor contratado | Emissor/Instrumento/Setor do emissor/Valor da oferta | Modal compartilhado — rótulos trocam por `_mercadoAtivo`, campos com fallback (ver contrato abaixo) |
-
-### Dashboards novos (taxa/prazo) — o pedido central desta tarefa
-
-Dois cards novos, **só no modo Primário** (`data-mercado-only="primario"`, substituem
-implicitamente o espaço que seria ocupado por mais conteúdo do Consolidado, mantendo mapa de
-UF e porte — decisão: UF/porte continuam fazendo sentido igual, então NÃO foram removidos):
-
-- **"Taxas por indexador"** (`#chart-taxas`): bar chart de `taxa_mediana` por `indexador`, só
-  com `taxa_tipo` **'spread'/'taxa_fixa'** (mesma unidade — pontos percentuais a.a., aditivos)
-  — `taxa_tipo='percentual_indexador'` (ex: "108% do CDI", multiplicativo) é **deliberadamente
-  excluído do gráfico** (misturar as duas unidades no mesmo eixo seria enganoso) e só contado
-  em texto no aviso (`#chart-taxas-aviso`). Aviso de amostra parcial (`n_com_taxa`/`n_total`/
-  `cobertura_pct`, ~4,2% medido no pipeline — ver seção CVM) é construído **a partir do que a
-  API devolver**, nunca um número fixo chumbado no frontend, pra continuar certo conforme a
-  base crescer/for reenriquecida.
-- **"Prazos por instrumento"** (`#chart-prazos`): bar chart horizontal de
-  `prazo_mediano_meses` por `instrumento`. Mesmo padrão de aviso de amostra parcial
-  (`n_com_prazo`/`n_total`, ~15,2% medido no pipeline).
-- As duas funções (`loadTaxas`/`loadPrazos` em `consolidado.js`) saem cedo (e destroem
-  qualquer `Chart` antigo) quando `_mercadoAtivo!=="primario"` — seguro chamar
-  incondicionalmente em `refreshConsolidado()`.
-- **Suposição de contrato (NÃO testado contra backend real)**:
-  - `GET /api/primario/graficos/taxas?<filtros>` → `{ n_total, n_com_taxa, cobertura_pct,
-    linhas: [{ indexador, taxa_tipo, n, taxa_mediana }] }`
-  - `GET /api/primario/graficos/prazos?<filtros>` → `{ n_total, n_com_prazo, cobertura_pct,
-    linhas: [{ instrumento, n, prazo_mediano_meses }] }`
-  - Filtros passados são os mesmos de `currentFilters()` (`instrumento`, `setor`, `uf`,
-    `data_inicio`/`data_fim`).
-
-### Limitação conhecida: favoritar não funciona no modo Primário
-
-`usuario_operacoes_salvas.operation_id` é FK pra `operations(id)` (schema do crédito de
-fomento) — favoritar uma operação de `operations_primario` não tem como funcionar sem estender
-esse schema, **fora do escopo desta sessão** (não mexe em `src/db.py`). Em vez de deixar o
-botão quebrar silenciosamente contra o id errado, o botão do modal (`common.js::
-_configurarBotaoFavoritar`) e a estrelinha mini da Busca (`busca.js::renderListaResultados`)
-ficam **escondidos** quando `_mercadoAtivo==="primario"`. Se um dia isso for resolvido, é
-trabalho novo (estender `usuario_operacoes_salvas` pra aceitar as duas tabelas, ex: coluna
-`mercado`/`tabela_origem` + índice único composto), não uma consequência automática desta
-mudança.
-
-### Todos os endpoints `/api/primario/*` assumidos por este frontend
-
-Nenhum destes existia em `webapp/main.py` no momento em que este frontend foi escrito — lista
-completa pra quem for reconciliar com a sessão que constrói as rotas de verdade:
-
-| Endpoint assumido | Espelha | Formato assumido |
-|---|---|---|
-| `GET /api/primario/status` | `/api/status` | `{ n_operacoes, hospedado, busca_ia_ativa, ... }` |
-| `GET /api/primario/filtros` | `/api/filtros` | `{ instrumentos, indexadores, setores, subsetores, ufs, portes, anos, data_min, data_max }` (troca `agencias`→`instrumentos`, ganha `indexadores`) |
-| `GET /api/primario/kpis` | `/api/kpis` | `{ n_operacoes, valor_contratado_total, n_emissores_distintos, cheque_medio, por_instrumento: [{instrumento, valor_total}] }` |
-| `GET /api/primario/serie_temporal` | `/api/serie_temporal` | linhas `{ ano, periodo, instrumento, valor_total }` (troca `agencia`→`instrumento`) |
-| `GET /api/primario/instrumentos` | `/api/setores` (endpoint NOVO, não um espelho de nome) | `[{ instrumento, valor_total, n_operacoes }]` |
-| `GET /api/primario/uf` | `/api/uf` | `[{ uf, valor_total, n_operacoes }]` (via `uf_emissor`) |
-| `GET /api/primario/porte` | `/api/porte` | `[{ porte, valor_total }]` (via `porte_emissor`) |
-| `GET /api/primario/operacoes` e `/operacoes/{id}` e `/operacoes/{id}/grupo-economico` | idem | mesmo formato — modal/tabela usam fallback (`cliente??emissor`, `agencia??instrumento`, `setor_bndes??setor_emissor`, `data_contratacao??data_referencia`, `valor_contratado??valor_emissao??valor_oferta`) |
-| `GET /api/primario/tendencias/setores`, `/subsetores`, `/segmentos` | idem | mesmo formato (`setor`/`subsetor`/`segmento` = do emissor) |
-| `GET /api/primario/tendencias/indexadores` | `/api/tendencias/produtos` (NOVO nome) | `[{ indexador, valor_total }]` |
-| `GET /api/primario/subsetores`, `/segmentos` | idem | mesmo formato |
-| `GET /api/primario/busca` | `/api/busca` | mesmo formato, campos de resultado com o mesmo fallback do modal acima |
-| `GET /api/primario/graficos/taxas` | endpoint NOVO | ver seção "Dashboards novos" acima |
-| `GET /api/primario/graficos/prazos` | endpoint NOVO | ver seção "Dashboards novos" acima |
-
-### Testado ao vivo vs. suposto
-
-**Testado ao vivo** (servindo `webapp/static/` isolado, sem backend real — ver limitação
-abaixo): clique no brand alterna `_mercadoAtivo`/título/textos/classe do body/cor de destaque
-(`getComputedStyle` confirmado); URL ganha/perde prefixo `/primario/` corretamente ao trocar
-de mercado E ao trocar de aba dentro do mesmo mercado; abas Editais/Linhas somem no Primário
-(`display:none` confirmado) e reaparecem no Incentivado; sair de uma aba só-Incentivado
-(Editais) e trocar pro Primário redireciona pro Consolidado (nunca deixa view inválida
-"ativa"); **histórico do navegador funciona atravessando a fronteira de mercado** (testado com
-`history.back()` duas vezes: `/primario/consolidado` → toggle → `/consolidado` →
-back → volta pro Primário em `/primario/busca` → back → `/primario/consolidado`, com
-título/`_mercadoAtivo` corretos em cada passo); os cards de Taxas/Prazos aparecem só no
-Primário e mostram o estado "sem dado" corretamente quando o endpoint não existe (404 vira
-card vazio, nunca exceção JS); nenhum erro de console além dos 404/401 esperados (sem backend
-real disponível pra testar, ver abaixo).
-
-**NÃO testado** (backend `/api/primario/*` não existe nesta branch — ver aviso no topo do
-arquivo e desta seção): formato real de resposta de qualquer endpoint da tabela acima; se
-`webapp/main.py::spa_pagina` (modo `uvicorn` local) serve corretamente uma URL `/primario/...`
-digitada direto/recarregada (só os rewrites do `vercel.json`, usados em produção/Vercel, foram
-adicionados nesta sessão); comportamento de favoritar/histórico de busca quando logado (exige
-sessão real contra o Aiven de produção, fora do escopo de um teste rápido de mecânica de
-frontend — ver CLAUDE.md, seção "Coisas a saber antes de mexer", sobre como logar de verdade
-se precisar testar isso depois).
-
-## Radar de Crédito Primário — Redesenho Consolidado/Tendências (2026-09-17)
-
-Sessão pedida explicitamente pelo usuário para **repensar de verdade** os cards de
-Consolidado/Tendências no modo Primário — até aqui (ver seções anteriores) eles eram, em boa
-parte, um reaproveitamento/relabel direto dos cards do crédito incentivado (BNDES/FINEP), nunca
-desenhados a partir do zero pro contexto de emissão de dívida em mercado de capitais. Escopo
-desta sessão: só `webapp/static/*` e `webapp/primario/routes.py` — **`src/*` e
-`webapp/main.py` não foram tocados** (uma sessão paralela mexe no pipeline de dados ao mesmo
-tempo; todo número de cobertura abaixo foi medido AO VIVO contra produção nesta data, mas pode
-mudar com o próximo refresh diário — nada aqui assume uma contagem fixa no código, os avisos de
-amostra parcial são sempre calculados a partir da resposta real da API).
-
-**Cobertura medida ao vivo (2026-09-17, `operations_primario`, já com o corte 2010+ em vigor)**:
-total 15.076 linhas, `data_referencia` 2010-01-15 a 2026-12-03. `incentivada`: 1.444 Sim / 9.203
-Não / 4.429 Não informado. `regime_fiduciario`: 2.906 Sim / 38 Não / 12.132 Não informado.
-`setor_emissor`/`porte_emissor` NULL só em 19 linhas (99,87% resolvido). `uf_emissor` NULL em
-5.483 linhas (36,4% — ver nota sobre `cnpj_cnae` legado abaixo). `taxa_valor` não-nulo em 239
-linhas (1,6%). `prazo_meses` não-nulo em 534 linhas (3,5%). `indexador_padronizado` não-nulo em
-254 linhas (1,7%, concentradas quase todas em 2010-2022 — só 2 linhas de 2023 em diante, ZERO
-em 2024-2026). `agente_fiduciario` não-nulo em 5.200 linhas (34,5%), `custodiante` em 2.453
-(16,3%) — ambos só vêm de `cvm_oferta_resolucao_160_raw` (2022+). `porte_emissor`: 15.054 de
-15.076 (99,85%!) são `'Demais'`, só 3 são `'Empresa de Pequeno Porte'`, nenhuma `'Micro
-Empresa'`. **Achado real que já muda a análise de cobertura antiga do CLAUDE.md**: os números
-de cobertura de taxa/prazo documentados na sessão anterior (~4,2%/~15,2%) caíram bastante
-(~1,6%/~3,5%) depois do corte 2010+ e da integração do 2º arquivo CVM (resolução 160, que NUNCA
-tem taxa/prazo/indexador) — o denominador cresceu bem mais que o numerador. Isso não invalida
-os cards (ver decisão abaixo), só significa que o texto de aviso de amostra parcial (sempre
-calculado ao vivo, nunca chumbado) hoje mostra um percentual menor do que quando foi escrito.
-
-### Auditoria card a card — Consolidado
-
-| Card | Decisão | Motivo |
-|---|---|---|
-| KPI row (nº operações, volume, emissores distintos, ticket médio) | **(a) mantém** | Já bem adaptado (KPI "emissores distintos" e "volume emitido" fazem sentido genuíno pro mercado de capitais, sem inventar "desembolso parcelado" que não existe numa oferta pública). |
-| Série temporal por instrumento (stacked bar) | **(a) mantém** | `instrumento_padronizado` tem cobertura de 100% e boa distribuição temporal 2010-2026 — mostra a evolução real do mix de instrumentos, o pedido nº 2 da tarefa ("composição por instrumento ao longo do tempo") já estava bem servido aqui. |
-| **"Ranking por instrumento" (bar chart)** | **(c) REMOVIDO** | Redundante DENTRO do próprio Consolidado: a mesma informação (volume por instrumento) já aparece na série temporal empilhada logo acima E no texto `por_instrumento` do KPI de volume total — um terceiro gráfico mostrando exatamente a mesma soma, sem dimensão nova (tempo ou drill-down), não agregava nada. Era também o card mais "cru" — um relabel 1:1 do "Ranking de setores" do Incentivado, nunca repensado. |
-| **NOVO: "Estrutura da oferta"** (2 donuts: Incentivada Lei 12.431 + Regime fiduciário) | Substitui o card acima | Pedido explícito da tarefa: `incentivada` nunca tinha aparecido em NENHUM card, apesar de ser o cross-link temático mais óbvio com o resto do site ("Radar de Crédito INCENTIVADO"). Cobertura real (1.444 Sim/9.203 Não/4.429 Não informado — nenhum dos 3 baldes é desprezível) confirma que vale a pena mostrar. `regime_fiduciario` entra no mesmo card por ser a mesma categoria de "atributo estrutural binário da oferta", mesmo fetch (`/estrutura_mercado`), sem custo adicional de rede. |
-| Por UF do emissor (mapa) | **(a) mantém** | Geografia do emissor é uma pergunta real de mercado de capitais. `uf_emissor` tem 36,4% de NULL — mais alto que `setor_emissor` (0,1%) pelo MESMO CNPJ, porque `cnpj_cnae` tem entradas antigas (herdadas do enriquecimento BNDES/FINEP, antes de `uf`/`municipio` existirem naquela tabela — ver seção Pipeline CVM) sem esses 2 campos preenchidos; o mecanismo `IE`/`NI` do mapa já trata esse caso com uma legenda textual honesta, sem esconder o volume. |
-| Por porte do emissor (donut) | **(c) REMOVIDO** | **Achado real medido ao vivo**: 15.054 de 15.076 linhas (99,85%!) caem no MESMO balde `'Demais'` — só 3 linhas são `'Empresa de Pequeno Porte'`, nenhuma `'Micro Empresa'`. Faz sentido (empresas que emitem dívida em mercado de capitais público são, por definição, de grande porte — diferente do crédito de fomento, que atinge micro/pequenas), mas isso torna o donut um círculo de uma cor só, sem NENHUM poder discriminante. Exatamente o tipo de card que a tarefa pediu pra remover ("não está sendo usado direito"). |
-| **NOVO: "Por tipo de lastro"** (donut Pulverizado/Concentrado/Não informado) | Substitui o card acima | Dimensão real de risco de estruturas securitizadas (CRI/CRA) que nunca tinha aparecido em nenhum card — 1.970 Concentrado / 489 Pulverizado / 12.617 Não informado (83,7%, só linhas do 2º arquivo CVM têm esse campo). Mesmo fetch de `/estrutura_mercado` (nenhum round-trip novo). |
-| **"Taxas por indexador"** / **"Prazos por instrumento"** (já existiam) | **(a) mantém, cobertura reavaliada** | Cobertura caiu pra ~1,6%/~3,5% (ver nota acima) — mesmo assim, mantidos: o aviso de amostra parcial já é honesto e calculado ao vivo (nunca escondido), e o dado que existe continua sendo real/verificável. Cortar um card só porque a cobertura caiu, sem que ele tenha ficado ENGANOSO, seria descartar sinal real. |
-
-### Auditoria card a card — Tendências & Insights
-
-| Card | Decisão | Motivo |
-|---|---|---|
-| Setores do emissor em alta/queda | **(a) mantém** | Cobertura excelente (99,87% resolvido) e o ranking de variação é um sinal real de tendência de mercado. |
-| Detalhe por subsetor / Detalhe por segmento (CNAE) | **(a) mantém** | Mesma taxonomia/cobertura de setor, reaproveitada sem duplicar lógica — já testado ao vivo em sessão anterior. |
-| "Distribuição por indexador" (`loadProdutos`) | **(b) REFORMULADO** | **Achado real**: a resposta de `/tendencias/indexadores` tem uma linha `"Não informado"` que sozinha somava ~98,3% do total (indexador só vem do arquivo CVM principal, que praticamente para de contribuir a partir de 2023 — ver nota abaixo) — deixar essa fatia no gráfico tornava o card ilegível (uma barra gigante + traços quase invisíveis pros valores reais). Reformulado pra excluir "Não informado" do desenho e mostrar a cobertura real como aviso explícito (`#chart-produtos-aviso`), mesmo padrão de `#chart-taxas-aviso`/`#chart-prazos-aviso`. O endpoint em si (`/api/primario/tendencias/indexadores`) NÃO mudou — a reformulação é 100% frontend (`tendencias.js::loadProdutos`). |
-| Operações do período (tabela) | **(a) mantém** | Útil como está, colunas já corretamente renomeadas (Emissor/Instrumento) numa sessão anterior. |
-| **NOVO: "Evolução da participação Lei 12.431"** (stacked bar Sim/Não/Não informado por trimestre) | Novo card | Complementa o donut "Estrutura da oferta" (composição atual) com a dimensão de TEMPO. |
-| **NOVO: "Principais agentes fiduciários e custodiantes"** (ranking com toggle) | Novo card | "Quem estrutura as ofertas" — dimensão de mercado de capitais sem equivalente no crédito de fomento. Cobertura parcial (34,5%/16,3%) mas concentrada e honesta (só 2022+, aviso explica o porquê). |
-
-**Por que NÃO virou um card "Evolução do mix por indexador ao longo do tempo"** (a ideia
-original desta sessão, descartada DEPOIS de medir os dados reais, antes de publicar): uma
-primeira versão tentou uma série temporal por `indexador_padronizado` — mas
-`indexador_padronizado` só vem do arquivo CVM principal (`cvm_oferta_distribuicao_raw`), que
-**praticamente para de contribuir linhas a partir de 2023** (ver seção "Segunda fonte CVM"
-acima); medido ao vivo, `indexador_padronizado` tem exatamente **0 linhas não-nulas em 2024,
-2025 e 2026** (a atividade recente é quase toda via `cvm_oferta_resolucao_160_raw`, que NUNCA
-tem esse campo). Um gráfico de evolução por indexador cairia a zero justo nos anos mais
-recentes — pareceria (de forma enganosa) que "o mercado indexado sumiu em 2023", quando na
-verdade é só um artefato de qual arquivo CVM cobre qual período, não um sinal de mercado real.
-Isso violaria a regra de ouro do projeto (nunca mostrar um gráfico que sugira algo que o dado
-não sustenta) — trocado por `incentivada` (populada pelos DOIS arquivos CVM, cobertura real
-contínua 2010-2026, confirmado ao vivo por ano) como a série temporal nova de Tendências.
-
-**Achado de qualidade de dado, observado mas NÃO corrigido (fora do escopo — é dado
-`agente_fiduciario`/`custodiante`, texto livre da CVM, não teria como normalizar sem tocar
-`src/*`)**: o ranking de "Principais agentes fiduciários e custodiantes" mostra o MESMO agente
-real (ex: "Pentágono S.A. Distribuidora de Títulos e Valores Mobiliários") em várias variantes
-de capitalização/pontuação (`PENTÁGONO S.A. ...` maiúsculo, `Pentágono S.A. ...` mixed case, com
-e sem ponto final) como linhas SEPARADAS do ranking — o texto vem cru da CVM
-(`cvm_oferta_resolucao_160_raw`), sem normalização. Isso dilui a posição de cada agente no
-ranking (nenhum bug de agregação do lado deste redesenho — `GROUP BY agente_fiduciario` está
-correto, é a fonte que tem múltiplas grafias). Se um dia isso incomodar, normalizar essas
-strings (upper+trim+remover pontuação) é trabalho de pipeline (`src/unify_primario.py`), fora
-do escopo desta sessão (que não toca `src/*`).
-
-### Rotas novas em `webapp/primario/routes.py`
-
-- **`GET /serie_temporal_incentivada`**: espelha `/serie_temporal`, trocando o agrupamento por
-  `instrumento_padronizado` por `incentivada` (mapeado pra `'Sim'/'Não'/'Não informado'` via
-  `CASE`). Alimenta o card novo de Tendências.
-- **`GET /estrutura_mercado`**: bundla 3 dimensões nunca expostas em nenhum card
-  (`incentivada`, `regime_fiduciario`, `tipo_lastro`) + ranking top-10 de `agente_fiduciario`/
-  `custodiante` com cobertura real, num ÚNICO endpoint (mesmo espírito de `/kpis` bundlar
-  várias agregações pequenas) — alimenta os 2 donuts + o donut de tipo de lastro no Consolidado
-  E o ranking de agentes/custodiantes em Tendências (o frontend faz UM fetch só, reaproveitado
-  nos dois lugares/páginas). `_ranking_texto_com_cobertura()` (helper novo, reaproveitado pelos
-  2 rankings) segue o mesmo padrão de `/graficos/taxas`/`/graficos/prazos`: cobertura sempre
-  calculada a partir de contagens reais, nunca um número fixo.
-
-### BUG REAL de CSS encontrado e corrigido durante o teste ao vivo desta sessão
-
-`webapp/static/css/style.css` tinha, desde a construção original do toggle de mercado, uma
-regra genérica `[data-mercado-only="primario"] { display: none; }` (esconde por padrão,
-evitando flash de conteúdo errado antes do JS decidir) — `_aplicarIdentidadeMercado()` (em
-`common.js`, NÃO tocado nesta sessão) então faz `el.style.display = "" ` (limpa o inline) pro
-caso "deveria mostrar", contando com a cascata CSS pra "revelar" o elemento. Isso só funcionava
-por acidente pros usos ORIGINAIS desse atributo (sempre em `<div class="grid-2" ...>`, que já
-tem sua PRÓPRIA regra `display:grid` definida MAIS ABAIXO no arquivo — em caso de empate de
-especificidade, a regra que vem depois no arquivo vence, então `.grid-2` sempre vencia a regra
-genérica de escondido). Os 2 cards novos desta sessão ("Estrutura da oferta"/"Por tipo de
-lastro") usam `data-mercado-only="primario"` diretamente num `<div class="card">` — e `.card`
-NUNCA teve uma regra de `display` própria (usa o bloco padrão do navegador), então nada vencia
-a regra genérica de escondido, e os cards ficavam **invisíveis mesmo no mercado certo**
-(confirmado ao vivo: `getComputedStyle` retornava `"none"` com o `style.display` inline já
-limpo pelo JS). **Corrigido** adicionando uma regra mais específica, gatilhada pela MESMA
-classe que `_aplicarIdentidadeMercado()` já aplica ao `<body>`
-(`body.mercado-primario .card[data-mercado-only="primario"] { display: block; }`) — não
-precisou mudar `_aplicarIdentidadeMercado()` em si nem afeta o caso `.grid-2` que já
-funcionava. **Lição pra qualquer card novo que use `data-mercado-only` diretamente num `.card`
-(em vez de um `.grid-2` inteiro)**: conferir que existe uma regra CSS específica o suficiente
-pra vencer o escondido-por-padrão quando o JS só limpa o inline — não basta confiar que "";
-funciona igual em todo elemento.
-
-### Testado ao vivo vs. suposto (2026-09-17)
-
-**Testado ao vivo**, contra produção (Aiven), com uma conta de teste temporária criada e
-apagada depois (mesmo procedimento de "Coisas a saber antes de mexer" — login via
-`fetch('/api/login', {credentials:'include'})`, sessão real). **Achado de infraestrutura desta
-sessão**: navegar (`navigate`/`location.href`) no Browser pane deste ambiente **não preserva o
-cookie de sessão** entre a página que fez o login e a página seguinte (confirmado: login via
-`fetch` funciona e uma chamada `/api/status` na MESMA página/mesmo documento (sem navegar)
-retorna 200, mas qualquer navegação subsequente — inclusive `location.href` disparado de dentro
-da própria página — volta a dar 401). Contornado testando tudo dentro do MESMO carregamento de
-página via `javascript_tool` (login + `initFiltersAndTabs()` + `alternarMercado()` +
-`refreshConsolidado()`/`refreshTendencias()` chamados manualmente, sem nenhuma navegação real
-depois do login) — suficiente pra confirmar renderização real com dado de produção, mas **não
-foi testado o fluxo normal de login pela UI (usuário digitando usuário/senha e clicando
-Entrar)**, só o caminho fetch direto; não há razão pra crer que seja diferente (mesmo endpoint,
-mesmo cookie), mas fica registrado como não testado neste formato específico.
-
-Confirmado visualmente e via inspeção de `Chart.js` (`chart.data`) com dado REAL: os 2 donuts
-de "Estrutura da oferta" (Incentivada/Regime fiduciário) e o donut "Por tipo de lastro"
-renderizam com as proporções certas; "Evolução da participação Lei 12.431" mostra as 3 séries
-(Sim/Não/Não informado) por trimestre 2010-2026 com os mesmos totais medidos diretamente no
-banco; "Principais agentes fiduciários e custodiantes" mostra o ranking real (Pentágono/
-Oliveira Trust/Vórtx no topo) e o toggle Agente fiduciório↔Custodiante troca o gráfico sem
-refazer a chamada de rede (conferido: um único fetch de `/estrutura_mercado`, reaproveitado);
-"Distribuição por indexador" reformulado mostra só CDI/IPCA+/Outro/Prefixado (sem "Não
-informado") com o aviso de cobertura real (1,7%). Nenhuma exceção JS nova introduzida por este
-redesenho (os erros 401 que aparecem no console são só do carregamento inicial da página, antes
-do login manual de teste — esperado neste ambiente de teste, não um bug). **Sanity check
-final**: `python -c "import ast; ast.parse(...)"` em `routes.py` e contagem de chaves
-balanceadas nos 2 arquivos JS editados, sem erro.
-
-**NÃO testado**: o fluxo de login real pela UI (só via fetch direto, ver acima); o botão
-"Buscar de novo"/filtros da aba Busca no modo Primário (fora do escopo desta tarefa, que pediu
-só Consolidado/Tendências); comportamento em mobile/telas estreitas dos 2 mini-donuts lado a
-lado no card "Estrutura da oferta" (só testado em desktop).
-
-**Servidor local usado pro teste**: `uvicorn` iniciado manualmente (`python -m uvicorn
-webapp.main:app`) a partir DESTE worktree, numa porta própria (8010) — **achado de
-infraestrutura**: o mecanismo `preview_start` por nome deste ambiente resolveu pro
-`.claude/launch.json` do repo PRINCIPAL (fora do worktree, `name: "radar-webapp"`, porta 8000),
-não pro `.claude/launch.json` criado dentro deste worktree — ficou servindo os arquivos
-ANTIGOS (do repo principal, sem as edições desta sessão) mesmo pedindo o nome do config do
-worktree. Contornado subindo o `uvicorn` manualmente via Bash a partir do worktree, numa porta
-diferente, e abrindo essa URL direto no Browser pane (`navigate`) em vez de `preview_start` por
-nome — se uma sessão futura precisar testar ao vivo dentro de um worktree, valide primeiro que
-o arquivo servido bate com o do disco (`curl localhost:<porta>/js/arquivo.js | grep <trecho
-novo>`) antes de gastar tempo depurando um "bug" que na verdade é cache/arquivo errado.
-**Processo encerrado ao final do teste** (a pedido do coordenador, que reportou esgotamento de
-conexões do Aiven em produção durante esta sessão — `uvicorn` local + `preview_stop` do
-servidor do Browser pane, confirmado via `Get-NetTCPConnection` que nenhuma conexão restante
-apontava pro host do Aiven).
-
 ## Auditoria geral de otimização (2026-09-17, pedido do usuário)
 
 Auditoria só de leitura (backend/performance/segurança, frontend, dead code/duplicação) sobre o
@@ -2257,13 +1051,12 @@ sozinho antes de encerrar).
 **Aplicado (baixo risco, testado ao vivo contra produção antes de mergear)**:
 - **Teto em `limit`/`offset`** nas rotas públicas que aceitavam qualquer valor do cliente sem
   clamp (`GET /api/operacoes`, `/api/editais`, `/api/linhas`, `/api/segmentos`,
-  `/api/enriquecimento/{importacoes,pendentes,correcoes}`, `GET /api/primario/operacoes`,
-  `/api/primario/segmentos`) — mesmo padrão já usado no painel de admin
-  (`limit = max(1, min(limit, N))`). Confirmado ao vivo: `?limit=999999999` agora devolve
-  exatamente o teto (2000 nas rotas de listagem de operações, 500/200 nas menores) em vez de
-  tentar serializar a tabela inteira; `offset` negativo agora clampa pra 0 em vez de devolver
-  um erro do Postgres. Não era um DoS anônimo (todas essas rotas exigem sessão válida), mas
-  era desnecessário.
+  `/api/enriquecimento/{importacoes,pendentes,correcoes}`) — mesmo padrão já usado no painel
+  de admin (`limit = max(1, min(limit, N))`). Confirmado ao vivo: `?limit=999999999` agora
+  devolve exatamente o teto (2000 nas rotas de listagem de operações, 500/200 nas menores) em
+  vez de tentar serializar a tabela inteira; `offset` negativo agora clampa pra 0 em vez de
+  devolver um erro do Postgres. Não era um DoS anônimo (todas essas rotas exigem sessão
+  válida), mas era desnecessário.
 - **`scripts/migrate_sqlite_to_supabase.py` removido** — confirmado por grep que só era
   referenciado em `README.md`/`RESUME.md` (docs desatualizadas), nunca em código, CLAUDE.md ou
   workflow — migração de UM PASSO ANTERIOR (SQLite→Supabase) que já é duplamente obsoleta (o
@@ -2272,17 +1065,17 @@ sozinho antes de encerrar).
   tocado.
 
 **Motor de busca migrado pro pool de conexões (2026-09-17, aplicado depois de teste de carga)**:
-`src/search_fts.py::buscar_texto`/`src/search_fts_primario.py::buscar_texto_primario` chamavam
-`get_connection()` sem `pooled=True` — toda busca (provavelmente a rota mais usada do site) abria
-uma conexão direta ao Aiven em vez de reaproveitar o `ConnectionPool` (que os outros ~26 call
-sites de `webapp/main.py` já usam, com a proteção `check=ConnectionPool.check_connection` contra
-conexão morta pós-`AdminShutdown`). Isso contribuía pro esgotamento das 20 conexões do Aiven free
-tier — **o mesmo incidente aconteceu 3 vezes em 2026-09-17**. **Risco teórico levantado antes de
-mexer**: como as rotas rodam síncronas numa threadpool e o pool tem `max_size=2` POR PROCESSO,
-uma busca lenta (tiers 1-3 fazem seq scan, ~3-8s documentado acima) passaria a competir pelo
-MESMO par de conexões que qualquer outra rota da mesma instância — risco de uma busca lenta
-"segurar" uma das 2 únicas vagas e fazer outras requisições concorrentes (ex: `/api/kpis`) esperar
-na fila, algo que não acontecia com busca usando conexão própria.
+`src/search_fts.py::buscar_texto` chamava `get_connection()` sem `pooled=True` — toda busca
+(provavelmente a rota mais usada do site) abria uma conexão direta ao Aiven em vez de
+reaproveitar o `ConnectionPool` (que os outros ~26 call sites de `webapp/main.py` já usam, com
+a proteção `check=ConnectionPool.check_connection` contra conexão morta pós-`AdminShutdown`).
+Isso contribuía pro esgotamento das 20 conexões do Aiven free tier — **o mesmo incidente
+aconteceu 3 vezes em 2026-09-17**. **Risco teórico levantado antes de mexer**: como as rotas
+rodam síncronas numa threadpool e o pool tem `max_size=2` POR PROCESSO, uma busca lenta (tiers
+1-3 fazem seq scan, ~3-8s documentado acima) passaria a competir pelo MESMO par de conexões que
+qualquer outra rota da mesma instância — risco de uma busca lenta "segurar" uma das 2 únicas
+vagas e fazer outras requisições concorrentes (ex: `/api/kpis`) esperar na fila, algo que não
+acontecia com busca usando conexão própria.
 **Testado ao vivo antes de aplicar** (`uvicorn` local, mesmo processo = mesmo pool de uma
 instância real da Vercel): bateria de 2 buscas + 2 `/api/kpis` concorrentes (`ThreadPoolExecutor`),
 comparando ANTES (busca sem pool) e DEPOIS (busca com `pooled=True`) do patch, rodada 2x cada.
@@ -2293,20 +1086,6 @@ free tier, não fila real introduzida pelo pool). Nenhum sinal de fila severa (s
 chamadas de `/api/kpis` teriam ficado presas atrás das buscas lentas — continuaram na mesma
 faixa de tempo nas duas versões). Conclusão: a troca não piora a eficiência de forma perceptível
 — aplicada.
-- ~~`operations_primario` sem índice em `data_referencia`~~ **CORRIGIDO 2026-09-18** — ver
-  seção "Segunda rodada de otimização" abaixo.
-- **`webapp/primario/routes.py::operacao_detalhe`**: sempre busca o "raw extra" em
-  `cvm_oferta_distribuicao_raw` pelo `raw_id`, mesmo quando a operação veio de
-  `cvm_oferta_resolucao_160_raw` (~30% da tabela) — pode coincidir com um id de uma oferta não
-  relacionada e devolver `raw_extra` errado (nunca 500, nunca vaza dado de outro usuário, é
-  tudo dado público). Baixo risco técnico de corrigir (checar `raw_table` antes), mas é mudança
-  de comportamento visível. **Ainda não corrigido** (fora do escopo da rodada de 2026-09-18,
-  que evitou de propósito qualquer mudança de comportamento visível).
-- ~~`.grid-3`/`.narrativa`/`.progress-track`/`tr.eleg-linha-detalhe:hover` (CSS morto)~~
-  **REMOVIDO 2026-09-18** — ver seção "Segunda rodada de otimização" abaixo (reconfirmado zero
-  uso antes de apagar, incluindo `.narrativa`).
-- ~~`/api/filtros`/`/api/primario/filtros` buscado 2-3x~~ **CORRIGIDO 2026-09-18** — ver seção
-  "Segunda rodada de otimização" abaixo.
 - **`importar_finep_editais` (`src/linhas_incentivadas.py`)**: confirmado sem nenhuma chamada
   real, mas o próprio docstring já diz que é mantida de propósito como referência — não remover
   sem perguntar (é o mesmo tipo de "guardado e flexível" documentado em outros lugares deste
@@ -2323,29 +1102,16 @@ vazamento de `localStorage` (histórico de busca já limitado a 8 itens por usu�
 Pedido explícito: otimizar mais, mas só mudanças que **mantenham a mesma eficiência** (nunca
 regredir) — cada item abaixo foi medido/testado ao vivo antes de aplicar, não só inferido.
 
-- **Índice novo `idx_operations_primario_data_referencia`** (`src/db.py`, aplicado também
-  direto em produção via `CREATE INDEX CONCURRENTLY` — não bloqueia escrita). `data_referencia`
-  é filtrado por praticamente toda rota `/api/primario/*` (`_filters_clause_primario`/
-  `_filters_clause_primario_exato`/`_periodo_anterior_primario`), mas não tinha índice próprio
-  (só `ano`, uma granularidade mais grossa). **Medido ao vivo contra produção** (`EXPLAIN
-  ANALYZE`, filtro de 1 ano): antes, `Seq Scan` (~192ms, 6191 buffers lidos do disco); depois,
-  `Index Scan` usando o índice novo (~95ms, a maior parte já em cache) — ~2x mais rápido,
-  confirmado que o índice É usado pelo planner (não é um índice "morto" nunca escolhido).
-- **Cache de `/api/{primario/}filtros`** (`common.js::_fetchFiltrosCompartilhado`, novo —
-  usado por `_initFiltersAndTabsImpl`/`_repopularFiltrosCompartilhados` em `common.js` e por
-  `_popularFiltrosBusca` em `busca.js`). Achado real medido: o mesmo endpoint era chamado
-  **2x em todo carregamento de página** (os dois `DOMContentLoaded` de common.js/busca.js
-  disparam quase juntos) e **2x em toda troca de mercado** (`alternarMercado()` chama as duas
-  funções em sequência) — sem nenhum ganho de dado mais fresco (a resposta não muda dentro de
-  uma sessão, e trocar de mercado já invalida a chave do cache sozinho). Cacheado pela
-  PROMISE (não só o valor), então as duas chamadas concorrentes da carga inicial dividem o
-  MESMO fetch em voo — uma falha de rede não fica presa em cache (a entrada é removida no
-  catch, a próxima tentativa refaz o fetch). **Testado ao vivo** (contando chamadas reais de
-  `fetch` via um wrapper temporário, contra produção): carga inicial com as duas funções
-  chamadas em paralelo → 1 fetch (antes seriam 2); primeira troca de mercado → 1 fetch (antes
-  2); trocar de volta pro mercado já visitado → **0 fetches** (reaproveita o cache daquela
-  troca anterior) — e os selects populam com os valores corretos de cada mercado nos três
-  casos (conferido pelo texto das `<option>`, ex: `["Todas","BNDES","FINEP"]` no Incentivado).
+- **Cache de `/api/filtros`** (`common.js::_fetchFiltrosCompartilhado`) — usado por
+  `_initFiltersAndTabsImpl` em `common.js` e por `_popularFiltrosBusca` em `busca.js`. Achado
+  real medido: o mesmo endpoint era chamado **2x em todo carregamento de página** (os dois
+  `DOMContentLoaded` de common.js/busca.js disparam quase juntos) — sem nenhum ganho de dado
+  mais fresco (a resposta não muda dentro de uma sessão). Cacheado pela PROMISE (não só o
+  valor), então as duas chamadas concorrentes da carga inicial dividem o MESMO fetch em voo —
+  uma falha de rede não fica presa em cache (a entrada é removida no catch, a próxima
+  tentativa refaz o fetch). **Testado ao vivo** (contando chamadas reais de `fetch` via um
+  wrapper temporário, contra produção): carga inicial com as duas funções chamadas em
+  paralelo → 1 fetch (antes seriam 2).
 - **CSS morto removido** (`style.css`): `.grid-3` (não usado — só `.grid-2` aparece em
   `index.html`, ajustada a media query de 900px que citava os dois), `tr.eleg-linha-detalhe:
   hover`, `.narrativa`/`.narrativa.loading` e `.progress-track` (mantidos `.progress-fill`/
@@ -2355,9 +1121,9 @@ regredir) — cada item abaixo foi medido/testado ao vivo antes de aplicar, não
   cautela) — zero uso, nenhum comportamento visual depende dessas 4 regras.
 - **Testado ao vivo de ponta a ponta** (conta de teste temporária, mesmo procedimento já
   documentado em "Coisas a saber antes de mexer"): login real, Consolidado renderizando com
-  dado real de produção (59.009 operações, R$ 2.659,3 bi) depois das mudanças, nenhum erro de
-  console novo (só os 401 esperados do carregamento antes do login manual, mesmo padrão já
-  documentado). Conta de teste e sessão apagadas ao final.
+  dado real de produção depois das mudanças, nenhum erro de console novo (só os 401 esperados
+  do carregamento antes do login manual, mesmo padrão já documentado). Conta de teste e sessão
+  apagadas ao final.
 - **Incidente à parte durante o teste, sem relação com as mudanças de código**: ao tentar
   limpar a conta de teste, esbarrei de novo no teto de conexões do Aiven
   (`remaining connection slots are reserved for roles with the SUPERUSER attribute`) — mesma
@@ -2373,9 +1139,7 @@ regredir) — cada item abaixo foi medido/testado ao vivo antes de aplicar, não
   do pedido de "manter a mesma eficiência"): cache-control agressivo em JS/CSS estático (os
   arquivos não têm hash no nome — cachear forte sem invalidação correta serviria JS desatualizado
   depois de um deploy, um bug de CORRETUDE, não só de performance); reduzir `max_size` do pool
-  de conexões (sem evidência de ganho, risco de fila sob concorrência real); o bug de
-  `operacao_detalhe`/`raw_table` acima (é uma correção de comportamento visível, não uma
-  otimização pura).
+  de conexões (sem evidência de ganho, risco de fila sob concorrência real).
 
 ## Onde procurar o quê (mapa rápido)
 
@@ -2388,13 +1152,9 @@ regredir) — cada item abaixo foi medido/testado ao vivo antes de aplicar, não
 | Motor de busca (IA, opcional) | `src/search.py`, `src/embeddings.py` |
 | Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` |
-| Radar de Crédito Primário (CVM, pipeline de dados) | `src/download_cvm.py`, `src/parse_cvm.py`, `src/parse_cvm_resolucao160.py` (2ª fonte, rito automático), `src/unify_primario.py`, `src/refresh_primario.py` |
-| Radar de Crédito Primário (API/rotas + motor de busca) | `webapp/primario/routes.py`, `src/search_fts_primario.py` |
-| Radar de Crédito Primário (frontend/toggle de mercado) | `webapp/static/js/common.js` (`_MERCADOS`/`alternarMercado`), `consolidado.js`/`tendencias.js`/`busca.js` (rótulos e chamadas `apiMercado()`) — ver CLAUDE.md, seção "Radar de Crédito Primário — Frontend" |
 | API/rotas | `webapp/main.py` |
 | Frontend (abas, roteamento, filtros) | `webapp/static/js/common.js`, `webapp/static/index.html` |
 | Frontend (cada aba) | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` |
 | Painel de Admin (`/admin`) | `webapp/admin/*`, `webapp/static/admin.html`, `webapp/static/js/admin.js` |
-| Transações Salvas (favoritos/histórico por usuário) | `webapp/salvos.py`, `webapp/static/js/salvos.js` |
 | Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` |
 | Automação | `.github/workflows/*.yml` |

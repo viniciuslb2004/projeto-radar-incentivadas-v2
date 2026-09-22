@@ -14,7 +14,6 @@ from fastapi.responses import FileResponse, Response
 
 from db import get_connection
 from search_fts import PORTE_NORMALIZADO_SQL
-from webapp import salvos
 from webapp.detalhe import montar_detalhe_amigavel
 from webapp.admin.auth import (
     SESSION_COOKIE,
@@ -88,13 +87,6 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 from webapp.admin.routes import router as admin_router  # noqa: E402
 app.include_router(admin_router, prefix="/admin")
 
-# Radar de Credito Primario (/api/primario/*) -- pacote isolado, mesmo espirito do
-# painel de admin acima; prefixo comeca com /api/ entao ja passa pelo gate global
-# _verificar_acesso (dependencies=[Depends(_verificar_acesso)] do FastAPI(...) acima),
-# sem precisar de nenhuma dependency propria -- ver webapp/primario/routes.py.
-from webapp.primario.routes import router as primario_router  # noqa: E402
-app.include_router(primario_router, prefix="/api/primario")
-
 
 def _ip_do_request(request: Request) -> str:
     return request.headers.get("x-forwarded-for", request.client.host if request.client else None)
@@ -116,49 +108,15 @@ def _usuario_logado(request: Request):
 
 
 def _usuario_atual(request: Request):
-    """{'id','username','role'} da sessao atual, ou None -- versao com o ID (ao
-    contrario de _usuario_logado, que so devolve o username) usada pelas rotas de
-    Transacoes Salvas (webapp/salvos.py) pra saber DE QUEM e' cada favorito/busca.
-    Dependency OPCIONAL (nunca levanta 401 sozinha) -- ver _exigir_usuario_logado
-    para a versao que barra a rota se ninguem estiver logado."""
+    """{'id','username','role'} da sessao atual, ou None -- usado pra log de
+    navegacao por aba (ver registrar_navegacao abaixo). Dependency OPCIONAL (nunca
+    levanta 401 sozinha)."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
     conn = get_connection(pooled=True)
     try:
         return validar_sessao_token(conn, token)
-    finally:
-        conn.close()
-
-
-def _exigir_usuario_logado(request: Request):
-    """Mesma coisa que _usuario_atual, mas levanta 401 se ninguem estiver logado --
-    usado pelas rotas de Transacoes Salvas (favoritar operacao, historico de busca
-    por usuario), que nao fazem sentido nenhum sem saber de quem e' o dado. Na
-    pratica, com pelo menos uma conta cadastrada, _verificar_acesso (gate global de
-    /api/*) ja garante isso pra qualquer requisicao que chegue aqui -- esta funcao
-    cobre so o caso raro de banco novo/dev local sem nenhuma conta ainda (onde
-    _verificar_acesso libera acesso anonimo, mas 'salvar uma operacao' nao tem
-    dono nenhum pra ser salva)."""
-    usuario = _usuario_atual(request)
-    if usuario is None:
-        raise HTTPException(status_code=401, detail="E preciso estar logado para usar Transacoes Salvas")
-    return usuario
-
-
-def _registrar_busca_se_logado(request: Request, q: str) -> None:
-    """Grava a busca no historico server-side (ver webapp/salvos.py) SO quando ha
-    alguem logado -- localStorage (busca.js) continua sendo gravado sempre, em
-    paralelo, como fallback pra quando ninguem estiver logado (ver CLAUDE.md). Nunca
-    deixa a busca em si falhar por causa disso (best-effort, so loga)."""
-    usuario = _usuario_atual(request)
-    if usuario is None:
-        return
-    conn = get_connection(pooled=True)
-    try:
-        salvos.registrar_busca_historico(conn, usuario["id"], q)
-    except Exception:
-        logger.exception("falha ao gravar historico de busca do usuario")
     finally:
         conn.close()
 
@@ -818,7 +776,7 @@ def operacoes(
 
 
 @app.get("/api/operacoes/{op_id}")
-def operacao_detalhe(op_id: int, request: Request):
+def operacao_detalhe(op_id: int):
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -829,11 +787,6 @@ def operacao_detalhe(op_id: int, request: Request):
             return {"erro": "operacao nao encontrada"}
         raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj = row
 
-        # Transacoes Salvas (item novo): estado do botao de favoritar no modal de
-        # detalhe -- so calculado quando alguem esta logado (usuario_atual pode ser
-        # None em dev local sem conta nenhuma ainda, ver _usuario_atual).
-        usuario_atual = _usuario_atual(request)
-        salvo = salvos.operacao_esta_salva(conn, usuario_atual["id"], op_id) if usuario_atual else {"salva": False}
         raw_row = cur.execute(f"SELECT * FROM {raw_table} WHERE id = ?", (raw_id,)).fetchone()
         if not raw_row:
             return {"raw_table": raw_table, "secoes": []}
@@ -864,8 +817,7 @@ def operacao_detalhe(op_id: int, request: Request):
 
         return {
             "raw_table": raw_table, "agencia": agencia, "instrumento": instrumento,
-            "setor_bndes": setor_bndes, "secoes": secoes, "salva": salvo["salva"],
-            "nota": salvo.get("nota"),
+            "setor_bndes": setor_bndes, "secoes": secoes,
         }
     finally:
         conn.close()
@@ -897,150 +849,6 @@ def operacao_grupo_economico(op_id: int):
         conn.close()
 
 
-# ============ Transacoes Salvas (favoritos de operacao + historico de busca por
-# usuario, ver webapp/salvos.py e CLAUDE.md) ============
-# Todas as rotas abaixo exigem sessao valida (Depends(_exigir_usuario_logado)) --
-# nao faz sentido "salvar uma operacao" ou "ver meu historico" sem saber de quem e'.
-
-@app.get("/api/salvos")
-def salvos_pagina(usuario: dict = Depends(_exigir_usuario_logado)):
-    """Tudo que a pagina Transacoes Salvas precisa numa chamada so: operacoes
-    favoritadas (com resumo/KPI) + historico de busca do usuario logado."""
-    conn = get_connection(pooled=True)
-    try:
-        return {
-            "operacoes": salvos.listar_operacoes_salvas(conn, usuario["id"]),
-            "resumo": salvos.resumo_operacoes_salvas(conn, usuario["id"]),
-            "historico": salvos.listar_busca_historico(conn, usuario["id"]),
-        }
-    finally:
-        conn.close()
-
-
-@app.get("/api/salvos/operacoes/ids")
-def salvos_ids(usuario: dict = Depends(_usuario_atual)):
-    """So os ids de operacao ja salvos do usuario logado -- usado pela Busca
-    (estrelinha mini em cada card de resultado, ver busca.js) pra saber em LOTE
-    quais dos ate 200 resultados ja estao favoritados, sem uma checagem por
-    operacao. Dependency OPCIONAL (`_usuario_atual`, nao `_exigir_usuario_logado`)
-    de proposito: ninguem logado so devolve lista vazia (nenhuma estrela vem
-    preenchida) em vez de 401 -- a Busca funciona igual pra visitante anonimo, so
-    sem nenhum favorito pra marcar."""
-    if usuario is None:
-        return {"ids": []}
-    conn = get_connection(pooled=True)
-    try:
-        return {"ids": salvos.listar_ids_salvos(conn, usuario["id"])}
-    finally:
-        conn.close()
-
-
-@app.post("/api/salvos/operacoes/{op_id}")
-def salvos_favoritar(op_id: int, body: dict = None, usuario: dict = Depends(_exigir_usuario_logado)):
-    nota = (body or {}).get("nota")
-    conn = get_connection(pooled=True)
-    try:
-        existe = conn.execute("SELECT 1 FROM operations WHERE id = ?", (op_id,)).fetchone()
-        if not existe:
-            raise HTTPException(status_code=404, detail="operacao nao encontrada")
-        salvos.favoritar_operacao(conn, usuario["id"], op_id, nota)
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.delete("/api/salvos/operacoes/{op_id}")
-def salvos_desfavoritar(op_id: int, usuario: dict = Depends(_exigir_usuario_logado)):
-    conn = get_connection(pooled=True)
-    try:
-        salvos.desfavoritar_operacao(conn, usuario["id"], op_id)
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.patch("/api/salvos/operacoes/{op_id}")
-def salvos_atualizar_nota(op_id: int, body: dict, usuario: dict = Depends(_exigir_usuario_logado)):
-    conn = get_connection(pooled=True)
-    try:
-        ok = salvos.atualizar_nota_operacao_salva(conn, usuario["id"], op_id, (body or {}).get("nota"))
-        if not ok:
-            raise HTTPException(status_code=404, detail="operacao nao esta salva")
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.post("/api/salvos/historico/{historico_id}/fixar")
-def salvos_fixar_historico(historico_id: int, body: dict, usuario: dict = Depends(_exigir_usuario_logado)):
-    conn = get_connection(pooled=True)
-    try:
-        ok = salvos.fixar_busca_historico(conn, usuario["id"], historico_id, bool((body or {}).get("fixada")))
-        if not ok:
-            raise HTTPException(status_code=404, detail="item do historico nao encontrado")
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.delete("/api/salvos/historico/{historico_id}")
-def salvos_remover_historico(historico_id: int, usuario: dict = Depends(_exigir_usuario_logado)):
-    conn = get_connection(pooled=True)
-    try:
-        salvos.remover_busca_historico(conn, usuario["id"], historico_id)
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.delete("/api/salvos/historico")
-def salvos_limpar_historico(usuario: dict = Depends(_exigir_usuario_logado)):
-    conn = get_connection(pooled=True)
-    try:
-        salvos.limpar_busca_historico(conn, usuario["id"])
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.post("/api/salvos/exportar")
-def salvos_exportar(usuario: dict = Depends(_exigir_usuario_logado)):
-    """Exporta as operacoes salvas do usuario em .xlsx -- reaproveita o mesmo
-    gerador da Busca (ver webapp/exportar_excel.py), sem duplicar a formatacao."""
-    from webapp.exportar_excel import gerar_xlsx_operacoes_salvas
-
-    conn = get_connection(pooled=True)
-    try:
-        linhas = salvos.listar_operacoes_salvas(conn, usuario["id"])
-    finally:
-        conn.close()
-    conteudo = gerar_xlsx_operacoes_salvas(linhas)
-    return Response(
-        content=conteudo,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="transacoes-salvas.xlsx"'},
-    )
-
-
-@app.post("/api/busca/exportar")
-def busca_exportar(body: dict):
-    """Exporta os resultados da Busca em .xlsx formatado -- recebe as linhas PRONTAS que o
-    front-end ja renderizou (ultimosResultados, ver busca.js), nunca re-roda a busca aqui.
-    Garante que o arquivo bate exatamente com o que a pessoa viu na tela, independente do
-    motor de busca (IA ligado ou nao) ter gerado esses resultados."""
-    from webapp.exportar_excel import gerar_xlsx_busca
-
-    query = (body or {}).get("query") or "resultado"
-    linhas = (body or {}).get("resultados") or []
-    conteudo = gerar_xlsx_busca(query, linhas)
-    slug = "".join(c if c.isalnum() else "-" for c in query).strip("-").lower() or "resultado"
-    return Response(
-        content=conteudo,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="busca-{slug}.xlsx"'},
-    )
-
-
 if not MOTOR_BUSCA_IA:
     # ============ Motor de busca SEM IA (padrao) -- full-text/trigram Postgres, ver
     # src/search_fts.py. Uma chamada so, sem calculo de vetor em lugar nenhum
@@ -1049,11 +857,10 @@ if not MOTOR_BUSCA_IA:
 
     @app.get("/api/busca")
     def busca(
-        request: Request, q: str = Query(..., min_length=3), agencia: str = None,
+        q: str = Query(..., min_length=3), agencia: str = None,
         valor_minimo: float = None, regiao: str = None, produto: str = None, porte: str = None,
         setor: str = None, uf: str = None,
     ):
-        _registrar_busca_se_logado(request, q)
         try:
             return buscar_texto(
                 q, agencia=agencia or None, valor_minimo=valor_minimo, regiao=regiao or None,
@@ -1133,7 +940,7 @@ else:
                 return {"erro": f"enriquecimento indisponivel no momento: {e}"}
 
         @app.post("/api/busca")
-        def busca_com_vetor(body: dict, request: Request):
+        def busca_com_vetor(body: dict):
             """Recebe {q, vetor} com o vetor ja calculado no navegador contra o texto de
             /api/busca/preparar. So faz a matematica (numpy) contra os vetores
             precalculados do corpus -- nunca chama get_model()."""
@@ -1141,7 +948,6 @@ else:
             vetor = (body or {}).get("vetor")
             if not q or not vetor:
                 return {"erro": "parametros 'q' e 'vetor' sao obrigatorios"}
-            _registrar_busca_se_logado(request, q)
             try:
                 return buscar_rapido_com_vetor(q, vetor)
             except Exception as e:
@@ -1630,7 +1436,7 @@ def enriquecimento_corrigir(body: dict, request: Request):
 # resolve isso e o rewrite em vercel.json direto na CDN -- estas rotas aqui so
 # importam pro modo local (`uvicorn webapp.main:app`), onde nao existe CDN
 # reescrevendo nada antes de chegar no FastAPI.
-_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas", "transacoes-salvas", "primario"]
+_SPA_PAGINAS = ["consolidado", "tendencias", "busca", "editais", "linhas-incentivadas"]
 
 
 @app.get("/{pagina}", include_in_schema=False)
@@ -1645,24 +1451,6 @@ async def spa_pagina(pagina: str):
     if pagina in ("admin", "admin.html"):
         return FileResponse(STATIC_DIR / "admin.html")
     if pagina not in _SPA_PAGINAS:
-        raise HTTPException(status_code=404)
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-# Equivalente a spa_pagina() acima, so que pro prefixo /primario/... (Radar de Credito
-# Primario -- ver CLAUDE.md, secao "Radar de Credito Primario -- Frontend"). Rota
-# SEPARADA (nao da pra reaproveitar o path param unico de spa_pagina) porque
-# "/primario/consolidado" tem DOIS segmentos -- /{pagina} so casa um; o "/primario"
-# bare (um segmento so) ja e coberto por spa_pagina() acima (adicionado a
-# _SPA_PAGINAS). Mesma lista de slugs que os rewrites equivalentes em vercel.json
-# (usados em producao/Vercel); so importa no modo local (`uvicorn`), mesmo motivo do
-# comentario acima.
-_SPA_PAGINAS_PRIMARIO = ["consolidado", "tendencias", "busca", "transacoes-salvas"]
-
-
-@app.get("/primario/{pagina}", include_in_schema=False)
-async def spa_pagina_primario(pagina: str):
-    if pagina not in _SPA_PAGINAS_PRIMARIO:
         raise HTTPException(status_code=404)
     return FileResponse(STATIC_DIR / "index.html")
 

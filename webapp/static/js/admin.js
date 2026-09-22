@@ -39,7 +39,6 @@
   const usuarioModalTitulo = document.getElementById("admin-usuario-modal-titulo");
   const usuarioModalResumo = document.getElementById("admin-usuario-modal-resumo");
   const usuarioModalTbody = document.getElementById("admin-usuario-modal-tbody");
-  const usuarioModalBuscasTbody = document.getElementById("admin-usuario-modal-buscas-tbody");
   const usuarioModalFechar = document.getElementById("admin-usuario-modal-fechar");
   let operacaoSelecionada = null;
 
@@ -296,15 +295,13 @@
   const EVENTO_ROTULO = { login: "Login", logout: "Logout", view_aba: "Abriu aba" };
 
   // Drill-down por usuario (pedido do usuario): clicar no nome abre um modal
-  // reunindo 3 fontes -- login/logout, navegacao por aba (ambas em
-  // admin_acessos_log) e historico de busca (usuario_busca_historico).
+  // reunindo login/logout + navegacao por aba (ambas em admin_acessos_log).
   usuariosTbody.addEventListener("click", async function (ev) {
     const link = ev.target.closest(".admin-usuario-link[data-id]");
     if (!link) return;
     usuarioModalTitulo.textContent = "Carregando...";
     usuarioModalResumo.innerHTML = "";
     usuarioModalTbody.innerHTML = '<tr><td colspan="5">Carregando...</td></tr>';
-    usuarioModalBuscasTbody.innerHTML = '<tr><td colspan="3">Carregando...</td></tr>';
     usuarioModal.classList.remove("hidden");
     const resp = await apiFetch(`/usuarios/${link.dataset.id}/acessos`);
     const dado = await resp.json();
@@ -325,19 +322,6 @@
             <td>${e.detalhe || "--"}</td>
             <td>${e.ip || "--"}</td>
             <td>${formatarData(e.criado_em)}</td>
-          </tr>`
-        )
-        .join("");
-    }
-    if (!dado.buscas.length) {
-      usuarioModalBuscasTbody.innerHTML = '<tr><td colspan="3">Nenhuma busca registrada ainda.</td></tr>';
-    } else {
-      usuarioModalBuscasTbody.innerHTML = dado.buscas
-        .map(
-          (b) => `<tr>
-            <td>${b.query}</td>
-            <td>${b.fixada ? "Sim" : "Não"}</td>
-            <td>${formatarData(b.criado_em)}</td>
           </tr>`
         )
         .join("");

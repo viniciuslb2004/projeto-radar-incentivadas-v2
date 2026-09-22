@@ -30,101 +30,27 @@ function _urlCompleta(url) {
   return url;
 }
 
-// ============ Mercado ativo (Incentivado <-> Primario) ============
-// Dois "modos" da mesma SPA/roteamento -- credito incentivado de fomento
-// (BNDES/FINEP, dado original deste projeto) e credito primario de mercado de
-// capitais (CVM -- debentures/CRI/CRA/notas comerciais/letras financeiras
-// etc). Ver CLAUDE.md, secoes "Radar de Credito Primario -- Pipeline CVM" e
-// "Radar de Credito Primario -- Frontend". `_mercadoAtivo` e a fonte da
-// verdade -- URL, filtros compartilhados, labels e qual dado e carregado
-// tudo deriva dela, nunca duas paginas/roteadores separados.
-//
-// IMPORTANTE -- CONTRATO DE API ASSUMIDO, NAO CONFIRMADO AO VIVO: as rotas
-// /api/primario/* usadas neste arquivo e em consolidado.js/tendencias.js/
-// busca.js sao uma SUPOSICAO de que uma sessao em paralelo vai construir um
-// espelho de /api/{status,filtros,kpis,serie_temporal,setores,uf,porte,
-// operacoes,tendencias/*,subsetores,segmentos,busca} sob o prefixo
-// /api/primario/*, com o MESMO formato de resposta (so trocando
-// agencia->instrumento e setor_bndes->setor_emissor como dimensao principal
-// onde fizer sentido) -- ver CLAUDE.md pra lista completa endpoint a
-// endpoint, incluindo os 2 novos (/api/primario/graficos/taxas e /prazos)
-// que NENHUM outro modo tem equivalente. Nada disso foi testado contra um
-// backend de verdade (ele ainda nao existe nesta branch) -- todo consumo
-// abaixo confere `Array.isArray`/campo por campo com fallback antes de
-// desenhar grafico nenhum, pra um 404/formato diferente virar um card vazio
-// com aviso em vez de excecao JS.
-const _MERCADOS = {
-  incentivado: {
-    prefixoUrl: "",
-    prefixoApi: "",
-    titulo: "Radar de Crédito Incentivado",
-    abasVisiveis: ["consolidado", "tendencias", "busca", "editais", "linhas", "salvos"],
-  },
-  primario: {
-    prefixoUrl: "primario",
-    prefixoApi: "/primario",
-    titulo: "Radar de Crédito Primário",
-    abasVisiveis: ["consolidado", "tendencias", "busca", "salvos"],
-  },
-};
-
-// Le o mercado (e o slug de view dentro dele) direto do PATH da URL --
-// "/primario/busca" -> {mercado:"primario", slug:"busca"}; "/busca" ou ""
-// (sem prefixo nenhum) -> {mercado:"incentivado", slug:"busca"|""}. So o
-// PRIMEIRO segmento do path e testado contra "primario": nenhuma view do
-// Incentivado se chama assim, entao nao ha ambiguidade.
-function _mercadoESlugDaURL() {
-  const partes = window.location.pathname.replace(/^\/+|\/+$/g, "").split("/");
-  if (partes[0] === "primario") return { mercado: "primario", slug: partes.slice(1).join("/") };
-  return { mercado: "incentivado", slug: partes.join("/") };
-}
-
-// Estado inicial: deriva do path JA na primeira carga (F5/link direto pra
-// /primario/...) -- essencial pra `_ativarView`/`apiMercado` acertarem o
-// mercado certo ja na primeira chamada, antes de qualquer clique no brand.
-let _mercadoAtivo = _mercadoESlugDaURL().mercado;
-
-// Injeta o prefixo /primario num caminho de API "/api/..." quando o mercado
-// ativo e o Primario -- ex: apiMercado("/api/kpis") -> "/api/primario/kpis".
-// Usado pelos fetch de DADO (kpis/filtros/series/ranking/operacoes/busca);
-// NUNCA nas rotas que sao as MESMAS nos dois mercados (login/logout/me/
-// registrar, salvos/*, eventos/navegacao) -- essas continuam chamando
-// fetchJSON/postJSON direto com o caminho "/api/..." sem passar por aqui.
-function apiMercado(caminho) {
-  const prefixo = _MERCADOS[_mercadoAtivo].prefixoApi;
-  if (prefixo && caminho.startsWith("/api/")) {
-    return "/api" + prefixo + caminho.slice("/api".length);
-  }
-  return caminho;
-}
-
-// /api/{primario/}filtros e pedido tanto pelo filterbar compartilhado
-// (common.js::_initFiltersAndTabsImpl/_repopularFiltrosCompartilhados) quanto
-// pelos selects proprios da Busca (busca.js::_popularFiltrosBusca) -- mesmo
-// endpoint, mesma resposta (so a Busca le alguns campos extras dela, ex:
-// produtos/portes/subsetores). Sem cache, isso batia a rede DUAS VEZES em todo
-// carregamento de pagina (os dois listeners de DOMContentLoaded disparam quase
-// juntos) e DUAS VEZES em toda troca de mercado (alternarMercado chama as duas
-// funcoes em sequencia) -- redundante, sem nenhum ganho de "dado mais fresco"
-// (a mesma pagina nunca muda de mercado sem passar por alternarMercado, que ja
-// invalida isso sozinho via a chave abaixo). Cacheado pela PROMISE (nao so o
-// valor resolvido) pra as duas chamadas concorrentes da carga inicial
-// dividirem o MESMO fetch em voo, nao so evitar um fetch depois que o
-// primeiro ja terminou. Chave = mercado ativo no momento da chamada -- ao
-// trocar de mercado a chave muda sozinha, nunca serve filtro do mercado
-// errado; uma falha de rede NAO fica cacheada (senao um erro passageiro do
-// Aiven travaria os filtros pro resto da sessao), a proxima chamada tenta de
-// novo.
-const _filtrosCompartilhadosCache = {};
+// /api/filtros e pedido tanto pelo filterbar compartilhado
+// (common.js::_initFiltersAndTabsImpl) quanto pelos selects proprios da Busca
+// (busca.js::_popularFiltrosBusca) -- mesmo endpoint, mesma resposta (so a
+// Busca le alguns campos extras dela, ex: produtos/portes/subsetores). Sem
+// cache, isso batia a rede DUAS VEZES em todo carregamento de pagina (os dois
+// listeners de DOMContentLoaded disparam quase juntos) -- redundante, sem
+// nenhum ganho de "dado mais fresco" (a resposta nao muda dentro de uma
+// sessao). Cacheado pela PROMISE (nao so o valor resolvido) pra as duas
+// chamadas concorrentes da carga inicial dividirem o MESMO fetch em voo, nao
+// so evitar um fetch depois que o primeiro ja terminou. Uma falha de rede NAO
+// fica cacheada (senao um erro passageiro do Aiven travaria os filtros pro
+// resto da sessao), a proxima chamada tenta de novo.
+let _filtrosCompartilhadosPromise = null;
 function _fetchFiltrosCompartilhado() {
-  const chave = _mercadoAtivo;
-  if (!_filtrosCompartilhadosCache[chave]) {
-    _filtrosCompartilhadosCache[chave] = fetchJSON(apiMercado("/api/filtros")).catch((e) => {
-      delete _filtrosCompartilhadosCache[chave];
+  if (!_filtrosCompartilhadosPromise) {
+    _filtrosCompartilhadosPromise = fetchJSON("/api/filtros").catch((e) => {
+      _filtrosCompartilhadosPromise = null;
       throw e;
     });
   }
-  return _filtrosCompartilhadosCache[chave];
+  return _filtrosCompartilhadosPromise;
 }
 
 // Sem ISSO por padrao, uma chamada sem timeoutMs explicito nunca resolvia nem
@@ -184,40 +110,6 @@ async function postJSON(url, body, timeoutMs) {
   try {
     const r = await fetch(fullUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      credentials: "include",
-      signal: controller.signal,
-    });
-    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
-    return await r.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// DELETE/PATCH genericos (mesmo padrao/timeout/tratamento de 401 de fetchJSON/
-// postJSON acima) -- usados pelas rotas de Transacoes Salvas (ver salvos.js).
-async function deleteJSON(url, timeoutMs) {
-  const fullUrl = _urlCompleta(url);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
-  try {
-    const r = await fetch(fullUrl, { method: "DELETE", credentials: "include", signal: controller.signal });
-    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
-    return await r.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function patchJSON(url, body, timeoutMs) {
-  const fullUrl = _urlCompleta(url);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
-  try {
-    const r = await fetch(fullUrl, {
-      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       credentials: "include",
@@ -372,45 +264,14 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// Exporta uma lista de objetos como CSV (abre direto no Excel/Sheets) -- so client-side,
-// sem ida ao servidor, pra funcionar igual no modo local e no hospedado. `colunas` e uma
-// lista de {chave, rotulo}; `rotulo` vira o cabecalho, `chave` busca o valor em cada linha
-// (aceita "a.b" para acessar aninhado, embora nenhum uso atual precise disso).
-function exportarCSV(nomeArquivo, linhas, colunas) {
-  const escapar = (valor) => {
-    if (valor === null || valor === undefined) return "";
-    const texto = String(valor);
-    return /[",\n;]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"' : texto;
-  };
-  const cabecalho = colunas.map((c) => escapar(c.rotulo)).join(";");
-  const corpo = linhas
-    .map((linha) => colunas.map((c) => escapar(linha[c.chave])).join(";"))
-    .join("\n");
-  // BOM (﻿) pra o Excel abrir os acentos certo em UTF-8 sem precisar importar manualmente.
-  const blob = new Blob(["﻿" + cabecalho + "\n" + corpo], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = nomeArquivo;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
 function currentFilters() {
   const filters = {
+    agencia: document.getElementById("f-agencia").value,
     setor: document.getElementById("f-setor").value,
     uf: document.getElementById("f-uf").value,
   };
-  // O 1o select do filterbar compartilhado (#f-agencia) e reaproveitado pelos
-  // dois mercados com significado diferente -- "Agência" (BNDES/FINEP) no
-  // Incentivado, "Instrumento" (Debênture/CRI/CRA/...) no Primário -- ver
-  // _repopularFiltrosCompartilhados(). O NOME do parametro mandado pra API
-  // muda junto, pra bater com o que cada conjunto de rotas espera.
-  filters[_mercadoAtivo === "primario" ? "instrumento" : "agencia"] = document.getElementById("f-agencia").value;
 
   const mesIni = document.getElementById("f-mes-ini").value;
   const anoIni = document.getElementById("f-ano-ini").value;
@@ -442,10 +303,7 @@ const FILTER_LISTENERS = [];
 function onFiltersChange(fn) { FILTER_LISTENERS.push(fn); }
 // Devolve uma Promise que resolve quando TODOS os listeners (refreshConsolidado/
 // refreshTendencias, ambos async) terminarem -- a maioria das chamadas (troca de
-// filtro normal) ignora o retorno, dispara e esquece, exatamente como antes.
-// alternarMercado() abaixo e a UNICA chamada que precisa aguardar de verdade
-// (pra so esconder o loading depois que o dado do mercado novo, nao o antigo,
-// estiver na tela).
+// filtro normal) ignora o retorno, dispara e esquece.
 function notifyFiltersChange() {
   const f = currentFilters();
   return Promise.all(FILTER_LISTENERS.map((fn) => fn(f)));
@@ -494,12 +352,8 @@ function _grupoDaView(view) {
   if (view === "consolidado" || view === "tendencias") return "painel";
   return view;
 }
-// Cache de query por grupo tambem escopado por MERCADO -- sem isso, trocar
-// de mercado herdaria a query do grupo "painel" do outro mercado (ex:
-// agencia=BNDES restaurado depois de virar pro Primario, onde esse mesmo
-// select agora significa "instrumento" e "BNDES" nao e um valor valido la).
 function _chaveCacheGrupo(view) {
-  return `${_mercadoAtivo}:${_grupoDaView(view)}`;
+  return _grupoDaView(view);
 }
 
 // Guarda qual aba esta ativa AGORA -- usado so pra `sincronizarFiltrosNaURL`
@@ -523,7 +377,7 @@ function sincronizarFiltrosNaURL(params) {
 // todos passam pelo MESMO modal) deve gerar um link que, colado por qualquer pessoa
 // (logada), abre direto no detalhe daquela operação -- sem precisar navegar/buscar de novo.
 // Guarda o id num parâmetro de query PRÓPRIO (`operacao`), preservando o resto da URL
-// (path da aba + mercado + filtros já ativos) em vez de reescrever tudo como
+// (path da aba + filtros já ativos) em vez de reescrever tudo como
 // `sincronizarFiltrosNaURL` faz -- o modal é um OVERLAY por cima de qualquer aba, não uma
 // troca de view, então não faz sentido ele mexer no path/filtros da aba de baixo.
 function _idOperacaoDaURL() {
@@ -563,7 +417,6 @@ const _SLUG_PARA_VIEW = {
   "busca": "busca",
   "editais": "editais",
   "linhas-incentivadas": "linhas",
-  "transacoes-salvas": "salvos",
 };
 const _VIEW_PARA_SLUG = {
   consolidado: "consolidado",
@@ -571,26 +424,19 @@ const _VIEW_PARA_SLUG = {
   busca: "busca",
   editais: "editais",
   linhas: "linhas-incentivadas",
-  salvos: "transacoes-salvas",
 };
 
 function _viewInicialDaURL() {
-  const { slug } = _mercadoESlugDaURL();
+  const slug = window.location.pathname.replace(/^\/+|\/+$/g, "");
   return _SLUG_PARA_VIEW[slug] || "consolidado";
 }
 
 function _ativarView(view, empilharHistorico) {
-  // View pedida nao existe no mercado ativo (ex: Editais/Linhas no Primario,
-  // ou uma URL antiga/digitada errado) -- cai pro Consolidado daquele
-  // mercado em vez de deixar uma aba invisivel marcada como "ativa".
-  if (!_MERCADOS[_mercadoAtivo].abasVisiveis.includes(view)) view = "consolidado";
-
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
   document.getElementById("filterbar").style.display =
-    view === "busca" || view === "editais" || view === "linhas" || view === "salvos" ? "none" : "flex";
-  const prefixoUrl = _MERCADOS[_mercadoAtivo].prefixoUrl;
-  const caminho = "/" + (prefixoUrl ? prefixoUrl + "/" : "") + (_VIEW_PARA_SLUG[view] || "consolidado");
+    view === "busca" || view === "editais" || view === "linhas" ? "none" : "flex";
+  const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
   const mudouDeAba = window.location.pathname !== caminho;
   if (empilharHistorico) {
     // Clique numa aba: so cria uma entrada de historico nova se REALMENTE mudou
@@ -637,92 +483,6 @@ function _ativarView(view, empilharHistorico) {
     });
   }
   _viewAtivaAgora = view;
-}
-
-// Mostra/esconde os botoes de aba que nao existem no mercado ativo (Editais/
-// Linhas Incentivadas no modo Primario -- ver _MERCADOS.abasVisiveis). So
-// visibilidade dos BOTOES -- qual VIEW fica ativa e decidido por _ativarView.
-function _atualizarAbasVisiveisDoMercado() {
-  const visiveis = _MERCADOS[_mercadoAtivo].abasVisiveis;
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.style.display = visiveis.includes(btn.dataset.view) ? "" : "none";
-  });
-}
-
-// Aplica a identidade visual/textual do mercado ativo: titulo da aba do
-// navegador, texto da marca (topbar/loading/login -- ver .brand-texto em
-// index.html), classe no <body> (ver body.mercado-primario em style.css,
-// controla os tokens de cor --accent*) e visibilidade de qualquer bloco
-// marcado com data-mercado-only. Chamada ANTES de qualquer view/grafico ser
-// desenhado (inicio de _ligarBotoesDeAba e de alternarMercado), pra nunca
-// desenhar um Chart.js dentro de um card ainda escondido/com cor errada.
-function _aplicarIdentidadeMercado() {
-  const cfg = _MERCADOS[_mercadoAtivo];
-  document.title = cfg.titulo;
-  document.querySelectorAll(".brand-texto").forEach((el) => { el.textContent = cfg.titulo; });
-  document.body.classList.toggle("mercado-primario", _mercadoAtivo === "primario");
-  document.querySelectorAll("[data-mercado-only]").forEach((el) => {
-    el.style.display = el.dataset.mercadoOnly === _mercadoAtivo ? "" : "none";
-  });
-  // Label do 1o select do filterbar compartilhado (ver currentFilters()).
-  const labelAgencia = document.getElementById("f-agencia-label");
-  if (labelAgencia) labelAgencia.textContent = _mercadoAtivo === "primario" ? "Instrumento" : "Agência";
-  // Labels equivalentes no filterbar PROPRIO da Busca (grupo separado, ver
-  // busca.js) -- funcao exposta por busca.js, so chamada se existir (evita
-  // acoplar common.js a um detalhe de implementacao de outra aba).
-  if (typeof _aplicarRotulosMercadoBusca === "function") _aplicarRotulosMercadoBusca();
-  if (typeof _aplicarRotulosMercadoConsolidado === "function") _aplicarRotulosMercadoConsolidado();
-  if (typeof _aplicarRotulosMercadoTendencias === "function") _aplicarRotulosMercadoTendencias();
-}
-
-// Clique na marca (topbar) alterna entre os dois mercados -- sempre pousa no
-// Consolidado do mercado de destino (nunca tenta preservar a aba atual se
-// ela nao existir la, ex: saindo de Editais) e cria uma entrada de HISTORICO
-// nova (empilharHistorico=true em _ativarView), entao "Voltar" no navegador
-// volta pro mercado anterior -- mesma convencao ja usada pra troca de aba.
-async function alternarMercado() {
-  // Cobre a troca com o MESMO overlay de carregamento inicial (ver
-  // _esconderLoadingOverlay) -- sem isso, a troca de mercado era "instantanea"
-  // na aparencia (titulo/cor/abas mudam na hora) mas os CARDS continuavam
-  // mostrando os numeros do mercado ANTERIOR por cima de baixo ate os fetches
-  // novos resolverem (perceptivel contra a latencia real do Aiven, ver
-  // CLAUDE.md) -- um "flash" de dado errado, relatado pelo usuario. Mostrado
-  // DEPOIS de _aplicarIdentidadeMercado() abaixo, pra que o proprio overlay ja
-  // exiba a marca/cor do mercado de DESTINO (o mesmo elemento reaproveita
-  // `.brand-texto`, atualizado por _aplicarIdentidadeMercado).
-  const overlay = document.getElementById("loading-overlay");
-  _mercadoAtivo = _mercadoAtivo === "primario" ? "incentivado" : "primario";
-  _aplicarIdentidadeMercado();
-  if (overlay) overlay.classList.remove("hidden");
-  try {
-    _atualizarAbasVisiveisDoMercado();
-    _ativarView("consolidado", true);
-
-    // Filtros compartilhados (agencia/instrumento, setor, uf, datas) dependem
-    // do mercado -- repopula do zero a partir de /api/{primario/}filtros ANTES
-    // de recarregar qualquer dado (funcao definida mais abaixo, junto de
-    // initFiltersAndTabs -- reaproveita a mesma logica da carga inicial).
-    if (typeof _repopularFiltrosCompartilhados === "function") await _repopularFiltrosCompartilhados();
-
-    // Busca e Transacoes Salvas nao escutam onFiltersChange (sao grupos
-    // proprios) -- limpa o estado visual delas na hora, pra nunca mostrar um
-    // resultado/lista que pertence ao OUTRO mercado ate o usuario interagir de
-    // novo. Consolidado/Tendencias sao recarregados via notifyFiltersChange()
-    // (os dois ja escutam onFiltersChange desde o carregamento inicial) --
-    // AGUARDADO agora (ver notifyFiltersChange acima), pra so esconder o
-    // overlay depois que o dado do mercado novo ja estiver na tela.
-    const buscaInput = document.getElementById("busca-input");
-    const buscaResultado = document.getElementById("busca-resultado");
-    if (buscaInput) buscaInput.value = "";
-    if (buscaResultado) buscaResultado.innerHTML = "";
-    if (typeof _popularFiltrosBusca === "function") await _popularFiltrosBusca();
-
-    await notifyFiltersChange();
-  } finally {
-    // Mesmo espirito de _esconderLoadingOverlay() na carga inicial -- nunca
-    // deixar o usuario preso atras do overlay se algum fetch falhar.
-    if (overlay) overlay.classList.add("hidden");
-  }
 }
 
 // Nao deixa o usuario chegar num intervalo invertido (De > Ate): sempre que um dos 4
@@ -782,27 +542,11 @@ function _atualizarSombraAbas() {
 }
 
 function _ligarBotoesDeAba() {
-  // Identidade do mercado (titulo/marca/cor/abas visiveis) precisa estar
-  // certa ANTES da 1a `_ativarView` -- ela decide se a view da URL e valida
-  // (abasVisiveis) e o CSS de accent precisa estar aplicado antes de
-  // qualquer Chart.js desenhar dentro de um card so-Primario.
-  _aplicarIdentidadeMercado();
-  _atualizarAbasVisiveisDoMercado();
-
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => _ativarView(btn.dataset.view, true));
   });
-  const brand = document.getElementById("brand-toggle");
-  if (brand) brand.addEventListener("click", alternarMercado);
 
   window.addEventListener("popstate", () => {
-    // Voltar/avancar no navegador pode cruzar a fronteira /primario/... <->
-    // sem prefixo -- releitura do mercado a partir da URL ANTES de decidir a
-    // view (mesma ordem da inicializacao acima), senao abasVisiveis/labels
-    // ficariam presos no mercado anterior por um popstate.
-    _mercadoAtivo = _mercadoESlugDaURL().mercado;
-    _aplicarIdentidadeMercado();
-    _atualizarAbasVisiveisDoMercado();
     _ativarView(_viewInicialDaURL(), false);
   });
   _ativarView(_viewInicialDaURL(), false);
@@ -839,7 +583,7 @@ async function initFiltersAndTabs() {
   // capturado AGORA, antes de qualquer coisa que mexa na URL (_ligarBotoesDeAba/
   // _ativarView), senao um F5 numa aba cuja _aplicarFiltros*DaURL reescreve a
   // query string via sincronizarFiltrosNaURL perderia o parametro antes de eu
-  // conseguir ler. O modal so abre DEPOIS que mercado/aba/filtros estiverem
+  // conseguir ler. O modal so abre DEPOIS que aba/filtros estiverem
   // resolvidos (ver abaixo) -- puramente estetico (nao trava se o backend cair no
   // meio, mesmo espirito do _resolverFiltrosProntos no finally).
   const idOperacaoDaURL = _idOperacaoDaURL();
@@ -862,7 +606,7 @@ async function _initFiltersAndTabsImpl() {
   const pill = document.getElementById("status-pill");
   let status;
   try {
-    status = await fetchJSON(apiMercado("/api/status"));
+    status = await fetchJSON("/api/status");
   } catch (e) {
     _esconderLoadingOverlay();
     if (e instanceof ErroAutenticacao) {
@@ -897,10 +641,7 @@ async function _initFiltersAndTabsImpl() {
   const viewAtiva = _viewInicialDaURL();
   if (viewAtiva === "consolidado" || viewAtiva === "tendencias") {
     const paramsIniciais = paramsDaURL();
-    // "agencia" no Incentivado, "instrumento" no Primario -- mesmo select
-    // (#f-agencia) reaproveitado com significado diferente, ver currentFilters().
-    const chaveTopo = _mercadoAtivo === "primario" ? "instrumento" : "agencia";
-    if (paramsIniciais.has(chaveTopo)) document.getElementById("f-agencia").value = paramsIniciais.get(chaveTopo);
+    if (paramsIniciais.has("agencia")) document.getElementById("f-agencia").value = paramsIniciais.get("agencia");
     if (paramsIniciais.has("setor")) document.getElementById("f-setor").value = paramsIniciais.get("setor");
     if (paramsIniciais.has("uf")) document.getElementById("f-uf").value = paramsIniciais.get("uf");
     if (paramsIniciais.has("mes_ini")) document.getElementById("f-mes-ini").value = paramsIniciais.get("mes_ini");
@@ -922,8 +663,7 @@ async function _initFiltersAndTabsImpl() {
 }
 
 // Remove todas as <option> de um select alem da 1a (o "Todas"/"Todos" fixo ja
-// escrito no HTML) -- usado tanto na carga inicial quanto ao REPOPULAR (troca
-// de mercado, ver alternarMercado) pra nunca duplicar opcao ja preenchida.
+// escrito no HTML) -- evita duplicar opcao se este select for repopulado de novo.
 function _limparOpcoesExtras(sel) {
   while (sel.options.length > 1) sel.remove(1);
 }
@@ -935,10 +675,8 @@ function _preencherSelectFiltro(id, values) {
 }
 
 // Selects de ano (sem opcao fixa no HTML, ver index.html -- <select
-// id="f-ano-ini"></select> vazio) sao sempre RECRIADOS do zero (o intervalo
-// de anos cobertos e diferente por mercado); os de MES (Jan..Dez) sao os
-// mesmos nos dois mercados, entao so populam uma vez (guardado pelo proprio
-// `options.length`).
+// id="f-ano-ini"></select> vazio) sao sempre RECRIADOS do zero; os de MES
+// (Jan..Dez) so populam uma vez (guardado pelo proprio `options.length`).
 function _preencherAnosEMeses(filtros) {
   const anos = (filtros.anos || []).filter((a) => a !== null).sort((a, b) => a - b);
   const anoIni = document.getElementById("f-ano-ini");
@@ -976,35 +714,14 @@ function _preencherAnosEMeses(filtros) {
 }
 
 // Popula o filterbar compartilhado (Consolidado/Tendencias) a partir da
-// resposta de /api/{primario/}filtros -- extraido da carga inicial pra
-// tambem ser chamavel de novo ao trocar de mercado (ver
-// _repopularFiltrosCompartilhados/alternarMercado), sem duplicar listener
-// nenhum (os `addEventListener` de change continuam so em
+// resposta de /api/filtros -- extraido da carga inicial pra nao duplicar
+// listener nenhum (os `addEventListener` de change continuam so em
 // _initFiltersAndTabsImpl, que roda uma unica vez por carregamento de pagina).
 function _popularFiltrosCompartilhados(filtros) {
-  // #f-agencia e o MESMO <select> reaproveitado com valores diferentes por
-  // mercado (agencias BNDES/FINEP vs. instrumentos CVM) -- ver currentFilters().
-  _preencherSelectFiltro("f-agencia", _mercadoAtivo === "primario" ? filtros.instrumentos : filtros.agencias);
+  _preencherSelectFiltro("f-agencia", filtros.agencias);
   _preencherSelectFiltro("f-setor", (filtros.setores || []).filter(Boolean));
   _preencherSelectFiltro("f-uf", (filtros.ufs || []).filter(Boolean));
   _preencherAnosEMeses(filtros);
-}
-
-// Chamada por alternarMercado (common.js) ao trocar de mercado -- refaz a
-// busca de /api/{primario/}filtros e repopula os mesmos selects do zero.
-// Suposicao de contrato: /api/primario/filtros devolve o MESMO formato de
-// /api/filtros, so com `instrumentos` no lugar de `agencias` (ver CLAUDE.md).
-async function _repopularFiltrosCompartilhados() {
-  let filtros;
-  try {
-    filtros = await _fetchFiltrosCompartilhado();
-  } catch (e) {
-    // /api/primario/filtros pode ainda nao existir (ver aviso de contrato
-    // assumido no topo deste arquivo) -- os selects so ficam com o que ja
-    // tinham (provavelmente vazios/do outro mercado); nao trava a troca.
-    return;
-  }
-  _popularFiltrosCompartilhados(filtros);
 }
 
 // Filtros compartilhados por Consolidado e Tendencias (mesmo filterbar, ver
@@ -1014,6 +731,7 @@ async function _repopularFiltrosCompartilhados() {
 // URL" acima).
 function _sincronizarFiltrosCompartilhadosNaURL() {
   const params = {
+    agencia: document.getElementById("f-agencia").value,
     setor: document.getElementById("f-setor").value,
     uf: document.getElementById("f-uf").value,
     mes_ini: document.getElementById("f-mes-ini").value,
@@ -1021,7 +739,6 @@ function _sincronizarFiltrosCompartilhadosNaURL() {
     mes_fim: document.getElementById("f-mes-fim").value,
     ano_fim: document.getElementById("f-ano-fim").value,
   };
-  params[_mercadoAtivo === "primario" ? "instrumento" : "agencia"] = document.getElementById("f-agencia").value;
   sincronizarFiltrosNaURL(params);
 }
 
@@ -1055,48 +772,30 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
   const body = document.getElementById("modal-body");
   const ordenarSelect = document.getElementById("modal-ordenar");
   ordenarSelect.style.display = "inline-block";
-  document.getElementById("modal-favoritar-btn").style.display = "none";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
   const [order_by, order_dir] = ordenarSelect.value.split("-");
   const params = Object.assign(currentFilters(), modalExtraFilters, { order_by, order_dir });
-  const ops = await fetchJSON(apiMercado("/api/operacoes") + "?" + qs(params) + "&limit=300");
+  const ops = await fetchJSON("/api/operacoes" + "?" + qs(params) + "&limit=300");
 
   if (!Array.isArray(ops) || !ops.length) {
     body.innerHTML = '<p class="empty-state">Nenhuma operação encontrada para esse filtro.</p>';
     return;
   }
 
-  // Rotulos e campos desta tabela sao os MESMOS pros dois mercados (modal
-  // compartilhado, ver openOperacaoDetalhe abaixo) -- so o SIGNIFICADO muda.
-  // Suposicao de contrato (ver aviso no topo do arquivo): /api/primario/operacoes
-  // devolve os mesmos NOMES de campo (cliente/agencia/setor_bndes/
-  // data_contratacao/valor_contratado), com o emissor/instrumento/setor do
-  // emissor/data de referencia/valor da oferta no lugar -- com fallback pros
-  // nomes "nativos" prováveis (emissor/instrumento/setor_emissor/
-  // data_referencia/valor_emissao) caso o backend real use outra convenção.
-  const rotulosCliente = _mercadoAtivo === "primario" ? "Emissor" : "Cliente";
-  const rotulosAgencia = _mercadoAtivo === "primario" ? "Instrumento" : "Agência";
-  const rotulosValor = _mercadoAtivo === "primario" ? "Valor da oferta" : "Valor contratado";
-
   let html = '<table class="ops-table"><thead><tr>' +
-    `<th>${rotulosCliente}</th><th>${rotulosAgencia}</th><th>UF</th><th>Setor</th><th>Data</th><th>${rotulosValor}</th>` +
+    "<th>Cliente</th><th>Agência</th><th>UF</th><th>Setor</th><th>Data</th><th>Valor contratado</th>" +
     "</tr></thead><tbody>";
   ops.forEach((op) => {
-    const nomeCliente = op.cliente ?? op.emissor ?? op.razao_social_oficial_emissor;
-    const nomeAgencia = op.agencia ?? op.instrumento ?? op.instrumento_padronizado;
-    const nomeSetor = op.setor_bndes ?? op.setor_emissor;
-    const nomeData = op.data_contratacao ?? op.data_referencia;
-    const nomeValor = op.valor_contratado ?? op.valor_emissao ?? op.valor_oferta;
     html += `<tr data-id="${op.id}">
-      <td>${nomeCliente || "-"}</td>
-      <td>${nomeAgencia || "-"}</td>
+      <td>${op.cliente || "-"}</td>
+      <td>${op.agencia || "-"}</td>
       <td>${op.uf || "-"}</td>
-      <td>${nomeSetor || "Não classificado"}</td>
-      <td>${nomeData || "-"}</td>
-      <td>${fmtBRLFull(nomeValor)}</td>
+      <td>${op.setor_bndes || "Não classificado"}</td>
+      <td>${op.data_contratacao || "-"}</td>
+      <td>${fmtBRLFull(op.valor_contratado)}</td>
     </tr>`;
   });
   html += "</tbody></table>";
@@ -1125,55 +824,11 @@ function fmtCampoDetalhe(campo) {
   }
 }
 
-// Anima um "pop" rapido (mesmo espirito das transitions de 0.15s ja usadas no
-// resto de style.css -- ver .fav-btn-mini/.acao-btn) toda vez que o estado de
-// favorito de um botao muda, nas duas direcoes (favoritar E desfavoritar) --
-// disfarca qualquer latencia residual da UI otimista abaixo. Remove e re-adiciona
-// a classe (forcando reflow no meio) pra reiniciar a animacao mesmo em cliques
-// rapidos em sequencia, onde a classe ja estaria presente da vez anterior.
-function _animarPopFavorito(el) {
-  el.classList.remove("fav-pop");
-  void el.offsetWidth;
-  el.classList.add("fav-pop");
-}
-
-// Alterna o favorito de UMA operacao com UI OTIMISTA: pinta o NOVO estado na
-// hora do clique (`renderizar`, fornecido pelo chamador -- cada botao pinta a si
-// mesmo de um jeito diferente, texto+classe no modal, so icone+titulo+classe na
-// estrelinha mini de busca.js) e SO DEPOIS dispara POST/DELETE
-// /api/salvos/operacoes/{id} em paralelo -- sem isso, a latencia real contra o
-// Aiven (ver CLAUDE.md) fazia o clique parecer travado/com delay (bug real
-// reportado pelo usuario, 2026-09-16). Se a chamada falhar, reverte pro estado
-// anterior (com o mesmo pop/alerta de sempre) -- o servidor continua sendo a
-// fonte da verdade, so a PINTURA acontece adiantada. `aoConcluir(novoEstado)` so
-// roda em caso de SUCESSO (nunca no revert) -- usado pelos dois chamadores pra
-// atualizar a aba Transacoes Salvas se ja tiver carregado (ver recarregarSalvos).
-async function alternarFavoritoOtimista(btn, opId, estavaAtiva, renderizar, aoConcluir) {
-  const novoEstado = !estavaAtiva;
-  renderizar(novoEstado);
-  _animarPopFavorito(btn);
-  btn.disabled = true;
-  try {
-    if (estavaAtiva) {
-      await deleteJSON(`/api/salvos/operacoes/${opId}`);
-    } else {
-      await postJSON(`/api/salvos/operacoes/${opId}`, {});
-    }
-    if (typeof aoConcluir === "function") aoConcluir(novoEstado);
-  } catch (e) {
-    renderizar(estavaAtiva);
-    _animarPopFavorito(btn);
-    alert(e instanceof ErroAutenticacao ? "Faça login para salvar operações." : "Não foi possível atualizar o favorito agora.");
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// Botao "Copiar link" do modal de detalhe de operacao -- mesmo espirito/publico do
-// botao de favoritar acima (so aparece em openOperacaoDetalhe, escondido de novo em
-// openOperacoesModal/editais.js/linhas.js, que reusam o MESMO elemento). A URL ja foi
-// atualizada com `?operacao=<id>` por _definirOperacaoNaURL ANTES desta funcao ser
-// chamada (ver openOperacaoDetalhe) -- so precisa copiar `location.href` como esta
+// Botao "Copiar link" do modal de detalhe de operacao -- so aparece em
+// openOperacaoDetalhe (escondido de novo em openOperacoesModal/editais.js/
+// linhas.js, que reusam o MESMO elemento). A URL ja foi atualizada com
+// `?operacao=<id>` por _definirOperacaoNaURL ANTES desta funcao ser chamada
+// (ver openOperacaoDetalhe) -- so precisa copiar `location.href` como esta
 // na hora do clique, nunca reconstruir a URL aqui (evita duas fontes de verdade pro
 // mesmo link). `navigator.clipboard` exige contexto seguro (https ou localhost) --
 // sempre verdade em producao (Vercel) e em dev local (uvicorn em 127.0.0.1); sem
@@ -1198,40 +853,6 @@ function _configurarBotaoCopiarLink(opId) {
   };
 }
 
-// Botao "Salvar"/"★ Salvo" do modal de detalhe de operacao (Transacoes Salvas, ver
-// webapp/salvos.py) -- reutilizavel de qualquer lugar que abre esse mesmo modal
-// (busca, tabela de operacoes, grupo economico etc, ja que todos passam por
-// openOperacaoDetalhe). Escondido por padrao (ver #modal-favoritar-btn em
-// index.html); os outros abridores de modal (openOperacoesModal, editais.js,
-// linhas.js) escondem de novo explicitamente, ja que reusam o MESMO elemento.
-function _configurarBotaoFavoritar(opId, salva) {
-  const btn = document.getElementById("modal-favoritar-btn");
-  if (!btn) return;
-  // TODO(Primario): "Transacoes Salvas" (usuario_operacoes_salvas) tem FK pra
-  // operations(id) -- schema do credito de fomento, ver CLAUDE.md. Favoritar
-  // uma operacao de operations_primario nao tem como funcionar sem estender
-  // esse schema (fora do escopo desta sessao, que nao mexe em src/db.py) --
-  // escondido de proposito no modo Primario ate essa extensao existir, em vez
-  // de deixar o botao quebrar silenciosamente num id de tabela errada.
-  if (_mercadoAtivo === "primario") {
-    btn.style.display = "none";
-    return;
-  }
-  btn.style.display = "inline-flex";
-  const renderizar = (ativo) => {
-    btn.textContent = ativo ? "★ Salvo" : "☆ Salvar";
-    btn.classList.toggle("ativo", ativo);
-  };
-  renderizar(!!salva);
-  btn.onclick = () => {
-    alternarFavoritoOtimista(btn, opId, btn.classList.contains("ativo"), renderizar, () => {
-      // Se a aba Transacoes Salvas ja carregou nesta visita, atualiza a lista dela
-      // tambem -- funcao exposta por salvos.js, so chamada se existir.
-      if (typeof recarregarSalvos === "function") recarregarSalvos();
-    });
-  };
-}
-
 async function openOperacaoDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe da operação";
   document.getElementById("modal-ordenar").style.display = "none";
@@ -1245,7 +866,7 @@ async function openOperacaoDetalhe(id) {
   _definirOperacaoNaURL(id);
   _configurarBotaoCopiarLink(id);
 
-  const data = await fetchJSON(apiMercado("/api/operacoes") + `/${id}`);
+  const data = await fetchJSON(`/api/operacoes/${id}`);
   if (!data.secoes || !data.secoes.length) {
     body.innerHTML = '<p class="empty-state">Detalhe não encontrado.</p>';
     return;
@@ -1253,7 +874,6 @@ async function openOperacaoDetalhe(id) {
 
   const badge = `<span class="badge" style="background:var(--blue-lightest); color:var(--navy); margin-left:8px;">${data.agencia || data.instrumento || ""}${data.instrumento && data.agencia ? " · " + data.instrumento : ""}</span>`;
   document.getElementById("modal-title").innerHTML = `Detalhe da operação ${badge}`;
-  _configurarBotaoFavoritar(id, data.salva);
 
   let html = '<div class="detalhe-secoes">';
   data.secoes.forEach((secao) => {
@@ -1284,10 +904,7 @@ async function openOperacaoDetalhe(id) {
   // Integracao transacoes <-> linhas incentivadas (item 8): mesma logica do lado
   // inverso em linhas.js -- so setor_bndes (taxonomia nativa das 4 categorias),
   // rotulado "potencialmente compativel", nunca misturado com o detalhe da operacao.
-  // Sem equivalente no modo Primario (aba "Linhas Incentivadas" nao existe la,
-  // ver _MERCADOS.abasVisiveis) -- pulado de proposito, nunca so por falta de
-  // data.setor_bndes (que tambem seria o caso se o backend usasse setor_emissor).
-  if (_mercadoAtivo === "incentivado" && data.setor_bndes && typeof fetchJSON === "function") {
+  if (data.setor_bndes && typeof fetchJSON === "function") {
     try {
       const linhas = await fetchJSON("/api/linhas?" + qs({ setor: data.setor_bndes, limit: 3 }));
       if (linhas.resultados && linhas.resultados.length) {
@@ -1313,13 +930,13 @@ async function openOperacaoDetalhe(id) {
   // linhas compativeis acima: carregada a parte, so aparece se houver resultado, nunca
   // bloqueia o resto do detalhe se falhar.
   try {
-    const grupo = await fetchJSON(apiMercado(`/api/operacoes/${id}/grupo-economico`));
+    const grupo = await fetchJSON(`/api/operacoes/${id}/grupo-economico`);
     if (grupo.resultados && grupo.resultados.length) {
       const div = document.createElement("div");
       div.className = "detalhe-secao";
       div.innerHTML = `<div class="detalhe-secao-titulo">Outras operações do mesmo grupo econômico (${grupo.resultados.length}) <span class="hint">mesma raiz de CNPJ</span></div>` +
         '<ul class="clickable-list">' +
-        grupo.resultados.map((o) => `<li data-op-id="${o.id}"><span>${o.cliente ?? o.emissor ?? "-"}</span><span class="badge neutro">${o.agencia ?? o.instrumento ?? ""} · ${fmtBRL(o.valor_contratado ?? o.valor_emissao)}</span></li>`).join("") +
+        grupo.resultados.map((o) => `<li data-op-id="${o.id}"><span>${o.cliente || "-"}</span><span class="badge neutro">${o.agencia || ""} · ${fmtBRL(o.valor_contratado)}</span></li>`).join("") +
         "</ul>";
       body.appendChild(div);
       div.querySelectorAll("li[data-op-id]").forEach((li) => {

@@ -28,72 +28,10 @@
   --map-escala-max: #152534;
   --map-sem-dado: #D9D9D9;
 
-  /* Cor de destaque (accent) da identidade visual da PLATAFORMA ATIVA --
-     mesma linguagem/tipografia/espacamento do site inteiro, so os elementos
-     "de marca" (topbar, cabecalho de card, aba ativa, valor de KPI, telas de
-     carregamento/login) trocam de tom pra dar identidade propria ao modo
-     Primario (credito de mercado de capitais -- CVM) sem duplicar CSS nenhum.
-     Por padrao (modo Incentivado) os 3 tons abaixo SAO os mesmos navy/steel-2
-     ja usados no resto do site -- so `body.mercado-primario` (ver abaixo)
-     redefine os 3 pra um tom verde-petroleo, escolhido por analogia direta ao
-     navy/steel-2 (mesma saturacao/luminosidade aproximada, so trocando o
-     matiz de azul pra verde) pra manter o MESMO contraste com texto branco. */
-  --accent-900: var(--navy-900);
-  --accent: var(--navy);
-  --accent-light: var(--steel-2);
-
   --radius: 10px;
   --shadow: 0 1px 3px rgba(34, 56, 80, 0.08), 0 1px 2px rgba(34, 56, 80, 0.06);
   --font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
-
-/* ============ Identidade visual do modo "Radar de Credito Primario" ============
-   Ligada/desligada via classe no <body> (ver common.js::_aplicarIdentidadeMercado)
-   -- nunca uma pagina/CSS separado, so os 3 tokens de accent acima trocam de
-   valor. Verde-petroleo escolhido de proposito pra ficar claramente distinto do
-   azul do modo Incentivado (nao e so um reskin de texto) mas continuar dentro
-   da MESMA paleta "corporativa escura" do resto do site -- nenhuma outra regra
-   de estilo precisa mudar, todo o resto (tipografia, espacamento, .card,
-   .kpi-card etc) e 100% compartilhado entre os dois modos. */
-body.mercado-primario {
-  --accent-900: #0E2E27;
-  --accent: #16463C;
-  --accent-light: #1F6656;
-}
-
-.brand { cursor: pointer; }
-
-/* Conteudo exclusivo de um dos dois mercados (ver data-mercado-only em
-   index.html) -- JS (_aplicarIdentidadeMercado em common.js) decide o
-   display real assim que sabe qual mercado esta ativo, bem no inicio da
-   inicializacao da pagina. Only-primario comeca escondido por CSS (o mercado
-   padrao/mais comum e o Incentivado) so pra nao dar um flash visivel do
-   conteudo antes do JS rodar; only-incentivado nao precisa do equivalente
-   porque ja e o padrao visivel de qualquer elemento normal. */
-[data-mercado-only="primario"] { display: none; }
-
-/* BUG REAL encontrado e corrigido no redesenho de 2026-09-17 (cards novos
-   "Estrutura da oferta"/"Por tipo de lastro" do Consolidado Primario): a
-   regra generica acima (`[data-mercado-only="primario"] {display:none}`)
-   so ficava "vencida" de verdade em elementos que JA tinham sua propria
-   regra de `display` competindo por ordem de cascata (ex: `.grid-2 {
-   display:grid}`, definida DEPOIS da regra acima no arquivo, ganha o
-   empate de especificidade por ordem de fonte) -- e o mecanismo em JS
-   (`_aplicarIdentidadeMercado`) so faz `el.style.display = "" ` pro caso
-   "deveria mostrar" (limpa o inline, nao forca um valor), contando com
-   essa cascata pra "revelar" o elemento. Um `.card` normal NUNCA teve
-   regra de `display` propria (usa o bloco padrao do navegador), entao
-   nesse caso NADA vencia a regra generica de escondido, e o card ficava
-   invisivel mesmo no mercado certo -- confirmado ao vivo (Browser pane,
-   `getComputedStyle` retornando "none" com o inline ja limpo). Corrigido
-   com uma regra mais especifica, gatilhada pela MESMA classe que
-   `_aplicarIdentidadeMercado` já aplica ao <body> (`body.mercado-primario`,
-   toggled independente do loop por elemento) -- specificity subindo pra
-   (0,3,1), vence tanto a regra generica quanto qualquer possivel regra de
-   `.card` no meio do caminho. Nao precisou mudar `_aplicarIdentidadeMercado`
-   em si (continua so limpando o inline pro caso "mostrar"), nem afeta o
-   caso `.grid-2` que ja funcionava (a regra abaixo so mira `.card`). */
-body.mercado-primario .card[data-mercado-only="primario"] { display: block; }
 
 * { box-sizing: border-box; }
 
@@ -110,7 +48,7 @@ body.mercado-primario .card[data-mercado-only="primario"] { display: block; }
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: var(--accent-900);
+  background: var(--navy-900);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -145,7 +83,7 @@ body.mercado-primario .card[data-mercado-only="primario"] { display: block; }
   position: fixed;
   inset: 0;
   z-index: 1001;
-  background: var(--accent-900);
+  background: var(--navy-900);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -262,7 +200,7 @@ body {
 
 /* ============ Top bar ============ */
 .topbar {
-  background: var(--accent);
+  background: var(--navy);
   color: #fff;
   padding: 14px 28px;
   display: flex;
@@ -331,8 +269,8 @@ body {
   transition: opacity 0.15s;
   z-index: 1;
 }
-.tabs-wrap::before { left: 0; background: linear-gradient(to right, var(--accent), transparent); }
-.tabs-wrap::after { right: 0; background: linear-gradient(to left, var(--accent), transparent); }
+.tabs-wrap::before { left: 0; background: linear-gradient(to right, var(--navy), transparent); }
+.tabs-wrap::after { right: 0; background: linear-gradient(to left, var(--navy), transparent); }
 /* Classes ligadas por JS (`_atualizarSombraAbas` em common.js) -- so aparecem
    quando `.tabs` realmente tem mais conteudo pra rolar NAQUELA direcao (nunca
    um degrade decorativo fixo que apareceria mesmo com todas as abas cabendo
@@ -376,7 +314,7 @@ body {
 }
 
 .tab-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-.tab-btn.active { background: var(--accent-light); color: #fff; }
+.tab-btn.active { background: var(--steel-2); color: #fff; }
 
 .topbar-usuario {
   display: flex;
@@ -485,7 +423,7 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
 .kpi-card .value {
   font-size: 22px;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--navy);
 }
 
 .kpi-card .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
@@ -510,7 +448,7 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
 }
 
 .card-header {
-  background: var(--accent);
+  background: var(--navy);
   color: #fff;
   padding: 10px 16px;
   font-size: 13px;
@@ -604,7 +542,7 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
 }
 .modal-body { padding: 16px 20px; overflow-y: auto; }
 
-/* ============ Transacoes Salvas (favoritar operacao + historico de busca) ============ */
+/* ============ Botao "Copiar link" do modal de detalhe de operacao ============ */
 .fav-btn {
   background: rgba(255,255,255,0.12);
   color: #fff;
@@ -618,37 +556,6 @@ main { padding: 22px 28px 60px; max-width: 1400px; margin: 0 auto; }
   transition: background 0.15s, color 0.15s;
 }
 .fav-btn:hover { background: rgba(255,255,255,0.22); }
-.fav-btn.ativo { background: #fff; color: var(--navy); }
-
-/* "Pop" rapido e discreto ao trocar de estado (☆<->★, nas duas direcoes) --
-   mascara a UI otimista de alternarFavoritoOtimista (common.js): o visual muda
-   na hora do clique, antes da resposta do servidor chegar, e este pop reforça a
-   sensacao de resposta instantanea. Mesma familia de timing das outras
-   transitions de 0.15s ja usadas no site (ver .fav-btn/.fav-btn-mini acima/
-   abaixo) -- nao inventa um ritmo novo. Reiniciada via _animarPopFavorito()
-   (remove+forca reflow+readiciona a classe), pra funcionar mesmo em cliques
-   rapidos em sequencia. */
-@keyframes fav-pop {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.18); }
-  100% { transform: scale(1); }
-}
-.fav-pop { animation: fav-pop 0.2s ease; }
-
-.salvos-nota {
-  width: 100%;
-  box-sizing: border-box;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 12.5px;
-  font-family: inherit;
-  resize: vertical;
-  min-height: 44px;
-}
-.salvos-nota:focus { outline: 2px solid var(--blue-lighter); outline-offset: -1px; }
-#salvos-sem-login.hidden, #salvos-conteudo.hidden { display: none; }
 
 table.ops-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.ops-table th {
@@ -822,34 +729,11 @@ table.ops-table tr:hover { background: var(--blue-lightest); cursor: pointer; }
   cursor: pointer;
 }
 .result-card:hover { border-color: var(--blue-light); }
-.result-card .top-row { display: flex; justify-content: space-between; align-items: baseline; padding-right: 22px; }
+.result-card .top-row { display: flex; justify-content: space-between; align-items: baseline; }
 .result-card .cliente { font-weight: 700; color: var(--navy); font-size: 14px; }
 .result-card .valor { font-weight: 700; color: var(--steel-2); }
 .result-card .meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .result-card .score { font-size: 11px; color: var(--blue-mid); }
-
-/* Estrelinha de favoritar de cada card de resultado (Busca) -- só aparece no
-   hover do card (poupa espaço/ruído visual numa lista de até 200 resultados);
-   uma operação JÁ salva (`.ativo`) fica sempre visível, mesmo sem hover, senão
-   não haveria como notar que ela já está salva sem passar o mouse em cima. */
-.fav-btn-mini {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  background: none;
-  border: none;
-  font-size: 18px;
-  line-height: 1;
-  color: var(--blue-mid);
-  cursor: pointer;
-  padding: 2px;
-  opacity: 0;
-  transition: opacity 0.15s ease, transform 0.1s ease;
-}
-.result-card:hover .fav-btn-mini, .fav-btn-mini.ativo { opacity: 1; }
-.fav-btn-mini:hover { transform: scale(1.15); }
-.fav-btn-mini.ativo { color: var(--steel-2); }
-.fav-btn-mini:disabled { cursor: default; opacity: 0.6; }
 
 .empty-state { text-align: center; color: var(--text-muted); padding: 40px 0; }
 
