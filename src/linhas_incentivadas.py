@@ -2344,6 +2344,414 @@ _BNDES_MANUAL_EXPANSAO = [
         "temas_sustentabilidade": "Florestas nativas, recursos hídricos, Fundo Clima",
         "sinonimos_termos": "fundo clima florestas nativas recursos hidricos conservacao agua",
     },
+    # Programa BNDES Brasil Soberano Competitividade -- programa "guarda-chuva" emergencial
+    # (MP 1.345/2026, convertida na Lei 15.473/2026, alterada pela MP 1.379/2026) para
+    # enfrentar impactos de tarifas dos EUA / instabilidade no Golfo Persico. Estruturado
+    # oficialmente em QUATRO modalidades de credito (Giro, Giro Exportacao, Bens de Capital,
+    # Investimento), cada uma acessivel via apoio direto (BNDES, so grandes empresas
+    # habilitadas, a partir de R$ 50 milhoes) OU indireto (instituicoes financeiras
+    # credenciadas, qualquer porte) -- por isso modelado como 4 linhas (uma por modalidade,
+    # nao uma unica linha generica), cada uma com modalidade="Direta e Indireta" reunindo as
+    # condicoes de ambos os canais, no mesmo padrao ja usado em "BNDES Mais Inovação" neste
+    # arquivo. Dados capturados ao vivo via Browser pane em 2026-09-22 (paginas de produto do
+    # BNDES tem conteudo em acordeao que nao aparece em fetch simples de HTML/texto visivel).
+    # A pagina especifica do apoio indireto de "Bens de Capital" retornou erro 404 no site do
+    # BNDES no momento da captura -- por isso os campos especificos desse canal ficam
+    # NAO_INFORMADO nessa linha, mesmo com o padrao geral do Programa sugerindo valores
+    # semelhantes aos das outras 3 modalidades (nao inferido, para não violar a regra de
+    # nunca inventar dado).
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "Programa BNDES Brasil Soberano Competitividade - Modalidade Giro",
+        "nome_simplificado": "Brasil Soberano - Giro",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Capital de giro livre para empresas exportadoras (e "
+            "fornecedoras) afetadas por tarifas dos EUA, por instabilidade geopolítica no "
+            "Golfo Pérsico ou atuantes em setores industriais estratégicos (fertilizantes).",
+        "descricao_completa": "Apoio, por meio da oferta de capital de giro, à necessidade de "
+            "liquidez de empresas para o enfrentamento dos impactos causados por razões "
+            "geopolíticas e de instabilidade internacional, inclusive aqueles decorrentes da "
+            "aplicação de percentuais majorados de tarifas comerciais. Uma das quatro "
+            "modalidades do Programa BNDES Brasil Soberano Competitividade (Giro, Giro "
+            "Exportação, Bens de Capital, Investimento), que substituiu o Plano Brasil "
+            "Soberano original (2025) após a Medida Provisória nº 1.345/2026.",
+        "modalidade": "Direta e Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Grupo 1: exportadores de bens industriais e seus fornecedores "
+            "afetados pela majoração de tarifas dos EUA; Grupo 2: indústrias de fertilizantes "
+            "e intermediários (CNAEs 2012-6, 2013-4, 0891-6); Grupo 3: exportadores para "
+            "países do Golfo Pérsico afetados por instabilidade geopolítica -- todos conforme "
+            "Lei nº 15.473/2026 e Portaria MDIC/MF nº 194/2026. Nesta modalidade (Giro), o "
+            "Grupo 2 é restrito a fertilizantes -- as demais CNAEs do Grupo 2 só acessam Bens "
+            "de Capital e Investimento.",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Todos os portes via apoio indireto; apoio direto restrito a "
+            "grandes empresas habilitadas junto ao BNDES",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Capital de giro livre",
+        "itens_financiaveis": "Capital de giro livre, sem destinação específica",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": 50_000_000,
+        "valor_maximo": 300_000_000,
+        "percentual_financiavel": "Até 100% dos itens financiáveis (apoio direto); apoio "
+            "indireto limitado a R$ 50 milhões por cliente final",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Apoio direto: Custo Financeiro (50% taxa fixa de 5,0% a.a. + 50% "
+            "Taxa LCD) + Remuneração do BNDES (a partir de 1,3% a.a.) + taxa de risco de "
+            "crédito variável -- taxa total estimada de 11,7% a 15,7% a.a. (referência: LCD "
+            "de 14/05/2026). Apoio indireto: Custo Financeiro (PMEs: 50% fixo 2,0% a.a. + 50% "
+            "LCD; grandes empresas: 50% fixo 5,0% a.a. + 50% LCD) + Taxa do BNDES (1,5% a.a.) "
+            "+ Taxa do Agente Financeiro (até 5% a.a., negociada) -- taxa total estimada de "
+            "10,3% a 15,9% a.a. (PMEs) ou 11,9% a 17,5% a.a. (grandes empresas), referência "
+            "LCD de 01/09/2026.",
+        "indexador": "Taxa LCD (Custo de Captação do BNDES) para 50% do custo financeiro",
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 60 meses, incluída a carência",
+        "carencia": "Até 12 meses (sem capitalização de juros na carência)",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Negociadas durante a análise da operação entre o cliente e o BNDES "
+            "(apoio direto) ou entre o cliente e o agente financeiro (apoio indireto)",
+        "restricoes": "Apoio direto restrito a grandes empresas habilitadas junto ao BNDES, "
+            "com vedação de distribuição de recursos a sócios/acionistas durante a vigência "
+            "do financiamento; valor mínimo de R$ 50 milhões por operação direta. Elegibilidade "
+            "deve estar vigente na data de contratação.",
+        "criterios_elegibilidade": "Pertencer a um dos 3 grupos de elegibilidade do Programa "
+            "(consulta de CNPJ via plataforma eletrônica para Grupos 1 e 3; CNAE cadastrado "
+            "na Receita Federal para Grupo 2); manter elegibilidade até a contratação.",
+        "agente_financeiro": "BNDES (apoio direto) ou instituições financeiras credenciadas "
+            "(apoio indireto)",
+        "canal_contratacao": "Portal do Cliente do BNDES, Módulo Financiamento (apoio "
+            "direto); gerente da instituição financeira de relacionamento credenciada (apoio "
+            "indireto)",
+        "prazo_inscricao": "Protocolo reaberto em 18/09/2026. Operações diretas: até "
+            "04/11/2026. Operações indiretas: até 11/11/2026 (17/11/2026 para as que não "
+            "exigem documentação adicional).",
+        "fluxo": "continuo",
+        "documentos_necessarios": "Autodeclaração de elegibilidade (Grupo 1); declarações "
+            "socioambientais para setores específicos.",
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/"
+            "brasil-soberano-competitividade/giro-direto",
+        "data_vigencia": "Medida Provisória nº 1.345/2026 (convertida na Lei nº 15.473/2026), "
+            "alterada pela Medida Provisória nº 1.379/2026; Circular SUP/ADIG nº 125/2026-BNDES",
+        "trecho_fonte": (
+            '"Apoio, por meio da oferta de capital de giro, à necessidade de liquidez de '
+            'empresas para o enfrentamento dos impactos causados por razões geopolíticas e de '
+            'instabilidade internacional, inclusive aqueles decorrentes da aplicação de '
+            'percentuais majorados de tarifas comerciais." / "Taxa de juros total: 11,7% até '
+            '15,7% a.a." / "O Programa prevê quatro modalidades de crédito: Giro, Giro '
+            'Exportação, Bens de Capital, Investimento (...) O valor mínimo de cada operação '
+            'direta no âmbito do Programa é de R$ 50 milhões." (capturado ao vivo das páginas '
+            "oficiais via Browser pane em 2026-09-22)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INDUSTRIA",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes (indireto) / Grande (direto)",
+        "destinacao_padronizada": "Capital de giro emergencial (tarifas/geopolítica)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "brasil soberano competitividade giro capital de giro tarifaco "
+            "eua golfo persico bndes 2026",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "Programa BNDES Brasil Soberano Competitividade - Modalidade Giro "
+            "Exportação",
+        "nome_simplificado": "Brasil Soberano - Giro Exportação",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Capital de giro pré-embarque para produção destinada à "
+            "exportação, para empresas afetadas por tarifas dos EUA ou instabilidade "
+            "geopolítica no Golfo Pérsico.",
+        "descricao_completa": "Apoio, na fase pré-embarque, à produção para exportação de "
+            "bens para o enfrentamento dos impactos causados por razões geopolíticas e de "
+            "instabilidade internacional, inclusive aqueles decorrentes da aplicação de "
+            "percentuais majorados de tarifas comerciais. Recursos orçamentários desta "
+            "modalidade atualmente dedicados aos Grupos 1 e 3 (não ao Grupo 2/fertilizantes).",
+        "modalidade": "Direta e Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Grupo 1: exportadores de bens industriais afetados pela "
+            "majoração de tarifas dos EUA; Grupo 3: exportadores para países do Golfo Pérsico "
+            "afetados por instabilidade geopolítica -- conforme Lei nº 15.473/2026. Empresas "
+            "precisam ser produtoras E exportadoras dos bens. Recursos desta modalidade "
+            "atualmente não dedicados ao Grupo 2.",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Todos os portes via apoio indireto; apoio direto restrito a "
+            "grandes empresas habilitadas junto ao BNDES",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Capital de giro para produção pré-embarque destinada à exportação",
+        "itens_financiaveis": "Produção para exportação: para o Grupo 1, produtos listados "
+            "pelo MDIC (Portaria 171/2026); para o Grupo 3, qualquer bem classificado por NCM, "
+            "exceto obras de arte/antiguidades (Capítulo 97).",
+        "itens_nao_financiaveis": "Obras de arte e antiguidades (NCM Capítulo 97).",
+        "valor_minimo": 50_000_000,
+        "valor_maximo": 300_000_000,
+        "percentual_financiavel": "Até 100% do Valor do Compromisso de Exportação (FOB, em "
+            "dólares); apoio indireto limitado a R$ 50 milhões por cliente final",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Apoio direto: Custo Financeiro (50% taxa fixa de 2,0% a.a. + 50% "
+            "Taxa LCD) + Remuneração do BNDES (a partir de 1,3% a.a.) + taxa de risco de "
+            "crédito variável -- taxa total estimada de 10,1% a 14,1% a.a. Apoio indireto: "
+            "Custo Financeiro (50% fixo 2,0% a.a. + 50% LCD) + Taxa do BNDES (1,5% a.a.) + "
+            "Taxa do Agente Financeiro (até 5% a.a., negociada) -- taxa total estimada de "
+            "10,3% a 15,9% a.a., referência LCD de 01/09/2026.",
+        "indexador": "Taxa LCD (Custo de Captação do BNDES) para 50% do custo financeiro",
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 60 meses, incluída a carência",
+        "carencia": "Até 12 meses (sem capitalização de juros na carência)",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Negociadas durante a análise da operação entre o cliente e o BNDES "
+            "(apoio direto) ou entre o cliente e o agente financeiro (apoio indireto)",
+        "restricoes": "Apoio direto restrito a grandes empresas habilitadas junto ao BNDES; "
+            "valor mínimo de R$ 50 milhões por operação direta. Recursos liberados em até 90 "
+            "dias da contratação. Compromisso de exportação e, para setores específicos, "
+            "declarações socioambientais exigidas.",
+        "criterios_elegibilidade": "Pertencer ao Grupo 1 ou Grupo 3 (consulta via plataforma "
+            "eletrônica); ser produtora e exportadora dos bens; manter elegibilidade até a "
+            "contratação.",
+        "agente_financeiro": "BNDES (apoio direto) ou instituições financeiras credenciadas "
+            "(apoio indireto)",
+        "canal_contratacao": "Portal do Cliente do BNDES, Módulo Financiamento (apoio "
+            "direto); gerente da instituição financeira de relacionamento credenciada (apoio "
+            "indireto)",
+        "prazo_inscricao": "Protocolo reaberto em 18/09/2026. Operações diretas: até "
+            "04/11/2026. Operações indiretas: até 11/11/2026 (17/11/2026 para as que não "
+            "exigem documentação adicional).",
+        "fluxo": "continuo",
+        "documentos_necessarios": "Autodeclaração de elegibilidade (Grupo 1); compromisso de "
+            "exportação; declarações socioambientais para setores específicos.",
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/"
+            "brasil-soberano-competitividade/giro-exportacao-direto",
+        "data_vigencia": "Medida Provisória nº 1.345/2026 (convertida na Lei nº 15.473/2026), "
+            "alterada pela Medida Provisória nº 1.379/2026; Circular SUP/AEX nº 07/2026",
+        "trecho_fonte": (
+            '"Apoio, na fase pré-embarque, à produção para exportação de bens para o '
+            'enfrentamento dos impactos causados por razões geopolíticas e de instabilidade '
+            'internacional, inclusive aqueles decorrentes da aplicação de percentuais '
+            'majorados de tarifas comerciais." / "Nas operações indiretas, a Taxa de juros é '
+            'composta pelo Custo Financeiro, pela Taxa do BNDES e pela Taxa do Agente '
+            'Financeiro (...) Custo financeiro: 50% Custo Fixo de 2% a.a. + 50% CustoTaxa LCD '
+            '(...) Taxa do BNDES: 1,5% a.a. (...) Taxa do agente financeiro: Até 5% a.a. - '
+            'Negociada entre a Instituição e o cliente (...) Taxa de juros total: De 10,3% '
+            'a.a. a 15,9% a.a." (capturado ao vivo das páginas oficiais via Browser pane em '
+            "2026-09-22)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INDUSTRIA",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes (indireto) / Grande (direto)",
+        "destinacao_padronizada": "Capital de giro para exportação (tarifas/geopolítica)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "brasil soberano competitividade giro exportacao pre-embarque "
+            "tarifaco eua golfo persico bndes 2026",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "Programa BNDES Brasil Soberano Competitividade - Modalidade Bens de "
+            "Capital",
+        "nome_simplificado": "Brasil Soberano - Bens de Capital",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento à aquisição de máquinas e equipamentos novos de "
+            "fabricação nacional para empresas afetadas por tarifas dos EUA, instabilidade no "
+            "Golfo Pérsico ou setores industriais estratégicos.",
+        "descricao_completa": "Financiamento à aquisição de máquinas e equipamentos destinado "
+            "ao enfrentamento dos impactos causados por razões geopolíticas e de instabilidade "
+            "internacional, inclusive aqueles decorrentes da aplicação de percentuais "
+            "majorados de tarifas comerciais.",
+        "modalidade": "Direta e Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Grupo 1: exportadores de bens industriais e fornecedores "
+            "afetados pela majoração de tarifas dos EUA; Grupo 2: indústrias com CNAEs do "
+            "Anexo I da Portaria MDIC/MF nº 194/2026 (inclui fertilizantes e demais setores "
+            "industriais relevantes ao comércio exterior, diferente da modalidade Giro); "
+            "Grupo 3: exportadores para países do Golfo Pérsico -- conforme Lei nº "
+            "15.473/2026.",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Todos os portes via apoio indireto; apoio direto restrito a "
+            "grandes empresas habilitadas junto ao BNDES",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Aquisição de máquinas e equipamentos novos de fabricação nacional",
+        "itens_financiaveis": "Máquinas, equipamentos, sistemas industriais e bens de "
+            "informática e automação, novos, de fabricação nacional, credenciados no "
+            "Credenciamento Finame (CFI) do BNDES. Itens adquiridos antes de 24/03/2026 não "
+            "são elegíveis.",
+        "itens_nao_financiaveis": "Bens usados ou adquiridos antes de 24/03/2026; bens não "
+            "credenciados no Finame (CFI).",
+        "valor_minimo": 50_000_000,
+        "valor_maximo": 500_000_000,
+        "percentual_financiavel": "Até 100% dos itens financiáveis (apoio direto); apoio "
+            "indireto disponível via instituições financeiras credenciadas para operações de "
+            "menor valor",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Apoio direto -- Custo Financeiro: Minerais Críticos e Terras Raras "
+            "(Anexo I da Portaria MDIC/MF 194/2026): 3,0% a.a.; demais setores: 8% a.a.; "
+            "Remuneração do BNDES: 1,3% a.a.; taxa de risco de crédito variável -- taxa total "
+            "estimada de 4,3% a 8,2% a.a. (Minerais Críticos) ou 9,3% a 13,4% a.a. (demais "
+            "setores). Apoio indireto: existe (mencionado na página do apoio direto e no hub "
+            "do Programa, disponível a empresas de todos os portes via instituição "
+            "credenciada), mas a página oficial específica desta modalidade/canal retornou "
+            "erro 404 no momento da captura (22/09/2026) -- composição exata da taxa do "
+            "apoio indireto para Bens de Capital fica NAO_INFORMADO.",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 60 meses, incluída a carência",
+        "carencia": "Até 12 meses (sem capitalização de juros na carência)",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Negociadas durante a análise da operação entre o cliente e o BNDES "
+            "(apoio direto)",
+        "restricoes": "Apoio direto restrito a grandes empresas habilitadas junto ao BNDES; "
+            "valor mínimo de R$ 50 milhões por operação direta. Prazo de utilização dos "
+            "recursos de 12 meses da formalização, prorrogável por mais 12 meses a critério "
+            "do BNDES.",
+        "criterios_elegibilidade": "Pertencer a um dos 3 grupos de elegibilidade do Programa; "
+            "manter elegibilidade até a contratação.",
+        "agente_financeiro": "BNDES (apoio direto); instituições financeiras credenciadas "
+            "(apoio indireto, condições específicas não confirmadas na fonte oficial)",
+        "canal_contratacao": "Portal do Cliente do BNDES, Módulo Financiamento (apoio direto)",
+        "prazo_inscricao": "Protocolo reaberto em 18/09/2026. Operações diretas: até "
+            "04/11/2026. Operações indiretas: até 11/11/2026 (17/11/2026 para as que não "
+            "exigem documentação adicional).",
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/"
+            "brasil-soberano-competitividade/bens-capital-direto",
+        "data_vigencia": "Medida Provisória nº 1.345/2026 (convertida na Lei nº 15.473/2026), "
+            "alterada pela Medida Provisória nº 1.379/2026; Circular SUP/ADIG nº 125/2026-BNDES",
+        "trecho_fonte": (
+            '"Financiamento à aquisição de máquinas e equipamentos destinado ao enfrentamento '
+            'dos impactos causados por razões geopolíticas e de instabilidade internacional, '
+            'inclusive aqueles decorrentes da aplicação de percentuais majorados de tarifas '
+            'comerciais." / "Custo financeiro: Minerais Críticos AIT: 3,0% a.a. Demais '
+            'setores: 8% a.a. (...) Remuneração do BNDES: 1,3% a.a. (...) Taxa de juros total: '
+            'Minerais Críticos AIT: De 4,3% até 8,2% a.a. Demais Setores: De 9,3% até 13,4% '
+            'a.a." (capturado ao vivo da página oficial via Browser pane em 2026-09-22; a '
+            "página de apoio indireto desta modalidade [/financiamento/produto/"
+            "bens-de-capital-indireto] retornou erro 404 na mesma captura)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INDUSTRIA",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes (indireto) / Grande (direto)",
+        "destinacao_padronizada": "Aquisição de máquinas e equipamentos (tarifas/geopolítica)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "brasil soberano competitividade bens de capital maquinas "
+            "equipamentos finame tarifaco eua golfo persico bndes 2026",
+    },
+    {
+        "instituicao": "BNDES",
+        "nome_oficial": "Programa BNDES Brasil Soberano Competitividade - Modalidade "
+            "Investimento",
+        "nome_simplificado": "Brasil Soberano - Investimento",
+        "sigla": None,
+        "status": "aberta",
+        "descricao_resumida": "Financiamento a projetos de investimento (implantação, "
+            "modernização, ampliação, relocalização) para empresas afetadas por tarifas dos "
+            "EUA, instabilidade no Golfo Pérsico ou setores industriais estratégicos.",
+        "descricao_completa": "Financiamento a projetos de investimento destinado ao "
+            "enfrentamento dos impactos causados por razões geopolíticas e de instabilidade "
+            "internacional, inclusive aqueles decorrentes da aplicação de percentuais "
+            "majorados de tarifas comerciais. Exclui capital de giro (livre ou associado) e "
+            "planos de investimento genéricos.",
+        "modalidade": "Direta e Indireta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Grupo 1: exportadores de bens industriais e fornecedores "
+            "afetados pela majoração de tarifas dos EUA; Grupo 2: indústrias com CNAEs do "
+            "Anexo I da Portaria MDIC/MF nº 194/2026 (inclui fertilizantes e demais setores "
+            "industriais relevantes ao comércio exterior); Grupo 3: exportadores para países "
+            "do Golfo Pérsico -- conforme Lei nº 15.473/2026.",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Todos os portes via apoio indireto; apoio direto restrito a "
+            "grandes empresas habilitadas junto ao BNDES",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Brasil",
+        "destinacao": "Adaptação da atividade produtiva, ampliação de capacidade produtiva, "
+            "inovação tecnológica",
+        "itens_financiaveis": "Adaptação da atividade produtiva, incluindo implantação, "
+            "modernização, ampliação e relocalização; expansão de capacidade produtiva ou "
+            "aprofundamento de cadeia produtiva; inovação tecnológica ou adaptação de "
+            "produtos/serviços/processos para conformidade com o comércio internacional.",
+        "itens_nao_financiaveis": "Capital de giro (livre ou associado ao investimento); "
+            "planos de investimento genéricos.",
+        "valor_minimo": 50_000_000,
+        "valor_maximo": 500_000_000,
+        "percentual_financiavel": "Até 100% dos itens financiáveis",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Apoio direto -- Custo Financeiro: Minerais Críticos e Terras Raras: "
+            "3,0% a.a.; demais setores: 6,5% a.a.; Remuneração do BNDES: 1,3% a.a.; taxa de "
+            "risco de crédito variável -- taxa total estimada de 4,3% a 8,2% a.a. (Minerais "
+            "Críticos) ou 7,9% a 11,8% a.a. (demais setores). Apoio indireto -- Custo "
+            "Financeiro: Minerais Críticos: 3% a.a.; demais setores: 6,5% a.a.; Taxa do "
+            "BNDES: 1,5% a.a.; Taxa do Agente Financeiro: até 5% a.a. (negociada) -- taxa "
+            "total estimada de 4,5% a 9,8% a.a. (Minerais Críticos) ou 8,1% a 13,5% a.a. "
+            "(demais setores).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 240 meses, incluída a carência",
+        "carencia": "Até 48 meses (sem capitalização de juros na carência)",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Negociadas durante a análise da operação entre o cliente e o BNDES "
+            "(apoio direto) ou entre o cliente e o agente financeiro (apoio indireto)",
+        "restricoes": "Apoio direto restrito a grandes empresas habilitadas junto ao BNDES, "
+            "com vedação de distribuição de recursos a sócios/acionistas; valor mínimo de R$ "
+            "50 milhões por operação direta. Apoio indireto limitado a R$ 50 milhões por "
+            "cliente. Prazo de protocolo desta modalidade (apoio direto) estendido até "
+            "31/12/2027, diferente das demais modalidades do Programa.",
+        "criterios_elegibilidade": "Pertencer a um dos 3 grupos de elegibilidade do Programa; "
+            "manter elegibilidade até a contratação.",
+        "agente_financeiro": "BNDES (apoio direto) ou instituições financeiras credenciadas "
+            "(apoio indireto)",
+        "canal_contratacao": "Portal do Cliente do BNDES, Módulo Financiamento (apoio "
+            "direto); gerente da instituição financeira de relacionamento credenciada (apoio "
+            "indireto)",
+        "prazo_inscricao": "Protocolo reaberto em 18/09/2026. Operações diretas: até "
+            "31/12/2027 (exceção às demais modalidades, cujo prazo direto é 04/11/2026). "
+            "Operações indiretas: até 11/11/2026 (17/11/2026 para as que não exigem "
+            "documentação adicional).",
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bndes.gov.br/wps/portal/site/home/financiamento/produto/"
+            "brasil-soberano-competitividade/investimento-direto",
+        "data_vigencia": "Medida Provisória nº 1.345/2026 (convertida na Lei nº 15.473/2026), "
+            "alterada pela Medida Provisória nº 1.379/2026; Circular SUP/ADIG nº 125/2026-BNDES",
+        "trecho_fonte": (
+            '"Financiamento a projetos de investimento destinado ao enfrentamento dos '
+            'impactos causados por razões geopolíticas e de instabilidade internacional, '
+            'inclusive aqueles decorrentes da aplicação de percentuais majorados de tarifas '
+            'comerciais." / "Custo financeiro: Minerais Críticos AIT: 3,0 a.a. Demais '
+            'setores: 6,5% a.a. (...) Remuneração do BNDES: 1,3% a.a. (...) Taxa de juros '
+            'total: Minerais Críticos AIT: De 4,3% até 8,2% a.a. Demais Setores: De 7,9% até '
+            '11,8% a.a." / "Prazo total: até 240 meses. Grace period: até 48 meses" '
+            "(capturado ao vivo da página oficial via Browser pane em 2026-09-22)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INDUSTRIA",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes (indireto) / Grande (direto)",
+        "destinacao_padronizada": "Investimento produtivo emergencial (tarifas/geopolítica)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": "Inovação tecnológica para adaptação a comércio internacional",
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "brasil soberano competitividade investimento projeto tarifaco "
+            "eua golfo persico bndes 2026",
+    },
 ]
 
 
@@ -4480,6 +4888,102 @@ _BB_MANUAL = [
         "temas_sustentabilidade": None,
         "sinonimos_termos": "fco rural investimento agropecuario centro-oeste fundo "
             "constitucional banco do brasil",
+    },
+    # FCO Empresarial: linha "guarda-chuva" empresarial do FCO (Fundo Constitucional de
+    # Financiamento do Centro-Oeste), distinta do FCO Rural já curado acima. O hub do BB
+    # (bb.com.br/.../fcoempresarial) lista outras 4 linhas dentro do FCO (Jovens
+    # Empreendedores, Mulher Empreendedora, Pantanal e Cerrado, Quilombo) -- deliberadamente
+    # NÃO curadas aqui: são recortes demográficos/situacionais mais estreitos da mesma linha
+    # "guarda-chuva" e a página oficial não divulga valores/taxas próprios para elas (só
+    # "condições diferenciadas", sem número), ao contrário do FCO Empresarial, que tem FAQ
+    # própria com dados concretos. Dados extraídos via JS do FAQ (bb-accordion-item, com
+    # conteúdo completo no DOM mesmo colapsado -- mesmo achado técnico já registrado para
+    # outras páginas do BB) em 2026-09-22.
+    {
+        "instituicao": "BB",
+        "nome_oficial": "FCO Empresarial",
+        "nome_simplificado": "FCO Empresarial",
+        "sigla": "FCO",
+        "status": "aberta",
+        "descricao_resumida": "Linha de crédito do Fundo Constitucional de Financiamento do "
+            "Centro-Oeste (FCO) para projetos de investimento de empresas de qualquer porte "
+            "nos setores industrial, agroindustrial, mineral, comercial, de serviços, "
+            "turismo e infraestrutura na região Centro-Oeste.",
+        "descricao_completa": "O FCO Empresarial é uma linha de crédito com prazos, limites "
+            "e encargos financeiros diferenciados, destinada a empreendimentos localizados na "
+            "região Centro-Oeste, com recursos do Fundo Constitucional de Financiamento do "
+            "Centro-Oeste (FCO), criado pela Constituição Federal de 1988 e regulamentado "
+            "pela Lei nº 7.827/89.",
+        "modalidade": "Direta",
+        "tipo_apoio": "Financiamento",
+        "setores_elegiveis": "Industrial, agroindustrial, mineral, comercial, de serviços, "
+            "de turismo, de infraestrutura, entre outros",
+        "setores_nao_elegiveis": NAO_INFORMADO,
+        "porte_elegivel": "Empresas de qualquer tamanho",
+        "faixa_receita": NAO_INFORMADO,
+        "regiao_elegivel": "Centro-Oeste (Mato Grosso, Mato Grosso do Sul, Goiás e Distrito "
+            "Federal)",
+        "destinacao": "Projetos de investimento, com possibilidade de giro associado",
+        "itens_financiaveis": "Implantação ou modernização de fábricas, agroindústrias e "
+            "unidades de beneficiamento; extração e beneficiamento de minérios; construção ou "
+            "reforma de hotéis, pousadas e infraestrutura turística; projetos de energia, "
+            "saneamento, logística e conectividade; expansão de redes varejistas, centros de "
+            "distribuição, serviços de saúde e educação; capital de giro associado ao "
+            "investimento.",
+        "itens_nao_financiaveis": NAO_INFORMADO,
+        "valor_minimo": None,
+        "valor_maximo": None,
+        "percentual_financiavel": "Até 100% dos bens, a depender do porte da empresa e da "
+            "região do empreendimento",
+        "contrapartida": NAO_INFORMADO,
+        "taxa_completa": "Taxa de juros pré ou pós-fixada, à escolha do cliente, definida "
+            "caso a caso conforme deliberação do Conselho Monetário Nacional (CMN); bônus de "
+            "adimplência de 15% sobre os juros para pagamentos em dia (percentual de spread "
+            "não documentado publicamente).",
+        "indexador": NAO_INFORMADO,
+        "spread": NAO_INFORMADO,
+        "prazo_total": "Até 20 anos, incluída a carência",
+        "carencia": "De 3 meses até, no máximo, 5 anos",
+        "amortizacao": NAO_INFORMADO,
+        "garantias": "Fidejussórias e/ou reais, garantindo 100% da operação",
+        "restricoes": "Valores mínimo e máximo de cada operação dependem do porte da empresa "
+            "e do projeto de investimento (não padronizados publicamente); contratação sujeita "
+            "a análise cadastral e aprovação de crédito, e às normas vigentes da Programação "
+            "do FCO divulgadas pela Sudeco.",
+        "criterios_elegibilidade": "Conta corrente ativa no Banco do Brasil; análise "
+            "financeira, documental e do projeto de investimento do proponente.",
+        "agente_financeiro": "Banco do Brasil",
+        "canal_contratacao": "Agências do Banco do Brasil",
+        "prazo_inscricao": NAO_INFORMADO,
+        "fluxo": "continuo",
+        "documentos_necessarios": NAO_INFORMADO,
+        "url_oficial": "https://www.bb.com.br/pbb/pagina-inicial/corporate/produtos-e-servicos/"
+            "credito/financiar-um-investimento/fcoempresarial",
+        "data_vigencia": "Lei nº 7.827, de 27/09/1989 (Fundo Constitucional de Financiamento "
+            "do Centro-Oeste)",
+        "trecho_fonte": (
+            '"O FCO Empresarial é uma linha de crédito com prazos, limites e encargos '
+            'financeiros diferenciados, destinada a empreendimentos localizados da região '
+            'Centro-Oeste." / "Empresas de qualquer tamanho dos setores industrial, '
+            'agroindustrial, mineral, comercial, de serviços, de turismo, de infraestrutura, '
+            'entre outros." / "Prazos podem chegar a até 20 anos (incluída carência de três '
+            'meses até, no máximo, cinco anos)." / "Financiamento de até 100% dos bens, a '
+            'depender do porte e da região em que se encontra o empreendimento." / '
+            '"Fidejussórias e/ou reais, garantindo 100% da operação." (capturado ao vivo do '
+            "FAQ da página oficial via Browser pane/JS em 2026-09-22)"
+        ),
+        "origem_dado": "curadoria_manual_verificada",
+        "origem_raw_id": None,
+        "setor_padronizado": "INDUSTRIA",
+        "subsetor_padronizado": None,
+        "cnaes_relacionados": None,
+        "porte_padronizado": "Todos os portes",
+        "destinacao_padronizada": "Investimento produtivo regional (Centro-Oeste)",
+        "tecnologias_relacionadas": None,
+        "temas_inovacao": None,
+        "temas_sustentabilidade": None,
+        "sinonimos_termos": "fco empresarial centro-oeste fundo constitucional banco do "
+            "brasil investimento industria agroindustria turismo",
     },
 ]
 
