@@ -154,6 +154,23 @@ function _kpiMiniDetalhe(rotulo, valor, sub) {
   </div>`;
 }
 
+// Texto completo expansivel (gap-fix 2026-09-22, item 2): Enquadramento
+// (criterios_elegibilidade) e "O que pode ser financiado" (itens_financiaveis)
+// so apareciam truncados em 80 caracteres no resumo executivo (ver
+// _kpiMiniDetalhe abaixo) -- sem NENHUM lugar com o texto integral. Acordeao
+// nativo <details>/<summary> (sem lib nova) nas secoes secundarias, junto de
+// descricao_completa/garantias/restricoes (que ja mostram texto integral) --
+// mesma classe .meta do resto do detalhe, so fica fechado por padrao.
+function _campoDetalheExpansivel(rotulo, valor) {
+  if (valor === null || valor === undefined || valor === "") return "";
+  return `<div class="meta" style="margin-top:6px;">
+    <details>
+      <summary style="cursor:pointer;"><strong>${rotulo}</strong> <span class="hint">(ver texto completo)</span></summary>
+      <div style="margin-top:6px;">${valor}</div>
+    </details>
+  </div>`;
+}
+
 // Secao com titulo (reaproveita .card/.card-header, ja usados no resto do site)
 // -- so renderiza se tiver ao menos 1 campo preenchido, pra nao mostrar um card
 // vazio so com titulo.
@@ -182,26 +199,37 @@ async function openLinhaDetalhe(id) {
   }
   document.getElementById("modal-title").textContent = l.nome_oficial;
 
-  // Reorganizacao (item 2 do pedido): "resumo executivo" no topo, pensado pra
-  // responder rapido "essa linha serve pro meu projeto?" -- Taxa/Prazo/
-  // Carência/Participação no projeto/Enquadramento/O que pode ser financiado,
-  // NESSA ordem. Nenhum campo que ja existia foi removido -- so reordenado em
-  // secoes abaixo do resumo (ver mapeamento campo->secao nos comentarios).
+  // Reorganizacao (item 2 do pedido, revisada no gap-fix de 2026-09-22 item 1):
+  // "resumo executivo" no topo, pensado pra responder rapido "essa linha serve
+  // pro meu projeto?" -- ordem final: Taxa/Prazo/Carência/Participação no
+  // projeto/Volume-limites/Enquadramento/O que pode ser financiado/Porte
+  // elegível/Setores aplicáveis. Volume-limites, Porte elegível e Setores
+  // aplicáveis SUBIRAM pro destaque (antes so apareciam mais abaixo, em secoes
+  // secundarias) -- removidos de la pra nao duplicar (ver secoes "Setores e
+  // público-alvo"/"Condições adicionais" mais abaixo). Nenhum campo foi
+  // escondido, so reordenado/promovido.
   const resumo = `
     <div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-top:10px;">
       ${_kpiMiniDetalhe("Taxa", l.taxa_completa, [l.indexador, l.spread].filter((v) => v && v !== "Não informado pela fonte").join(" · ") || null)}
       ${_kpiMiniDetalhe("Prazo", l.prazo_total)}
       ${_kpiMiniDetalhe("Carência", l.carencia)}
       ${_kpiMiniDetalhe("Participação no projeto", l.percentual_financiavel)}
+      ${_kpiMiniDetalhe("Volume/limites", fmtValorLinha(l.valor_minimo, l.valor_maximo))}
       ${_kpiMiniDetalhe("Enquadramento", l.criterios_elegibilidade ? l.criterios_elegibilidade.slice(0, 80) + (l.criterios_elegibilidade.length > 80 ? "…" : "") : null)}
       ${_kpiMiniDetalhe("O que pode ser financiado", l.itens_financiaveis ? l.itens_financiaveis.slice(0, 80) + (l.itens_financiaveis.length > 80 ? "…" : "") : null)}
+      ${_kpiMiniDetalhe("Porte elegível", l.porte_padronizado)}
+      ${_kpiMiniDetalhe("Setores aplicáveis", l.setores_elegiveis)}
     </div>
   `;
 
   body.innerHTML = `
     <div class="meta"><span class="badge neutro">${l.instituicao}</span> · ${l.status || "Não informado pela fonte"} · ${l.fluxo === "edital" ? "Edital/chamada pública" : "Fluxo contínuo"}</div>
     ${resumo}
-    ${_secaoDetalhe("Descrição", [_campoDetalhe("Descrição completa", l.descricao_completa)])}
+    ${_secaoDetalhe("Descrição", [
+      _campoDetalhe("Descrição completa", l.descricao_completa),
+      _campoDetalheExpansivel("Enquadramento (critérios de elegibilidade) -- texto completo", l.criterios_elegibilidade),
+      _campoDetalheExpansivel("O que pode ser financiado -- texto completo", l.itens_financiaveis),
+    ])}
     ${_secaoDetalhe("Instituição", [
       _campoDetalhe("Agente financeiro", l.agente_financeiro),
       _campoDetalhe("Canal de contratação", l.canal_contratacao),
@@ -209,15 +237,12 @@ async function openLinhaDetalhe(id) {
       _campoDetalhe("Tipo de apoio", l.tipo_apoio),
     ])}
     ${_secaoDetalhe("Setores e público-alvo", [
-      _campoDetalhe("Setores elegíveis", l.setores_elegiveis),
       _campoDetalhe("Setores não elegíveis", l.setores_nao_elegiveis),
-      _campoDetalhe("Porte elegível", l.porte_padronizado),
       _campoDetalhe("Faixa de receita", l.faixa_receita),
       _campoDetalhe("Região elegível", l.regiao_elegivel),
       _campoDetalhe("Destinação", l.destinacao),
     ])}
     ${_secaoDetalhe("Condições adicionais", [
-      _campoDetalhe("Valor financiável", fmtValorLinha(l.valor_minimo, l.valor_maximo)),
       _campoDetalhe("Itens não financiáveis", l.itens_nao_financiaveis),
       _campoDetalhe("Contrapartida", l.contrapartida),
       _campoDetalhe("Amortização", l.amortizacao),

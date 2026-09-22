@@ -196,6 +196,75 @@ def _rotulo_score(score_pct: int) -> str:
     return "Baixa"
 
 
+# Desempate por frequencia historica (item 4 do gap-fix 2026-09-22) -- SO entra
+# depois do score de aderencia (nunca compoe/sobrepoe o score em si, ver
+# `resultados.sort` em potenciais_buscar). Sem FK entre linhas_incentivadas e
+# operations -- casamento por aproximacao de texto (nome da linha contra
+# operations.produto/instrumento) via similarity() do pg_trgm (extensao ja
+# instalada, ver src/db.py). Limiar mais alto (conservador) que o generico de
+# busca (LIMIAR_SIMILARIDADE_TRGM = 0.25 em src/search_fts.py, usado pra nomes
+# de CLIENTE) -- aqui um falso-positivo contaria operacoes de um produto
+# diferente como se fossem da linha, o que e pior que simplesmente nao ter o
+# sinal (frequencia_historica vira None nesse caso, tratado como "sem dado").
+LIMIAR_SIMILARIDADE_TRGM_HISTORICO = 0.4
+
+# Restricao conhecida (ver CLAUDE.md/docs/linhas-incentivadas.md):
+# operations.agencia SO tem 'BNDES'/'FINEP' -- a base de transacoes reais NAO
+# cobre BNB/Desenvolve SP/BASA/BB/CEF (a maioria do catalogo). Linhas de
+# qualquer outra instituicao NUNCA entram no calculo de frequencia (ficam
+# sempre com frequencia_historica = None, nunca 0 -- 0 implicaria "confirmado
+# que nao e usada", o que nao podemos afirmar por limitacao de cobertura).
+_AGENCIAS_COM_OPERACOES_REAIS = ("BNDES", "FINEP")
+
+# So vira motivo textual ("frequentemente utilizada...") acima deste piso --
+# 1-2 correspondencias por similaridade de texto sao ruido demais pra virar uma
+# frase de "uso frequente" no motivo exibido ao usuario.
+FREQUENCIA_HISTORICA_MOTIVO_MINIMO = 10
+
+
+def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
+    """Conta operacoes reais em `operations` que correspondem (por similaridade
+    de texto, pg_trgm) ao nome de cada linha do BNDES/FINEP -- usado SO como
+    desempate secundario no ranking (nunca como parte do score de aderencia).
+    Recebe so os candidatos cuja instituicao ja e BNDES/FINEP (filtrado pelo
+    chamador) -- os demais nunca chegam aqui, entao nunca tem seu
+    "nao aparece na base" mal-interpretado como "linha pouco usada" (ver
+    comentario da constante _AGENCIAS_COM_OPERACOES_REAIS acima).
+
+    Agrupa `operations` por agencia + COALESCE(produto, instrumento) ANTES de
+    comparar (poucas dezenas/centenas de termos distintos por agencia) em vez
+    de rodar similarity() linha a linha contra as ~59 mil operacoes -- mais
+    barato e nao exige nenhum indice novo (nenhuma mudanca de schema)."""
+    if not candidatos_bndes_finep:
+        return {}
+
+    linhas_values = []
+    params = []
+    for c in candidatos_bndes_finep:
+        linhas_values.append("(?, ?, ?)")
+        params.extend([c["id"], c["instituicao"], c["nome"]])
+
+    query = f"""
+        WITH termos AS (
+            SELECT agencia, COALESCE(produto, instrumento) AS termo, COUNT(*) AS n
+            FROM operations
+            WHERE agencia IN ('BNDES', 'FINEP') AND COALESCE(produto, instrumento) IS NOT NULL
+            GROUP BY agencia, COALESCE(produto, instrumento)
+        ),
+        candidatos(id, instituicao, nome) AS (
+            VALUES {", ".join(linhas_values)}
+        )
+        SELECT c.id, SUM(t.n)
+        FROM candidatos c
+        JOIN termos t
+          ON t.agencia = c.instituicao
+         AND similarity(unaccent(lower(t.termo)), unaccent(lower(c.nome))) > {LIMIAR_SIMILARIDADE_TRGM_HISTORICO}
+        GROUP BY c.id
+    """
+    rows = cur.execute(query, params).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
+
 @router.get("/buscar")
 def potenciais_buscar(
     setor: str = None, porte: str = None, volume: float = None, uso: str = None,
@@ -254,7 +323,36 @@ def potenciais_buscar(
                 "criterios_avaliados": criterios_avaliados,
             })
 
-        resultados.sort(key=lambda r: (-r["score_pct"], r["nome"] or ""))
+        # Frequencia historica (item 4): sinal SECUNDARIO de desempate, calculado
+        # so pros resultados de instituicao BNDES/FINEP (unicas cobertas por
+        # `operations`, ver _AGENCIAS_COM_OPERACOES_REAIS). Nunca influencia o
+        # score_pct em si -- so a ordem entre linhas empatadas nele. Usa
+        # `nome_oficial` (nunca `nome_simplificado`) pra comparar contra
+        # operations.produto/instrumento -- testado ao vivo contra a base real:
+        # o nome oficial preserva o prefixo "BNDES <categoria>" (ex: "BNDES
+        # Finame Agrícola") que da match de verdade com o produto agregado em
+        # `operations` (ex: "BNDES FINAME", similarity=0.59); o nome
+        # simplificado ("Finame Agrícola", sem o prefixo) cai pra 0.32 -- abaixo
+        # do limiar conservador -- e perderia sinais reais por causa so de um
+        # rotulo mais curto pensado pra exibicao, nao pra matching.
+        candidatos_bndes_finep = [
+            {"id": r["id"], "instituicao": r["instituicao"], "nome": r["nome_oficial"]}
+            for r in resultados if r["instituicao"] in _AGENCIAS_COM_OPERACOES_REAIS
+        ]
+        freq_por_id = _computar_frequencia_historica(cur, candidatos_bndes_finep)
+        for r in resultados:
+            freq = freq_por_id.get(r["id"])
+            r["frequencia_historica"] = freq
+            # So adiciona motivo textual quando o sinal e POSITIVO e real (nunca
+            # infere ausencia/None como "pouco utilizada" -- ver docstring de
+            # _computar_frequencia_historica).
+            if freq is not None and freq >= FREQUENCIA_HISTORICA_MOTIVO_MINIMO:
+                r["motivos"].append(
+                    f"Linha frequentemente utilizada em operações similares na base histórica "
+                    f"(~{freq} operação(ões) com produto/instrumento parecido)"
+                )
+
+        resultados.sort(key=lambda r: (-r["score_pct"], -(r["frequencia_historica"] or 0), r["nome"] or ""))
         return {
             "criterios_informados": {
                 "setor": setor or None, "porte": porte or None,

@@ -38,6 +38,14 @@ function _potenciaisFormAtual() {
     setor: document.getElementById("pt-f-setor").value,
     subsetor: document.getElementById("pt-f-subsetor").value,
     porte: document.getElementById("pt-f-porte").value,
+    // Valor digitado pelo usuario em R$ MM (item 3 do gap-fix 2026-09-22, campo
+    // "Valor desejado (R$ MM)" em index.html) -- ainda em MM aqui, string bruta
+    // do <input>. A conversao pra reais cheios (x 1_000_000) e a validacao
+    // acontecem em _buscarPotenciais, ANTES de montar os parametros pra API e
+    // ANTES de qualquer uso deste mesmo objeto `form` mais abaixo (inclusive
+    // "Transações Semelhantes", que reusa `form` via closure) -- backend
+    // (webapp/potenciais.py) e valor_minimo/valor_maximo de linhas_incentivadas
+    // continuam em reais cheios, sem nenhuma mudanca de schema/contrato.
     volume: document.getElementById("pt-f-volume").value,
     uso: document.getElementById("pt-f-uso").value,
   };
@@ -63,6 +71,15 @@ async function _renderTransacoesSemelhantes(containerId, filtrosForm) {
   if (filtrosForm.setor) params.setor = filtrosForm.setor;
   if (filtrosForm.subsetor) params.subsetor = filtrosForm.subsetor;
   if (filtrosForm.porte) params.porte = filtrosForm.porte;
+  // Instituicao (item 5 do gap-fix 2026-09-22): so quando o CHAMADOR ja
+  // confirmou que a instituicao da linha e uma das poucas que `operations.agencia`
+  // de fato cobre (ver AGENCIAS_COM_OPERACOES_REAIS mais abaixo, no unico lugar
+  // que chama esta funcao com uma linha especifica) -- restricao conhecida
+  // (CLAUDE.md/webapp/potenciais.py): operations.agencia SO tem 'BNDES'/'FINEP',
+  // a base de transacoes reais nao cobre BNB/Desenvolve SP/BASA/BB/CEF. Nunca
+  // inventa um valor de agencia quando a linha e de outra instituicao -- so
+  // filtra quando ha dado real (mesmo texto) pra usar.
+  if (filtrosForm.agencia) params.agencia = filtrosForm.agencia;
   if (filtrosForm.volume) {
     // Faixa em torno do volume informado (metade a 2x) -- comparaveis "na mesma
     // ordem de grandeza", nao so operacoes com o valor EXATO (quase nunca bate).
@@ -145,6 +162,20 @@ async function _buscarPotenciais() {
     return;
   }
 
+  // Valor desejado em R$ MM -> reais cheios (item 3), com validacao simples
+  // contra entrada absurda (0/negativo) -- muta `form.volume` no lugar pra que
+  // TODO uso posterior deste mesmo objeto (params abaixo e "Transações
+  // Semelhantes" via closure no forEach mais abaixo) ja receba o valor em reais.
+  if (form.volume) {
+    const volumeMM = Number(form.volume);
+    if (!Number.isFinite(volumeMM) || volumeMM <= 0) {
+      erroEl.textContent = "Informe um valor desejado válido em R$ MM (maior que zero).";
+      erroEl.style.display = "block";
+      return;
+    }
+    form.volume = volumeMM * 1_000_000;
+  }
+
   const lista = document.getElementById("pt-lista");
   const contagem = document.getElementById("pt-contagem");
   lista.innerHTML = '<p class="empty-state">Buscando linhas potenciais...</p>';
@@ -195,8 +226,15 @@ async function _buscarPotenciais() {
           // sobre o setor generico do formulario -- comparavel mais preciso pra
           // esta linha especifica. Ver mesma taxonomia em linhas.js.
           const SETORES_TAXONOMIA_BNDES = ["AGROPECUÁRIA", "COMERCIO/SERVICOS", "INDUSTRIA", "INFRAESTRUTURA"];
+          // Instituicao (item 5): so passa agencia quando a instituicao da
+          // PROPRIA linha e uma das que `operations.agencia` realmente cobre --
+          // nunca inventa o filtro pra BNB/Desenvolve SP/BASA/BB/CEF (a base de
+          // transacoes reais nao tem essas instituicoes, ver restricao no topo
+          // deste arquivo/CLAUDE.md).
+          const AGENCIAS_COM_OPERACOES_REAIS = ["BNDES", "FINEP"];
           const formComSetorDaLinha = Object.assign({}, form, {
             setor: SETORES_TAXONOMIA_BNDES.includes(l.setor_padronizado) ? l.setor_padronizado : form.setor,
+            agencia: AGENCIAS_COM_OPERACOES_REAIS.includes(l.instituicao) ? l.instituicao : undefined,
           });
           await _renderTransacoesSemelhantes(`pt-transacoes-${l.id}`, formComSetorDaLinha);
         }
