@@ -18,7 +18,14 @@ import datetime
 import sys
 import traceback
 
-from db import drop_rebuild_tables, get_connection, init_db
+from db import (
+    REFRESH_OPERACOES_LOCK_KEY,
+    drop_rebuild_tables,
+    get_connection,
+    init_db,
+    release_pipeline_lock,
+    try_acquire_pipeline_lock,
+)
 import download
 import parse_bndes
 import parse_finep
@@ -104,109 +111,150 @@ def _finalizar_log(log_id: int, finished_at: str, bndes_rows: int, finep_direto_
 
 
 def run_refresh() -> str:
-    """Devolve o status final ('ok'/'parcial'/'erro') -- o chamador de linha de
-    comando (ver __main__) e quem decide se isso vira um sys.exit(1) ('erro' e
-    o unico status que aborta o workflow do GitHub Actions; 'parcial' significa
-    que o refresh terminou mas uma fonte especifica -- BNDES ou FINEP -- teve
-    falha isolada, ver `detalhe`). Sem isso, uma falha total aqui (download fora
-    do ar, banco indisponivel, etc) ficava so registrada dentro do proprio banco
-    (refresh_log.status='erro') mas o processo saia com codigo 0 -- o workflow
-    do GitHub Actions aparecia verde mesmo quando o refresh inteiro falhou."""
+    """Devolve o status final ('ok'/'parcial'/'erro'/'abortado') -- o chamador de linha
+    de comando (ver __main__) e quem decide se isso vira um sys.exit(1) ('erro' e o
+    unico status que aborta o workflow do GitHub Actions; 'parcial' significa que o
+    refresh terminou mas uma fonte especifica -- BNDES ou FINEP -- teve falha isolada,
+    ver `detalhe`; 'abortado' significa que este processo nem chegou a rodar, ver
+    abaixo). Sem isso, uma falha total aqui (download fora do ar, banco indisponivel,
+    etc) ficava so registrada dentro do proprio banco (refresh_log.status='erro') mas
+    o processo saia com codigo 0 -- o workflow do GitHub Actions aparecia verde mesmo
+    quando o refresh inteiro falhou.
+
+    Advisory lock (ver db.py, secao "Advisory locks" -- decisao 2026-09-22 documentada
+    la em detalhe): duas execucoes concorrentes deste pipeline (ex: cron do GitHub
+    Actions sobrepondo um "python refresh.py" manual local, ou duas sessoes de IA
+    rodando o refresh ao mesmo tempo contra o mesmo Postgres de producao) tinham uma
+    janela de corrida real na leitura-depois-escrita de `incremental.py`
+    (existing_hashes() + insert_new_rows()) -- cada execucao poderia inserir a MESMA
+    leva de linhas novas duas vezes. Em vez de uma constraint `UNIQUE(row_hash)`
+    (descartada -- BNDES/FINEP tem linhas legitimamente identicas na fonte, ver
+    comentario em db.py), este pipeline INTEIRO (download -> parse -> unify ->
+    embeddings) so roda depois de obter `REFRESH_OPERACOES_LOCK_KEY` com
+    `pg_try_advisory_lock` (nao bloqueante); se outra execucao ja segura essa chave,
+    aborta IMEDIATAMENTE (nao espera, nao roda em paralelo) e grava
+    status='abortado' em `refresh_log` em vez de tentar processar."""
     init_db()
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     print(f"=== Refresh iniciado em {started_at} ===")
 
-    conn = get_connection()
-    try:
-        drop_rebuild_tables(conn)
-    finally:
-        conn.close()
-
-    # Grava a linha do log JA AGORA (finished_at ainda NULL) -- ver docstring de
-    # _registrar_inicio. Feito antes de baixar/processar qualquer coisa, para que
-    # a janela "em andamento" cubra o run inteiro.
-    log_id = _registrar_inicio(started_at)
-
-    status = "ok"
-    detalhe = ""
-    bndes_rows = finep_direto_rows = finep_desc_rows = ops_rows = pendentes = 0
-
-    try:
-        download.download_all()
-
-        # BNDES e FINEP isolados um do outro de proposito: cada um le suas
-        # proprias abas do xlsx por nome hardcoded (com lookup resiliente a
-        # variacoes de acento/case/espaco, ver `_resolver_aba` em
-        # parse_bndes.py/parse_finep.py), e uma fonte externa (BNDES ou FINEP)
-        # renomear uma aba NAO pode derrubar a outra fonte nem o rebuild de
-        # `operations` que vem depois -- mesma causa raiz real ja corrigida uma
-        # vez so para "Projetos Não Aprovados" (commit 68734bb), generalizada
-        # aqui para as 4 outras leituras hardcoded que tinham o mesmo risco.
-        # Nunca finge sucesso: uma falha de verdade (total ou parcial, aba nao
-        # encontrada nem com o lookup resiliente) fica registrada em `detalhe`.
-        try:
-            n_novas_bndes, bndes_rows, erros_bndes = parse_bndes.parse_bndes()
-            if erros_bndes:
-                aviso = "aviso: BNDES com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_bndes)
-                print(aviso)
-                detalhe += aviso + "\n\n"
-        except Exception:
-            aviso = f"erro: BNDES falhou por completo nesta rodada (nao bloqueia FINEP nem o resto do refresh):\n{traceback.format_exc()}"
-            print(aviso)
-            detalhe += aviso + "\n\n"
-
-        try:
-            _, _, finep_direto_rows, finep_desc_rows, erros_finep = parse_finep.parse_finep()
-            if erros_finep:
-                aviso = "aviso: FINEP com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_finep)
-                print(aviso)
-                detalhe += aviso + "\n\n"
-        except Exception:
-            aviso = f"erro: FINEP falhou por completo nesta rodada (nao bloqueia BNDES nem o resto do refresh):\n{traceback.format_exc()}"
-            print(aviso)
-            detalhe += aviso + "\n\n"
-
-        # Best-effort, isolado de proposito (causa raiz real, 2026-09-21): esta base
-        # so alimenta a taxa de aprovacao (ver docstring de parse_finep_nao_aprovados),
-        # nunca `operations` -- uma falha aqui (ex: a FINEP mudou levemente o nome da
-        # aba do xlsx, fonte externa fora do nosso controle) NAO pode derrubar o
-        # rebuild de `operations` inteiro, que e o que todo o resto do site depende.
-        try:
-            parse_finep.parse_finep_nao_aprovados()
-        except Exception:
-            aviso = f"aviso: parse_finep_nao_aprovados falhou (nao bloqueia o resto do refresh):\n{traceback.format_exc()}"
-            print(aviso)
-            detalhe += aviso + "\n\n"
-
-        resultado_unify = unify.build_operations()
-        ops_rows = resultado_unify["total"]
-        pendentes = resultado_unify["pendentes"]
-        reclassificados_ids = resultado_unify["reclassificados_ids"]
-
-        if pendentes > 0:
-            reclassificados_ids = reclassificados_ids + _resolver_pendentes_via_api()
-            pendentes = _contar_pendentes()
-
-        embeddings.build_embeddings(
-            novos_ids=resultado_unify["novos_ids"],
-            reclassificados_ids=reclassificados_ids,
+    # Conexao DEDICADA para o advisory lock -- fica aberta pela duracao INTEIRA do
+    # pipeline (o lock e por sessao, preso a esta conexao fisica) e so e liberada/
+    # fechada no finally, depois de tudo (sucesso, falha parcial ou erro total).
+    lock_conn = get_connection()
+    if not try_acquire_pipeline_lock(lock_conn, REFRESH_OPERACOES_LOCK_KEY):
+        lock_conn.close()
+        detalhe = (
+            "Outro refresh de operacoes ja esta em andamento (advisory lock "
+            f"{REFRESH_OPERACOES_LOCK_KEY} ocupado por outra sessao/processo) -- "
+            "esta execucao abortou sem tocar em nenhuma tabela, em vez de rodar em "
+            "paralelo e arriscar inserir a mesma leva de linhas novas duas vezes."
         )
-
-        for linha in search_taxonomy.segmentos_sem_sinonimo():
-            print(f"  sinonimo faltando (curadoria manual): {linha['segmento']!r} ({linha['n_operacoes']} operacoes)")
-
-        if status == "ok" and detalhe:
-            # Chegou ate aqui (unify/embeddings rodaram normalmente) mas BNDES e/ou
-            # FINEP tiveram alguma falha registrada acima -- nao e um "ok" limpo nem
-            # um "erro" total, e sim uma falha parcial isolada (ver `detalhe`).
-            status = "parcial"
-    except Exception:
-        status = "erro"
-        detalhe += traceback.format_exc()
-        print(detalhe)
-    finally:
+        print(f"=== Refresh ABORTADO em {started_at}: {detalhe} ===")
         finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        _finalizar_log(log_id, finished_at, bndes_rows, finep_direto_rows, finep_desc_rows, ops_rows, pendentes, status, detalhe)
+        log_id = _registrar_inicio(started_at)
+        _finalizar_log(log_id, finished_at, 0, 0, 0, 0, 0, "abortado", detalhe)
+        return "abortado"
+
+    try:
+        conn = get_connection()
+        try:
+            drop_rebuild_tables(conn)
+        finally:
+            conn.close()
+
+        # Grava a linha do log JA AGORA (finished_at ainda NULL) -- ver docstring de
+        # _registrar_inicio. Feito antes de baixar/processar qualquer coisa, para que
+        # a janela "em andamento" cubra o run inteiro.
+        log_id = _registrar_inicio(started_at)
+
+        status = "ok"
+        detalhe = ""
+        bndes_rows = finep_direto_rows = finep_desc_rows = ops_rows = pendentes = 0
+
+        try:
+            download.download_all()
+
+            # BNDES e FINEP isolados um do outro de proposito: cada um le suas
+            # proprias abas do xlsx por nome hardcoded (com lookup resiliente a
+            # variacoes de acento/case/espaco, ver `_resolver_aba` em
+            # parse_bndes.py/parse_finep.py), e uma fonte externa (BNDES ou FINEP)
+            # renomear uma aba NAO pode derrubar a outra fonte nem o rebuild de
+            # `operations` que vem depois -- mesma causa raiz real ja corrigida uma
+            # vez so para "Projetos Não Aprovados" (commit 68734bb), generalizada
+            # aqui para as 4 outras leituras hardcoded que tinham o mesmo risco.
+            # Nunca finge sucesso: uma falha de verdade (total ou parcial, aba nao
+            # encontrada nem com o lookup resiliente) fica registrada em `detalhe`.
+            try:
+                n_novas_bndes, bndes_rows, erros_bndes = parse_bndes.parse_bndes()
+                if erros_bndes:
+                    aviso = "aviso: BNDES com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_bndes)
+                    print(aviso)
+                    detalhe += aviso + "\n\n"
+            except Exception:
+                aviso = f"erro: BNDES falhou por completo nesta rodada (nao bloqueia FINEP nem o resto do refresh):\n{traceback.format_exc()}"
+                print(aviso)
+                detalhe += aviso + "\n\n"
+
+            try:
+                _, _, finep_direto_rows, finep_desc_rows, erros_finep = parse_finep.parse_finep()
+                if erros_finep:
+                    aviso = "aviso: FINEP com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_finep)
+                    print(aviso)
+                    detalhe += aviso + "\n\n"
+            except Exception:
+                aviso = f"erro: FINEP falhou por completo nesta rodada (nao bloqueia BNDES nem o resto do refresh):\n{traceback.format_exc()}"
+                print(aviso)
+                detalhe += aviso + "\n\n"
+
+            # Best-effort, isolado de proposito (causa raiz real, 2026-09-21): esta base
+            # so alimenta a taxa de aprovacao (ver docstring de parse_finep_nao_aprovados),
+            # nunca `operations` -- uma falha aqui (ex: a FINEP mudou levemente o nome da
+            # aba do xlsx, fonte externa fora do nosso controle) NAO pode derrubar o
+            # rebuild de `operations` inteiro, que e o que todo o resto do site depende.
+            try:
+                parse_finep.parse_finep_nao_aprovados()
+            except Exception:
+                aviso = f"aviso: parse_finep_nao_aprovados falhou (nao bloqueia o resto do refresh):\n{traceback.format_exc()}"
+                print(aviso)
+                detalhe += aviso + "\n\n"
+
+            resultado_unify = unify.build_operations()
+            ops_rows = resultado_unify["total"]
+            pendentes = resultado_unify["pendentes"]
+            reclassificados_ids = resultado_unify["reclassificados_ids"]
+
+            if pendentes > 0:
+                reclassificados_ids = reclassificados_ids + _resolver_pendentes_via_api()
+                pendentes = _contar_pendentes()
+
+            embeddings.build_embeddings(
+                novos_ids=resultado_unify["novos_ids"],
+                reclassificados_ids=reclassificados_ids,
+            )
+
+            for linha in search_taxonomy.segmentos_sem_sinonimo():
+                print(f"  sinonimo faltando (curadoria manual): {linha['segmento']!r} ({linha['n_operacoes']} operacoes)")
+
+            if status == "ok" and detalhe:
+                # Chegou ate aqui (unify/embeddings rodaram normalmente) mas BNDES e/ou
+                # FINEP tiveram alguma falha registrada acima -- nao e um "ok" limpo nem
+                # um "erro" total, e sim uma falha parcial isolada (ver `detalhe`).
+                status = "parcial"
+        except Exception:
+            status = "erro"
+            detalhe += traceback.format_exc()
+            print(detalhe)
+        finally:
+            finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            _finalizar_log(log_id, finished_at, bndes_rows, finep_direto_rows, finep_desc_rows, ops_rows, pendentes, status, detalhe)
+    finally:
+        # Libera o advisory lock (e a conexao dedicada que o segurava) so DEPOIS que
+        # todo o trabalho (ou a falha) acima terminou -- nunca antes, senao uma segunda
+        # execucao poderia comecar a processar em paralelo com o finally acima ainda
+        # gravando refresh_log.
+        release_pipeline_lock(lock_conn, REFRESH_OPERACOES_LOCK_KEY)
+        lock_conn.close()
 
     print(f"=== Refresh finalizado em {finished_at} (status={status}) ===")
     print(f"BNDES: {bndes_rows} | FINEP credito direto: {finep_direto_rows} | FINEP descentralizado: {finep_desc_rows}")

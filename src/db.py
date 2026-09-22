@@ -182,6 +182,69 @@ def get_engine():
     return _ENGINE
 
 
+# ============ Advisory locks: serializa execucoes concorrentes dos pipelines ============
+# Decisao 2026-09-22 (investigacao real contra producao, ver commit que introduziu isto):
+# a race condition original (duas execucoes concorrentes de refresh.py -- ex: cron do
+# GitHub Actions sobrepondo um "python refresh.py" manual local, ou duas sessoes de IA
+# rodando o pipeline ao mesmo tempo -- inserindo a MESMA leva de linhas novas duas vezes,
+# janela TOCTOU entre `incremental.existing_hashes()` e `insert_new_rows()`) foi
+# originalmente planejada para ser fechada com `UNIQUE(row_hash)` + `INSERT ... ON
+# CONFLICT DO NOTHING`. Essa abordagem foi DESCARTADA depois de confirmar ao vivo contra
+# producao que `row_hash` NAO E uma chave candidata valida: bndes_raw e
+# finep_credito_descentralizado_raw tem, hoje, 277+1 grupos de linhas 100% identicas em
+# todas as colunas de negocio (mesmo cliente/contrato/valor/data), e a evidencia (leitura
+# do codigo de ingestao ANTES da migracao pro incremental, commit 9660c82 -- um unico
+# `pd.read_excel` + um unico `df.to_sql(..., if_exists="append")`, sem nenhum dedup) mostra
+# que essas linhas so podem ter vindo de o BNDES/FINEP terem listado o mesmo registro mais
+# de uma vez na planilha oficial -- nao um bug nosso. Uma constraint `UNIQUE(row_hash)`
+# rejeitaria (via ON CONFLICT DO NOTHING) uma repeticao FUTURA igualmente legitima da
+# fonte, perdendo operacao real silenciosamente. NAO reintroduzir essa constraint sem
+# antes invalidar essa evidencia.
+#
+# Em vez disso: um advisory lock do Postgres (por SESSAO, nao por conteudo dos dados)
+# em volta da execucao inteira de cada pipeline -- fecha a mesma janela de corrida
+# (impede duas execucoes concorrentes do MESMO pipeline) sem depender de nenhuma
+# suposicao sobre unicidade de conteudo. Ver `try_acquire_pipeline_lock`/
+# `release_pipeline_lock`, usados em refresh.py::run_refresh() e
+# refresh_editais.py::run_refresh_editais().
+#
+# Chaves arbitrarias fixas, uma por pipeline (nao podem colidir por acidente com outro
+# uso de advisory lock neste banco -- nenhum outro existe hoje). refresh_editais.py tem
+# risco MENOR (editais_raw ja usa `INSERT ... ON CONFLICT(id) DO UPDATE`, upsert de
+# verdade sobre o id real da FINEP -- sem TOCTOU no dado em si), mas ganha o mesmo lock
+# por consistencia e para evitar duas execucoes desperdicando chamada de API/embeddings
+# em paralelo e disputando `refresh_editais_log`.
+REFRESH_OPERACOES_LOCK_KEY = 725001
+REFRESH_EDITAIS_LOCK_KEY = 725002
+
+
+def try_acquire_pipeline_lock(conn, key: int) -> bool:
+    """Tenta obter um advisory lock do Postgres (`pg_try_advisory_lock`, NAO bloqueante --
+    devolve na hora, nunca espera) para `key` usando `conn`. Devolve True se conseguiu
+    (ninguem mais segura essa chave agora) ou False se outra sessao (outro processo/
+    execucao concorrente do mesmo pipeline) ja segura.
+
+    Advisory lock e por SESSAO (amarrado a conexao fisica que fez a chamada, nao a
+    transacao/commit) -- `conn` precisa ficar ABERTA por toda a duracao do trabalho
+    protegido; so feche depois de `release_pipeline_lock` na mesma conexao (ou o
+    Postgres libera sozinho se a conexao cair, mas isso e so uma rede de seguranca,
+    nao o mecanismo normal de liberacao)."""
+    obtido = conn.execute("SELECT pg_try_advisory_lock(?)", (key,)).fetchone()[0]
+    # so fecha a transacao implicita aberta pelo SELECT acima -- commit/rollback NAO
+    # libera um advisory lock de sessao (so pg_advisory_unlock ou a sessao terminar).
+    conn.commit()
+    return bool(obtido)
+
+
+def release_pipeline_lock(conn, key: int) -> None:
+    """Libera o advisory lock obtido por `try_acquire_pipeline_lock` -- precisa ser
+    chamado na MESMA conexao que obteve (advisory lock e por sessao). Chamar sempre
+    num `finally`, mesmo se o trabalho protegido falhou por outro motivo: soltar uma
+    chave que esta sessao nao segura so devolve False, nao levanta erro."""
+    conn.execute("SELECT pg_advisory_unlock(?)", (key,))
+    conn.commit()
+
+
 # Tables that are fully dropped and rebuilt on every weekly refresh.
 #
 # ATE 2026-08: bndes_raw/finep_*_raw/operations tambem estavam aqui (drop+reload
