@@ -5,6 +5,15 @@ on:
     - cron: "0 6 * * 1" # toda segunda 06:00 UTC (03:00 horário de Brasília)
   workflow_dispatch: {}
 
+# Evita duas execucoes simultaneas deste workflow (ex: o cron semanal disparando
+# em cima de um "Atualizar agora" manual do painel admin) -- cancel-in-progress
+# false porque um refresh a meio caminho NAO deve ser abortado (poderia deixar
+# bndes_raw/finep_*_raw parcialmente atualizados); a segunda execucao so fica
+# enfileirada ate a primeira terminar.
+concurrency:
+  group: refresh-operacoes
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

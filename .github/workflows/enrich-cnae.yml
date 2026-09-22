@@ -7,6 +7,14 @@ on:
       # refresh diario de editais (08:00 UTC).
   workflow_dispatch: {}
 
+# Evita duas execucoes simultaneas deste workflow (ex: o cron mensal disparando
+# em cima de um disparo manual) -- cancel-in-progress false porque este job e o
+# mais pesado dos tres (baixa varios GB da RFB); abortar no meio desperdicaria
+# todo o trabalho ja feito. A segunda execucao so fica enfileirada.
+concurrency:
+  group: enrich-cnae
+  cancel-in-progress: false
+
 jobs:
   enrich:
     runs-on: ubuntu-latest

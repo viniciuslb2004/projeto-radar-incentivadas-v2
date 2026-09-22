@@ -7,6 +7,7 @@ Incremental (ver incremental.py): a FINEP republica o historico INTEIRO a cada
 vez (nas 3 planilhas -- credito direto, credito descentralizado e nao aprovados),
 entao so inserimos as linhas cujo hash de conteudo ainda nao existe na tabela.
 """
+import traceback
 import unicodedata
 
 import pandas as pd
@@ -18,14 +19,14 @@ from incremental import backfill_row_hashes, compute_row_hash, existing_hashes, 
 
 def _normalizar_nome_aba(nome: str) -> str:
     """Remove acentos/case/espacos duplicados de um nome de aba, so para
-    COMPARACAO -- nunca usado como valor de fato (ver `_resolver_aba_nao_aprovados`)."""
+    COMPARACAO -- nunca usado como valor de fato (ver `_resolver_aba`)."""
     nfkd = unicodedata.normalize("NFKD", nome)
     sem_acento = "".join(c for c in nfkd if not unicodedata.combining(c))
     return " ".join(sem_acento.lower().split())
 
 
-def _resolver_aba_nao_aprovados(path) -> str:
-    """Acha o nome exato da aba de 'Projetos Nao Aprovados' dentro do xlsx.
+def _resolver_aba(path, alvo: str) -> str:
+    """Acha o nome exato de uma aba do xlsx da FINEP, com fallback resiliente.
 
     Causa raiz real (2026-09-21): o refresh semanal falhou por completo (nenhuma
     operacao nova de BNDES/FINEP entrou em `operations` naquela rodada) porque
@@ -33,28 +34,28 @@ def _resolver_aba_nao_aprovados(path) -> str:
     `ValueError: Worksheet named ... not found` -- a planilha da FINEP nao tinha
     uma aba com esse nome EXATO no momento daquele download (a aba real
     provavelmente variou por um detalhe de acento/espaco/capitalizacao da FINEP,
-    fonte externa fora do nosso controle). Em vez de depender de um match exato
-    fragil, tenta o nome exato primeiro (caminho mais comum) e cai para um match
-    normalizado (sem acento, case-insensitive, espacos colapsados) se o exato
-    nao bater -- cobre pequenas variacoes futuras sem inventar dado nenhum. Se
-    nem assim achar, levanta um erro com a lista real de abas do arquivo (mais
-    facil de diagnosticar do que o ValueError generico do pandas)."""
+    fonte externa fora do nosso controle). Corrigido originalmente so para essa
+    aba (commit 68734bb); generalizado aqui para as outras abas hardcoded deste
+    modulo (Credito Direto/Descentralizado), mesma classe de risco. Em vez de
+    depender de um match exato fragil, tenta o nome exato primeiro (caminho mais
+    comum) e cai para um match normalizado (sem acento, case-insensitive, espacos
+    colapsados) se o exato nao bater -- cobre pequenas variacoes futuras sem
+    inventar dado nenhum. Se nem assim achar, levanta um erro com a lista real de
+    abas do arquivo (mais facil de diagnosticar do que o ValueError generico do
+    pandas)."""
     import openpyxl
 
     wb = openpyxl.load_workbook(path, read_only=True)
     try:
         nomes = wb.sheetnames
-        alvo = "Projetos Não Aprovados"
         if alvo in nomes:
             return alvo
         alvo_norm = _normalizar_nome_aba(alvo)
         for nome in nomes:
             if _normalizar_nome_aba(nome) == alvo_norm:
-                print(f"  aviso: aba 'Projetos Não Aprovados' nao encontrada exata, usando {nome!r} (match normalizado)")
+                print(f"  aviso: aba {alvo!r} nao encontrada exata, usando {nome!r} (match normalizado)")
                 return nome
-        raise ValueError(
-            f"Nenhuma aba de 'Projetos Nao Aprovados' encontrada em {path}. Abas disponiveis: {nomes}"
-        )
+        raise ValueError(f"Nenhuma aba {alvo!r} encontrada em {path}. Abas disponiveis: {nomes}")
     finally:
         wb.close()
 
@@ -142,42 +143,68 @@ def _linhas_novas(conn, table: str, df: pd.DataFrame, hash_cols: list) -> pd.Dat
 
 
 def parse_finep(path=FINEP_PATH):
+    """Retorna (n_novas_direto, n_novas_descentralizado, total_direto_agora,
+    total_descentralizado_agora, erros). `erros` e uma lista de strings -- vazia
+    se as duas abas foram lidas com sucesso, com um item por aba que falhou
+    mesmo apos o lookup resiliente (ver `_resolver_aba`). Credito Direto e
+    Credito Descentralizado sao isolados um do outro: uma falha em um NAO impede
+    o outro de ser processado (best-effort, nunca finge sucesso -- o erro real
+    fica em `erros`, e quem decide o que fazer com isso e o chamador, refresh.py)."""
+    erros = []
     conn = get_connection()
     try:
-        print(f"Lendo {path} (aba Projetos_Crédito_Direto)...")
-        direto = pd.read_excel(path, sheet_name="Projetos_Crédito_Direto", header=6, engine="openpyxl")
-        direto = direto.rename(columns=CREDITO_DIRETO_COLUMNS)
-        direto = direto[[c for c in CREDITO_DIRETO_COLUMNS.values() if c in direto.columns]]
-        direto = direto.dropna(subset=["contrato"])
-        direto["cnpj_proponente"] = _clean_cnpj(direto["cnpj_proponente"])
-        direto["data_assinatura"] = pd.to_datetime(direto["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
-        for col in ["valor_finep", "contrapartida_financeira", "valor_pago"]:
-            direto[col] = pd.to_numeric(direto[col], errors="coerce")
-        total_direto = len(direto)
-        novas_direto = _linhas_novas(conn, "finep_credito_direto_raw", direto, CREDITO_DIRETO_HASH_COLS)
-        insert_new_rows(conn, "finep_credito_direto_raw", novas_direto, CREDITO_DIRETO_HASH_COLS + ["row_hash"])
-
-        print(f"Lendo {path} (aba Projetos_Créd__Descentralizado)...")
-        descentralizado = pd.read_excel(path, sheet_name="Projetos_Créd__Descentralizado", header=6, engine="openpyxl")
-        descentralizado = descentralizado.rename(columns=CREDITO_DESCENTRALIZADO_COLUMNS)
-        descentralizado = descentralizado[[c for c in CREDITO_DESCENTRALIZADO_COLUMNS.values() if c in descentralizado.columns]]
-        descentralizado = descentralizado.dropna(subset=["beneficiario"])
-        descentralizado["cnpj_beneficiario"] = _clean_cnpj(descentralizado["cnpj_beneficiario"])
-        descentralizado["data_assinatura"] = pd.to_datetime(descentralizado["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
-        for col in ["valor_financiado", "valor_liberado", "contrapartida", "outros_recursos"]:
-            descentralizado[col] = pd.to_numeric(descentralizado[col], errors="coerce")
-        total_descentralizado = len(descentralizado)
-        novas_descentralizado = _linhas_novas(
-            conn, "finep_credito_descentralizado_raw", descentralizado, CREDITO_DESCENTRALIZADO_HASH_COLS
-        )
-        insert_new_rows(
-            conn, "finep_credito_descentralizado_raw", novas_descentralizado,
-            CREDITO_DESCENTRALIZADO_HASH_COLS + ["row_hash"],
-        )
-
-        conn.commit()
+        novas_direto = pd.DataFrame()
+        total_direto = 0
         total_direto_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_direto_raw").fetchone()[0]
+        try:
+            aba_direto = _resolver_aba(path, "Projetos_Crédito_Direto")
+            print(f"Lendo {path} (aba {aba_direto!r})...")
+            direto = pd.read_excel(path, sheet_name=aba_direto, header=6, engine="openpyxl")
+            direto = direto.rename(columns=CREDITO_DIRETO_COLUMNS)
+            direto = direto[[c for c in CREDITO_DIRETO_COLUMNS.values() if c in direto.columns]]
+            direto = direto.dropna(subset=["contrato"])
+            direto["cnpj_proponente"] = _clean_cnpj(direto["cnpj_proponente"])
+            direto["data_assinatura"] = pd.to_datetime(direto["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
+            for col in ["valor_finep", "contrapartida_financeira", "valor_pago"]:
+                direto[col] = pd.to_numeric(direto[col], errors="coerce")
+            total_direto = len(direto)
+            novas_direto = _linhas_novas(conn, "finep_credito_direto_raw", direto, CREDITO_DIRETO_HASH_COLS)
+            insert_new_rows(conn, "finep_credito_direto_raw", novas_direto, CREDITO_DIRETO_HASH_COLS + ["row_hash"])
+            conn.commit()
+            total_direto_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_direto_raw").fetchone()[0]
+        except Exception:
+            erro = f"FINEP: aba 'Credito Direto' falhou (nao entrou nenhuma operacao nova nesta rodada):\n{traceback.format_exc()}"
+            print(erro)
+            erros.append(erro)
+
+        novas_descentralizado = pd.DataFrame()
+        total_descentralizado = 0
         total_descentralizado_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_descentralizado_raw").fetchone()[0]
+        try:
+            aba_desc = _resolver_aba(path, "Projetos_Créd__Descentralizado")
+            print(f"Lendo {path} (aba {aba_desc!r})...")
+            descentralizado = pd.read_excel(path, sheet_name=aba_desc, header=6, engine="openpyxl")
+            descentralizado = descentralizado.rename(columns=CREDITO_DESCENTRALIZADO_COLUMNS)
+            descentralizado = descentralizado[[c for c in CREDITO_DESCENTRALIZADO_COLUMNS.values() if c in descentralizado.columns]]
+            descentralizado = descentralizado.dropna(subset=["beneficiario"])
+            descentralizado["cnpj_beneficiario"] = _clean_cnpj(descentralizado["cnpj_beneficiario"])
+            descentralizado["data_assinatura"] = pd.to_datetime(descentralizado["data_assinatura"], errors="coerce").dt.strftime("%Y-%m-%d")
+            for col in ["valor_financiado", "valor_liberado", "contrapartida", "outros_recursos"]:
+                descentralizado[col] = pd.to_numeric(descentralizado[col], errors="coerce")
+            total_descentralizado = len(descentralizado)
+            novas_descentralizado = _linhas_novas(
+                conn, "finep_credito_descentralizado_raw", descentralizado, CREDITO_DESCENTRALIZADO_HASH_COLS
+            )
+            insert_new_rows(
+                conn, "finep_credito_descentralizado_raw", novas_descentralizado,
+                CREDITO_DESCENTRALIZADO_HASH_COLS + ["row_hash"],
+            )
+            conn.commit()
+            total_descentralizado_agora = conn.execute("SELECT COUNT(*) FROM finep_credito_descentralizado_raw").fetchone()[0]
+        except Exception:
+            erro = f"FINEP: aba 'Credito Descentralizado' falhou (nao entrou nenhuma operacao nova nesta rodada):\n{traceback.format_exc()}"
+            print(erro)
+            erros.append(erro)
     finally:
         conn.close()
 
@@ -186,7 +213,7 @@ def parse_finep(path=FINEP_PATH):
         f"Credito descentralizado: {len(novas_descentralizado)} novas (planilha tem {total_descentralizado}, "
         f"tabela tem {total_descentralizado_agora})."
     )
-    return len(novas_direto), len(novas_descentralizado), total_direto_agora, total_descentralizado_agora
+    return len(novas_direto), len(novas_descentralizado), total_direto_agora, total_descentralizado_agora, erros
 
 
 def parse_finep_nao_aprovados(path=FINEP_NAO_APROVADOS_PATH):
@@ -194,7 +221,7 @@ def parse_finep_nao_aprovados(path=FINEP_NAO_APROVADOS_PATH):
     publica propostas recusadas, entao essa base so cobre a FINEP)."""
     conn = get_connection()
     try:
-        aba = _resolver_aba_nao_aprovados(path)
+        aba = _resolver_aba(path, "Projetos Não Aprovados")
         print(f"Lendo {path} (aba {aba!r})...")
         df = pd.read_excel(path, sheet_name=aba, header=6, engine="openpyxl")
         df = df.rename(columns=NAO_APROVADOS_COLUMNS)

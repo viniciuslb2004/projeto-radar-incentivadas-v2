@@ -5,6 +5,14 @@ on:
     - cron: "0 8 * * *" # todo dia 08:00 UTC (05:00 horário de Brasília)
   workflow_dispatch: {}
 
+# Evita duas execucoes simultaneas deste workflow (ex: o cron diario disparando
+# em cima de um "Atualizar agora" manual do painel admin) -- cancel-in-progress
+# false porque um refresh a meio caminho NAO deve ser abortado; a segunda
+# execucao so fica enfileirada ate a primeira terminar.
+concurrency:
+  group: refresh-editais
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

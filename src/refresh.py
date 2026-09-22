@@ -58,12 +58,60 @@ def _contar_pendentes() -> int:
         conn.close()
 
 
+def _registrar_inicio(started_at: str) -> int:
+    """Grava a linha de `refresh_log` logo no INICIO do run, com `finished_at`
+    ainda NULL. E o que permite ao painel admin (`webapp/admin/routes.py`)
+    detectar "ja existe um refresh em andamento" antes de disparar outro --
+    checagem que so funciona se existir mesmo uma janela real, durante o run,
+    com uma linha `finished_at IS NULL` na tabela. Antes desta mudanca a linha
+    inteira (started_at E finished_at) so era gravada num UNICO insert no FINAL
+    do run (ver `_finalizar_log`), entao essa janela nunca existia de verdade e
+    a checagem do painel nunca disparava."""
+    conn = get_connection()
+    try:
+        log_id = conn.execute(
+            "INSERT INTO refresh_log (started_at, status) VALUES (?, ?) RETURNING id",
+            (started_at, "em_andamento"),
+        ).fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    return log_id
+
+
+def _finalizar_log(log_id: int, finished_at: str, bndes_rows: int, finep_direto_rows: int,
+                    finep_desc_rows: int, ops_rows: int, pendentes: int, status: str, detalhe: str) -> None:
+    """Fecha a linha aberta por `_registrar_inicio` (mesmo `id`), preenchendo
+    `finished_at` e o resto das colunas. Chamado de dentro de um `finally` em
+    `run_refresh` -- roda sempre, sucesso ou erro, garantindo que nenhuma linha
+    fique presa com `finished_at IS NULL` para sempre (o que travaria o painel
+    admin achando que ha um refresh em andamento eternamente)."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE refresh_log
+            SET finished_at = ?, bndes_rows = ?, finep_credito_direto_rows = ?,
+                finep_credito_descentralizado_rows = ?, operations_rows = ?,
+                setores_pendentes = ?, status = ?, detalhe = ?
+            WHERE id = ?
+            """,
+            (finished_at, bndes_rows, finep_direto_rows, finep_desc_rows, ops_rows, pendentes, status, detalhe, log_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_refresh() -> str:
-    """Devolve o status final ('ok'/'erro') -- o chamador de linha de comando (ver
-    __main__) e quem decide se isso vira um sys.exit(1). Sem isso, uma falha total
-    aqui (download fora do ar, Turso indisponivel, etc) ficava so registrada dentro
-    do proprio banco (refresh_log.status='erro') mas o processo saia com codigo 0 --
-    o workflow do GitHub Actions aparecia verde mesmo quando o refresh inteiro falhou."""
+    """Devolve o status final ('ok'/'parcial'/'erro') -- o chamador de linha de
+    comando (ver __main__) e quem decide se isso vira um sys.exit(1) ('erro' e
+    o unico status que aborta o workflow do GitHub Actions; 'parcial' significa
+    que o refresh terminou mas uma fonte especifica -- BNDES ou FINEP -- teve
+    falha isolada, ver `detalhe`). Sem isso, uma falha total aqui (download fora
+    do ar, banco indisponivel, etc) ficava so registrada dentro do proprio banco
+    (refresh_log.status='erro') mas o processo saia com codigo 0 -- o workflow
+    do GitHub Actions aparecia verde mesmo quando o refresh inteiro falhou."""
     init_db()
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     print(f"=== Refresh iniciado em {started_at} ===")
@@ -74,14 +122,49 @@ def run_refresh() -> str:
     finally:
         conn.close()
 
+    # Grava a linha do log JA AGORA (finished_at ainda NULL) -- ver docstring de
+    # _registrar_inicio. Feito antes de baixar/processar qualquer coisa, para que
+    # a janela "em andamento" cubra o run inteiro.
+    log_id = _registrar_inicio(started_at)
+
     status = "ok"
     detalhe = ""
     bndes_rows = finep_direto_rows = finep_desc_rows = ops_rows = pendentes = 0
 
     try:
         download.download_all()
-        _, bndes_rows = parse_bndes.parse_bndes()
-        _, _, finep_direto_rows, finep_desc_rows = parse_finep.parse_finep()
+
+        # BNDES e FINEP isolados um do outro de proposito: cada um le suas
+        # proprias abas do xlsx por nome hardcoded (com lookup resiliente a
+        # variacoes de acento/case/espaco, ver `_resolver_aba` em
+        # parse_bndes.py/parse_finep.py), e uma fonte externa (BNDES ou FINEP)
+        # renomear uma aba NAO pode derrubar a outra fonte nem o rebuild de
+        # `operations` que vem depois -- mesma causa raiz real ja corrigida uma
+        # vez so para "Projetos Não Aprovados" (commit 68734bb), generalizada
+        # aqui para as 4 outras leituras hardcoded que tinham o mesmo risco.
+        # Nunca finge sucesso: uma falha de verdade (total ou parcial, aba nao
+        # encontrada nem com o lookup resiliente) fica registrada em `detalhe`.
+        try:
+            n_novas_bndes, bndes_rows, erros_bndes = parse_bndes.parse_bndes()
+            if erros_bndes:
+                aviso = "aviso: BNDES com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_bndes)
+                print(aviso)
+                detalhe += aviso + "\n\n"
+        except Exception:
+            aviso = f"erro: BNDES falhou por completo nesta rodada (nao bloqueia FINEP nem o resto do refresh):\n{traceback.format_exc()}"
+            print(aviso)
+            detalhe += aviso + "\n\n"
+
+        try:
+            _, _, finep_direto_rows, finep_desc_rows, erros_finep = parse_finep.parse_finep()
+            if erros_finep:
+                aviso = "aviso: FINEP com falha PARCIAL (aba nao encontrada, nao bloqueia o resto do refresh):\n" + "\n".join(erros_finep)
+                print(aviso)
+                detalhe += aviso + "\n\n"
+        except Exception:
+            aviso = f"erro: FINEP falhou por completo nesta rodada (nao bloqueia BNDES nem o resto do refresh):\n{traceback.format_exc()}"
+            print(aviso)
+            detalhe += aviso + "\n\n"
 
         # Best-effort, isolado de proposito (causa raiz real, 2026-09-21): esta base
         # so alimenta a taxa de aprovacao (ver docstring de parse_finep_nao_aprovados),
@@ -111,27 +194,19 @@ def run_refresh() -> str:
 
         for linha in search_taxonomy.segmentos_sem_sinonimo():
             print(f"  sinonimo faltando (curadoria manual): {linha['segmento']!r} ({linha['n_operacoes']} operacoes)")
+
+        if status == "ok" and detalhe:
+            # Chegou ate aqui (unify/embeddings rodaram normalmente) mas BNDES e/ou
+            # FINEP tiveram alguma falha registrada acima -- nao e um "ok" limpo nem
+            # um "erro" total, e sim uma falha parcial isolada (ver `detalhe`).
+            status = "parcial"
     except Exception:
         status = "erro"
-        detalhe = traceback.format_exc()
+        detalhe += traceback.format_exc()
         print(detalhe)
-
-    finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    conn = get_connection()
-    try:
-        conn.execute(
-            """
-            INSERT INTO refresh_log
-                (started_at, finished_at, bndes_rows, finep_credito_direto_rows,
-                 finep_credito_descentralizado_rows, operations_rows, setores_pendentes, status, detalhe)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (started_at, finished_at, bndes_rows, finep_direto_rows, finep_desc_rows, ops_rows, pendentes, status, detalhe),
-        )
-        conn.commit()
     finally:
-        conn.close()
+        finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _finalizar_log(log_id, finished_at, bndes_rows, finep_direto_rows, finep_desc_rows, ops_rows, pendentes, status, detalhe)
 
     print(f"=== Refresh finalizado em {finished_at} (status={status}) ===")
     print(f"BNDES: {bndes_rows} | FINEP credito direto: {finep_direto_rows} | FINEP descentralizado: {finep_desc_rows}")
