@@ -48,7 +48,7 @@
 </div>
 
 <div class="topbar">
-  <div class="brand" id="brand-toggle" title="Clique para alternar entre Crédito Incentivado e Crédito Primário">
+  <div class="brand">
     <img src="/img/logo-artica.png" alt="Ártica" class="topbar-logo">
     <div class="brand-texto">Radar de Crédito Incentivado</div>
   </div>
@@ -57,9 +57,8 @@
       <button class="tab-btn active" data-view="consolidado">Consolidado</button>
       <button class="tab-btn" data-view="tendencias">Tendências &amp; Insights</button>
       <button class="tab-btn" data-view="busca">Busca</button>
-      <button class="tab-btn" data-view="editais" data-mercado-only="incentivado">Editais</button>
-      <button class="tab-btn" data-view="linhas" data-mercado-only="incentivado">Linhas Incentivadas</button>
-      <button class="tab-btn" data-view="salvos">Transações Salvas</button>
+      <button class="tab-btn" data-view="editais">Editais</button>
+      <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
     </div>
   </div>
   <div class="topbar-usuario hidden" id="topbar-usuario">
@@ -108,7 +107,7 @@
     <div class="grid-2">
       <div class="card">
         <div class="card-header">
-          <span><span id="chart-serie-titulo">Evolução temporal &mdash; BNDES x FINEP</span> <span class="hint" id="chart-serie-hint">R$ contratado por período</span></span>
+          <span><span id="chart-serie-titulo">Evolução temporal de emissões</span> <span class="hint" id="chart-serie-hint">R$ contratado por período</span></span>
           <select id="serie-granularidade" class="header-select">
             <option value="mensal">Mensal</option>
             <option value="trimestral" selected>Trimestral</option>
@@ -118,38 +117,9 @@
         </div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-serie"></canvas></div></div>
       </div>
-      <div class="card" data-mercado-only="incentivado">
+      <div class="card">
         <div class="card-header"><span id="chart-setores-titulo">Ranking de setores</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-setores"></canvas></div></div>
-      </div>
-      <!-- Primario: o "Ranking por instrumento" que ocupava este espaco ate a
-           redesenho de 2026-09-17 foi REMOVIDO -- redundante com a serie
-           temporal empilhada por instrumento (acima) + o texto por_instrumento
-           ja mostrado no KPI de volume total (ver consolidado.js::loadKPIs);
-           era so um relabel do card do Incentivado, sem adicionar nada que os
-           outros dois ja nao mostrassem. No lugar entra "Estrutura da oferta"
-           -- Incentivada (Lei 12.431) e Regime fiduciario nunca tinham
-           aparecido em NENHUM card ate aqui, apesar de serem o cross-link
-           tematico mais obvio com o resto do site ("Radar de Credito
-           INCENTIVADO"). Ver CLAUDE.md, secao Frontend, tabela de decisoes
-           card-a-card. -->
-      <div class="card" data-mercado-only="primario">
-        <div class="card-header">
-          <span>Estrutura da oferta</span>
-          <span class="hint">Lei 12.431 · regime fiduciário</span>
-        </div>
-        <div class="card-body">
-          <div class="grid-2" style="margin-bottom:0;">
-            <div>
-              <div class="subsetor-col-title">Incentivada (Lei 12.431)</div>
-              <div class="chart-wrap" style="height:160px;"><canvas id="chart-incentivada"></canvas></div>
-            </div>
-            <div>
-              <div class="subsetor-col-title">Regime fiduciário</div>
-              <div class="chart-wrap" style="height:160px;"><canvas id="chart-regime-fiduciario"></canvas></div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -158,55 +128,9 @@
         <div class="card-header"><span id="chart-uf-titulo">Por UF</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-uf"></canvas></div></div>
       </div>
-      <div class="card" data-mercado-only="incentivado">
+      <div class="card">
         <div class="card-header"><span id="chart-porte-titulo">Por porte do cliente</span> <span class="hint">clique para detalhar</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chart-porte"></canvas></div></div>
-      </div>
-      <!-- Primario: "Por porte do emissor" (que ocupava este espaco ate o
-           redesenho de 2026-09-17) foi REMOVIDO -- medido ao vivo contra
-           produção: 15.054 de 15.076 operações (99,85%) caem no MESMO
-           balde "Demais" (nem micro nem pequena empresa) -- faz sentido
-           (empresas que emitem dívida em mercado de capitais são quase
-           sempre de grande porte), mas isso torna o donut essencialmente
-           uma fatia só, sem nenhum poder discriminante -- diferente do
-           Incentivado, onde porte varia de verdade (BNDES/FINEP chegam a
-           micro/pequenas empresas). No lugar entra "Por tipo de lastro"
-           (Pulverizado/Concentrado), dimensão real de risco de estruturas
-           securitizadas (CRI/CRA) que nunca tinha aparecido em nenhum card
-           -- ver CLAUDE.md, seção Frontend, tabela de decisões. -->
-      <div class="card" data-mercado-only="primario">
-        <div class="card-header">
-          <span>Por tipo de lastro</span>
-          <span class="hint">pulverizado x concentrado</span>
-        </div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-tipo-lastro"></canvas></div></div>
-      </div>
-    </div>
-
-    <!-- Dashboards especificos de renda fixa (taxa/prazo) -- so existem no
-         modo Primario (CVM), sem equivalente conceitual no credito de fomento
-         (BNDES/FINEP nao tem "taxa"/"indexador" de mercado nem "prazo" no
-         mesmo sentido de um titulo de divida). Cobertura PARCIAL dos dados
-         (ver CLAUDE.md, secao "Radar de Credito Primario") -- os avisos de
-         amostra parcial ficam dentro de cada card (#chart-taxas-aviso/
-         #chart-prazos-aviso), preenchidos pelo JS a partir da resposta da API,
-         nunca escondidos. -->
-    <div class="grid-2" data-mercado-only="primario">
-      <div class="card">
-        <div class="card-header">Taxas por indexador <span class="hint">amostra parcial &mdash; nem toda oferta tem taxa extraída</span></div>
-        <div class="card-body">
-          <div id="chart-taxas-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
-          <div id="chart-taxas-vazio" class="empty-state" style="display:none;">Dados de taxa ainda não disponíveis para este filtro.</div>
-          <div class="chart-wrap"><canvas id="chart-taxas"></canvas></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-header">Prazos por instrumento <span class="hint">amostra parcial &mdash; nem toda oferta tem as duas datas</span></div>
-        <div class="card-body">
-          <div id="chart-prazos-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
-          <div id="chart-prazos-vazio" class="empty-state" style="display:none;">Dados de prazo ainda não disponíveis para este filtro.</div>
-          <div class="chart-wrap"><canvas id="chart-prazos"></canvas></div>
-        </div>
       </div>
     </div>
   </section>
@@ -264,14 +188,6 @@
       <div class="card">
         <div class="card-header"><span id="chart-produtos-titulo">Destinação de recursos</span> <span class="hint" id="chart-produtos-hint">produto / instrumento</span></div>
         <div class="card-body">
-          <!-- #chart-produtos-aviso/#chart-produtos-vazio: so usados no modo
-               Primario (indexador_padronizado tem cobertura real de ~1,7%,
-               medido ao vivo -- ver CLAUDE.md, secao Frontend). O JS exclui
-               a fatia "Não informado" do grafico (que dominava ~98% do
-               total e tornava o card ilegivel) e mostra a cobertura real
-               aqui, mesmo padrao de #chart-taxas-aviso/#chart-prazos-aviso.
-               No Incentivado (produto/instrumento do BNDES/FINEP, cobertura
-               tipicamente completa) o aviso nunca aparece. -->
           <div id="chart-produtos-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
           <div id="chart-produtos-vazio" class="empty-state" style="display:none;">Dado ainda não disponível para este filtro.</div>
           <div class="chart-wrap"><canvas id="chart-produtos"></canvas></div>
@@ -281,7 +197,6 @@
         <div class="card-header">
           <span>Operações do período <span class="hint">clique para ver detalhe</span></span>
           <div style="display:flex; gap:8px; align-items:center;">
-            <button id="maiores-exportar-btn" class="header-select" style="cursor:pointer;">Exportar CSV</button>
             <select id="maiores-ordenar" class="header-select">
               <option value="valor-desc">Maior valor</option>
               <option value="valor-asc">Menor valor</option>
@@ -296,51 +211,6 @@
             <thead><tr><th id="tabela-maiores-th-cliente">Cliente</th><th id="tabela-maiores-th-agencia">Agência</th><th>Setor</th><th>Data</th><th>Valor</th></tr></thead>
             <tbody></tbody>
           </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- Dois cards NOVOS, so no modo Primario (ver CLAUDE.md, secao Frontend,
-         redesenho de 2026-09-17) -- sem equivalente conceitual no credito de
-         fomento (nao ha "incentivada"/Lei 12.431, "agente fiduciario" ou
-         "custodiante" no schema BNDES/FINEP). O 1o complementa o donut
-         "Estrutura da oferta" do Consolidado (composicao ATUAL) com a
-         dimensao de TEMPO; o 2o traz uma camada de "quem estrutura as
-         ofertas" que nao existia em NENHUM card antes.
-
-         Por que "incentivada" (Lei 12.431) e nao "indexador" na serie
-         temporal: uma primeira versao desta reconciliacao tentou uma serie
-         por indexador_padronizado, mas os dados reais mostraram que esse
-         campo so vem do arquivo CVM principal (que praticamente para de
-         contribuir linhas a partir de 2023, ver CLAUDE.md, secao "Segunda
-         fonte CVM") -- o grafico cairia a zero justo nos anos mais
-         recentes, parecendo (de forma enganosa) que o mercado indexado
-         tivesse sumido. `incentivada` vem dos DOIS arquivos CVM, com
-         cobertura real continua 2010-2026 (confirmado ao vivo).
-
-         Cobertura parcial de agente/custodiante (so linhas vindas do 2o
-         arquivo CVM, Resolucao 160) SEMPRE exposta via aviso, nunca
-         escondida -- mesmo padrao de #chart-taxas-aviso/#chart-prazos-aviso. -->
-    <div class="grid-2" data-mercado-only="primario">
-      <div class="card">
-        <div class="card-header">
-          <span>Evolução da participação Lei 12.431</span>
-          <span class="hint">emissão incentivada x não incentivada ao longo do tempo</span>
-        </div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-incentivada-evolucao"></canvas></div></div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <span>Principais agentes fiduciários e custodiantes</span>
-          <select id="estrutura-dimensao-select" class="header-select">
-            <option value="agentes_fiduciarios" selected>Agente fiduciário</option>
-            <option value="custodiantes">Custodiante</option>
-          </select>
-        </div>
-        <div class="card-body">
-          <div id="estrutura-ranking-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
-          <div id="estrutura-ranking-vazio" class="empty-state" style="display:none;">Sem dado disponível para este filtro.</div>
-          <div class="chart-wrap"><canvas id="chart-estrutura-ranking"></canvas></div>
         </div>
       </div>
     </div>
@@ -440,7 +310,6 @@
       <div class="card-header">
         <span id="editais-lista-titulo">Editais</span>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button id="editais-exportar-btn" class="header-select" style="cursor:pointer;">Exportar CSV</button>
           <select id="ed-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
             <option value="prazo-asc">Prazo mais próximo</option>
             <option value="prazo-desc">Prazo mais distante</option>
@@ -511,37 +380,6 @@
     <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
   </section>
 
-  <!-- ===================== TRANSACOES SALVAS ===================== -->
-  <section id="view-salvos" class="view">
-    <div id="salvos-sem-login" class="hidden">
-      <p class="empty-state">Faça login para salvar operações e ver seu histórico de busca.</p>
-    </div>
-
-    <div id="salvos-conteudo">
-      <div id="salvos-resumo" class="kpi-row" style="margin-bottom:16px;"></div>
-
-      <div class="card">
-        <div class="card-header">
-          Operações salvas
-          <button id="salvos-exportar-btn" class="acao-btn" style="padding:6px 12px; font-size:12px; margin:0;">Exportar Excel</button>
-        </div>
-        <div class="card-body">
-          <div id="salvos-operacoes-lista"></div>
-        </div>
-      </div>
-
-      <div class="card" style="margin-top:16px;">
-        <div class="card-header">
-          Histórico de buscas
-          <button id="salvos-historico-limpar-btn" class="acao-btn" style="padding:6px 12px; font-size:12px; margin:0; background:transparent; color:#fff; border:1px solid rgba(255,255,255,0.4);">Limpar não fixadas</button>
-        </div>
-        <div class="card-body">
-          <div id="salvos-historico-lista"></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
 </main>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -556,7 +394,6 @@
         <option value="instituicao-asc">Instituição (A-Z)</option>
         <option value="agencia-asc">Agência (A-Z)</option>
       </select>
-      <button class="fav-btn" id="modal-favoritar-btn" style="display:none;">☆ Salvar</button>
       <button class="fav-btn" id="modal-copiar-link-btn" style="display:none;" title="Copiar link direto para esta operação">🔗 Copiar link</button>
       <button class="close-btn" id="modal-close">&times;</button>
     </div>
@@ -577,6 +414,5 @@
 <script src="/js/busca.js"></script>
 <script src="/js/editais.js"></script>
 <script src="/js/linhas.js"></script>
-<script src="/js/salvos.js"></script>
 </body>
 </html>

@@ -2,14 +2,13 @@
 
 ## Frontend: roteamento e abas
 
-6 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
-Insights, Busca, Editais, Linhas Incentivadas, Transações Salvas (esta última só faz sentido
-logado — ver seção própria mais abaixo). A URL reflete qual aba está aberta como CAMINHO
-(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`,
-`/transacoes-salvas`), via `history.pushState`/`popstate` em `common.js` (`_ativarView`/
-`_ligarBotoesDeAba`/`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas 6 URLs
-(digitar/recarregar) funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro
-modo local `uvicorn`) + rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
+(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
+`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
+`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas URLs (digitar/recarregar)
+funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
++ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
 
 **Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
 mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre
@@ -44,13 +43,12 @@ acabou de mudar pra igualar o que o usuário escolheu, com um aviso visual breve
 
 Busca guarda um HISTÓRICO PESSOAL de queries no `localStorage` do navegador — substituiu 3
 chips de exemplo fixos que existiam antes (`busca.js`, `registrarHistoricoBusca`/
-`renderHistoricoBusca`). **Decisão original ("nunca vai pro servidor") revista em 2026-09-15**:
-agora que existem contas reais, o mesmo histórico também é gravado no servidor por usuário
-LOGADO (mostrado na aba "Transações Salvas", ver seção própria abaixo) — o localStorage
-continua existindo em paralelo, como fallback pra quando ninguém está logado, e sua CHAVE
-passou a ser sufixada por usuário (`obterUsuarioAtual()`, cacheado numa Promise em `common.js`)
-depois de um bug real (2026-09-11): chave fixa = duas contas diferentes no MESMO navegador
-viam o mesmo histórico local, já que `localStorage` é por origem, não por sessão/conta.
+`renderHistoricoBusca`). Chegou a existir também um histórico gravado no servidor por usuário
+logado (aba "Transações Salvas") — removido em 2026-09-22 (ver
+`docs/archive/removed-features.md`); o `localStorage` voltou a ser o único mecanismo. A CHAVE
+é sufixada por usuário (`obterUsuarioAtual()`, cacheado numa Promise em `common.js`) desde um
+bug real (2026-09-11): chave fixa = duas contas diferentes no MESMO navegador viam o mesmo
+histórico local, já que `localStorage` é por origem, não por sessão/conta.
 
 Card "Por UF" do Consolidado (`loadUF()` em `consolidado.js`) era um bar chart Chart.js
 mostrando só o top-12 (`/api/uf` sempre devolveu as 27 UFs sem limite — o corte era só no

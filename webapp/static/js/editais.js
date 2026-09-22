@@ -145,21 +145,6 @@ async function loadEditaisLista(filters) {
   renderEditaisLista(data);
 }
 
-function exportarEditaisCSV() {
-  exportarCSV("editais.csv", editaisAtuais, [
-    { chave: "titulo", rotulo: "Título" },
-    { chave: "situacao", rotulo: "Situação" },
-    { chave: "tema_principal", rotulo: "Tema" },
-    { chave: "tipo_oportunidade", rotulo: "Tipo de oportunidade" },
-    { chave: "tipo_cooperacao", rotulo: "Tipo de cooperação" },
-    { chave: "contrapartida", rotulo: "Contrapartida" },
-    { chave: "regiao", rotulo: "Região" },
-    { chave: "data_publicacao", rotulo: "Publicado em" },
-    { chave: "prazo_proposto", rotulo: "Prazo de submissão" },
-    { chave: "vigencia_fim", rotulo: "Vigência até" },
-  ]);
-}
-
 async function refreshEditais() {
   const filters = currentEditaisFilters();
   await Promise.all([loadEditaisDashboard(filters), loadEditaisLista(filters)]);
@@ -179,7 +164,6 @@ function documentosHTML(documentos) {
 async function openEditalDetalhe(id) {
   document.getElementById("modal-title").textContent = "Detalhe do edital";
   document.getElementById("modal-ordenar").style.display = "none";
-  document.getElementById("modal-favoritar-btn").style.display = "none";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
@@ -312,7 +296,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
   document.getElementById("ed-ordenar").addEventListener("change", refreshEditais);
-  document.getElementById("editais-exportar-btn").addEventListener("click", exportarEditaisCSV);
 
   const endgameInput = document.getElementById("ed-endgame-input");
   document.getElementById("ed-endgame-btn").addEventListener("click", () => {

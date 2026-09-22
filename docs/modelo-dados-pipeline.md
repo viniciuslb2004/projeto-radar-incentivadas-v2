@@ -31,10 +31,6 @@
 - **`operations_correcoes_manuais`**: correções manuais pontuais em campos de `operations`,
   reaplicadas automaticamente a cada refresh (ver `unify.py::_reaplicar_correcoes_manuais`).
 - **`refresh_log`**: histórico de cada rodada do pipeline semanal (`src/refresh.py`).
-- **`cvm_oferta_distribuicao_raw`**/**`cvm_oferta_resolucao_160_raw`**/**`operations_primario`**/
-  **`refresh_primario_log`**: DUAS staging tables (uma por CSV/fonte CVM) + UMA tabela unificada
-  + log do Radar de Crédito Primário (CVM) — ver seção própria "Radar de Crédito Primário —
-  Pipeline CVM" mais abaixo.
 
 ## Pipeline de dados (operações BNDES/FINEP)
 

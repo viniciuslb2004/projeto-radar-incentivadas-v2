@@ -10,8 +10,7 @@ sozinho antes de encerrar).
 **Aplicado (baixo risco, testado ao vivo contra produção antes de mergear)**:
 - **Teto em `limit`/`offset`** nas rotas públicas que aceitavam qualquer valor do cliente sem
   clamp (`GET /api/operacoes`, `/api/editais`, `/api/linhas`, `/api/segmentos`,
-  `/api/enriquecimento/{importacoes,pendentes,correcoes}`, `GET /api/primario/operacoes`,
-  `/api/primario/segmentos`) — mesmo padrão já usado no painel de admin
+  `/api/enriquecimento/{importacoes,pendentes,correcoes}`) — mesmo padrão já usado no painel de admin
   (`limit = max(1, min(limit, N))`). Confirmado ao vivo: `?limit=999999999` agora devolve
   exatamente o teto (2000 nas rotas de listagem de operações, 500/200 nas menores) em vez de
   tentar serializar a tabela inteira; `offset` negativo agora clampa pra 0 em vez de devolver
@@ -25,7 +24,7 @@ sozinho antes de encerrar).
   tocado.
 
 **Motor de busca migrado pro pool de conexões (2026-09-17, aplicado depois de teste de carga)**:
-`src/search_fts.py::buscar_texto`/`src/search_fts_primario.py::buscar_texto_primario` chamavam
+`src/search_fts.py::buscar_texto` chamava
 `get_connection()` sem `pooled=True` — toda busca (provavelmente a rota mais usada do site) abria
 uma conexão direta ao Aiven em vez de reaproveitar o `ConnectionPool` (que os outros ~26 call
 sites de `webapp/main.py` já usam, com a proteção `check=ConnectionPool.check_connection` contra
@@ -46,20 +45,11 @@ free tier, não fila real introduzida pelo pool). Nenhum sinal de fila severa (s
 chamadas de `/api/kpis` teriam ficado presas atrás das buscas lentas — continuaram na mesma
 faixa de tempo nas duas versões). Conclusão: a troca não piora a eficiência de forma perceptível
 — aplicada.
-- ~~`operations_primario` sem índice em `data_referencia`~~ **CORRIGIDO 2026-09-18** — ver
-  seção "Segunda rodada de otimização" abaixo.
-- **`webapp/primario/routes.py::operacao_detalhe`**: sempre busca o "raw extra" em
-  `cvm_oferta_distribuicao_raw` pelo `raw_id`, mesmo quando a operação veio de
-  `cvm_oferta_resolucao_160_raw` (~30% da tabela) — pode coincidir com um id de uma oferta não
-  relacionada e devolver `raw_extra` errado (nunca 500, nunca vaza dado de outro usuário, é
-  tudo dado público). Baixo risco técnico de corrigir (checar `raw_table` antes), mas é mudança
-  de comportamento visível. **Ainda não corrigido** (fora do escopo da rodada de 2026-09-18,
-  que evitou de propósito qualquer mudança de comportamento visível).
 - ~~`.grid-3`/`.narrativa`/`.progress-track`/`tr.eleg-linha-detalhe:hover` (CSS morto)~~
   **REMOVIDO 2026-09-18** — ver seção "Segunda rodada de otimização" abaixo (reconfirmado zero
   uso antes de apagar, incluindo `.narrativa`).
-- ~~`/api/filtros`/`/api/primario/filtros` buscado 2-3x~~ **CORRIGIDO 2026-09-18** — ver seção
-  "Segunda rodada de otimização" abaixo.
+- ~~`/api/filtros` buscado 2-3x~~ **CORRIGIDO 2026-09-18** — ver seção "Segunda rodada de
+  otimização" abaixo.
 - **`importar_finep_editais` (`src/linhas_incentivadas.py`)**: confirmado sem nenhuma chamada
   real, mas o próprio docstring já diz que é mantida de propósito como referência — não remover
   sem perguntar (é o mesmo tipo de "guardado e flexível" documentado em outros lugares deste
@@ -76,29 +66,19 @@ vazamento de `localStorage` (histórico de busca já limitado a 8 itens por usu�
 Pedido explícito: otimizar mais, mas só mudanças que **mantenham a mesma eficiência** (nunca
 regredir) — cada item abaixo foi medido/testado ao vivo antes de aplicar, não só inferido.
 
-- **Índice novo `idx_operations_primario_data_referencia`** (`src/db.py`, aplicado também
-  direto em produção via `CREATE INDEX CONCURRENTLY` — não bloqueia escrita). `data_referencia`
-  é filtrado por praticamente toda rota `/api/primario/*` (`_filters_clause_primario`/
-  `_filters_clause_primario_exato`/`_periodo_anterior_primario`), mas não tinha índice próprio
-  (só `ano`, uma granularidade mais grossa). **Medido ao vivo contra produção** (`EXPLAIN
-  ANALYZE`, filtro de 1 ano): antes, `Seq Scan` (~192ms, 6191 buffers lidos do disco); depois,
-  `Index Scan` usando o índice novo (~95ms, a maior parte já em cache) — ~2x mais rápido,
-  confirmado que o índice É usado pelo planner (não é um índice "morto" nunca escolhido).
-- **Cache de `/api/{primario/}filtros`** (`common.js::_fetchFiltrosCompartilhado`, novo —
-  usado por `_initFiltersAndTabsImpl`/`_repopularFiltrosCompartilhados` em `common.js` e por
-  `_popularFiltrosBusca` em `busca.js`). Achado real medido: o mesmo endpoint era chamado
-  **2x em todo carregamento de página** (os dois `DOMContentLoaded` de common.js/busca.js
-  disparam quase juntos) e **2x em toda troca de mercado** (`alternarMercado()` chama as duas
-  funções em sequência) — sem nenhum ganho de dado mais fresco (a resposta não muda dentro de
-  uma sessão, e trocar de mercado já invalida a chave do cache sozinho). Cacheado pela
-  PROMISE (não só o valor), então as duas chamadas concorrentes da carga inicial dividem o
-  MESMO fetch em voo — uma falha de rede não fica presa em cache (a entrada é removida no
-  catch, a próxima tentativa refaz o fetch). **Testado ao vivo** (contando chamadas reais de
-  `fetch` via um wrapper temporário, contra produção): carga inicial com as duas funções
-  chamadas em paralelo → 1 fetch (antes seriam 2); primeira troca de mercado → 1 fetch (antes
-  2); trocar de volta pro mercado já visitado → **0 fetches** (reaproveita o cache daquela
-  troca anterior) — e os selects populam com os valores corretos de cada mercado nos três
-  casos (conferido pelo texto das `<option>`, ex: `["Todas","BNDES","FINEP"]` no Incentivado).
+- **Cache de `/api/filtros`** (`common.js::_fetchFiltrosCompartilhado`, novo — usado por
+  `_initFiltersAndTabsImpl`/`_repopularFiltrosCompartilhados` em `common.js` e por
+  `_popularFiltrosBusca` em `busca.js`). Achado real medido: o mesmo endpoint era chamado **2x
+  em todo carregamento de página** (os dois `DOMContentLoaded` de common.js/busca.js disparam
+  quase juntos) — sem nenhum ganho de dado mais fresco (a resposta não muda dentro de uma
+  sessão). Cacheado pela PROMISE (não só o valor), então as duas chamadas concorrentes da carga
+  inicial dividem o MESMO fetch em voo — uma falha de rede não fica presa em cache (a entrada é
+  removida no catch, a próxima tentativa refaz o fetch). **Testado ao vivo** (contando chamadas
+  reais de `fetch` via um wrapper temporário, contra produção): carga inicial com as duas
+  funções chamadas em paralelo → 1 fetch (antes seriam 2). (Nota 2026-09-22: a parte original
+  desta otimização que também cacheava a troca entre mercado Incentivado/Primário deixou de se
+  aplicar depois que o toggle de mercado foi removido — ver `docs/archive/removed-features.md`;
+  o cache de `/api/filtros` em si continua válido.)
 - **CSS morto removido** (`style.css`): `.grid-3` (não usado — só `.grid-2` aparece em
   `index.html`, ajustada a media query de 900px que citava os dois), `tr.eleg-linha-detalhe:
   hover`, `.narrativa`/`.narrativa.loading` e `.progress-track` (mantidos `.progress-fill`/

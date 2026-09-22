@@ -27,7 +27,6 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db import get_connection
-from webapp import salvos
 
 logger = logging.getLogger("radar")
 
@@ -369,15 +368,16 @@ def listar_acessos(limit: int = 100, usuario: dict = Depends(exigir_admin)):
 
 @router.get("/api/usuarios/{usuario_id}/acessos")
 def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
-    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reune 3
-    fontes na mesma tela: login/logout (V1) + navegacao por aba ('view_aba', V2 --
-    ambos em admin_acessos_log, so filtrando por usuario_id) e o historico de
-    busca (usuario_busca_historico, ja existia pra Transacoes Salvas, so exposto
-    aqui tambem). `eventos` fica limitado a 200 linhas mais recentes (login+logout+
-    view_aba misturados) -- navegacao por aba gera MUITO mais volume que
-    login/logout (uma linha por troca de aba, de cada usuario), entao esse teto
-    existe de proposito pra nao devolver uma resposta gigante; nao ha paginacao
-    ainda (fora de escopo por ora, ver CLAUDE.md)."""
+    """Drill-down do log de acessos por PESSOA (pedido do usuario) -- reune
+    login/logout (V1) + navegacao por aba ('view_aba', V2 -- ambos em
+    admin_acessos_log, so filtrando por usuario_id). `eventos` fica limitado a 200
+    linhas mais recentes (login+logout+view_aba misturados) -- navegacao por aba
+    gera MUITO mais volume que login/logout (uma linha por troca de aba, de cada
+    usuario), entao esse teto existe de proposito pra nao devolver uma resposta
+    gigante; nao ha paginacao ainda (fora de escopo por ora, ver CLAUDE.md).
+    NAO inclui mais historico de busca (usuario_busca_historico) -- essa tabela
+    era da feature "Transacoes Salvas", removida (ver
+    docs/archive/removed-features.md)."""
     conn = get_connection(pooled=True)
     try:
         alvo = conn.execute("SELECT username FROM admin_usuarios WHERE id = ?", (usuario_id,)).fetchone()
@@ -400,7 +400,6 @@ def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
             "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
             (usuario_id,),
         ).fetchone()[0]
-        buscas = salvos.listar_busca_historico(conn, usuario_id, limite=50)
     finally:
         conn.close()
     return {
@@ -411,7 +410,6 @@ def acessos_do_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
         "eventos": [
             {"origem": r[0], "evento": r[1], "detalhe": r[2], "ip": r[3], "criado_em": r[4]} for r in rows
         ],
-        "buscas": buscas,
     }
 
 

@@ -12,17 +12,15 @@ não confiar neles como fonte de verdade.
 **Última reestruturação deste arquivo: 2026-09-21** (redução de ~2400 para ~150 linhas,
 conteúdo integral preservado em `docs/`).
 
+**Última revisão desta linha: 2026-09-22** (remoção de Mercado Primário, Exportações e
+Favoritos/Transações Salvas — reposicionamento pra plataforma pública/lead-gen).
+
 ## O que é a plataforma
 
 Site que acompanha operações de **crédito incentivado** de empresas brasileiras junto a
-instituições de fomento (BNDES/FINEP, ~58 mil operações desde 2002) + catálogo de **linhas de
+instituições de fomento (BNDES/FINEP, ~59 mil operações desde 2002) + catálogo de **linhas de
 crédito permanentes** (produtos, não transações — BNDES/FINEP/Desenvolve SP/BNB/BASA/BB/CEF).
 Público-alvo: análise de mercado (prospecção/benchmarking), não originação de crédito.
-
-**Segundo "modo": "Radar de Crédito Primário"** — mercado de capitais primário (debêntures,
-CRI, CRA, notas comerciais, letras financeiras, CDCA, CCB, CPR-F) via dados da CVM. Já tem
-camada de dados + API/busca + frontend completos (toggle de mercado na topbar) — ver
-`docs/radar-primario-*.md`.
 
 100% online: SPA vanilla JS + FastAPI + Postgres (Aiven), tudo na Vercel. Não existe mais
 "modo local" com banco separado — local (`uvicorn`) e produção falam com o MESMO Postgres via
@@ -30,8 +28,7 @@ camada de dados + API/busca + frontend completos (toggle de mercado na topbar) �
 
 ## Stack (essencial — histórico/migração em `docs/stack-deploy.md`)
 
-- **Backend**: FastAPI (`webapp/main.py`), rotas `/api/*`. Radar Primário isolado em
-  `webapp/primario/` (prefixo `/api/primario/*`).
+- **Backend**: FastAPI (`webapp/main.py`), rotas `/api/*`.
 - **Frontend**: SPA vanilla JS sem framework/bundler, `webapp/static/index.html` com
   `<section class="view">` por aba, troca 100% client-side.
 - **Banco**: Postgres no Aiven, free tier (1GB, teto de 20 conexões). Acessado via `psycopg`
@@ -45,8 +42,7 @@ camada de dados + API/busca + frontend completos (toggle de mercado na topbar) �
 - **SQL sempre com `?`, nunca `%s`** — `db_compat.py` faz o monkeypatch pra psycopg. Um `%`
   literal numa query (`LIKE`) precisa virar `%%`.
 - **Nunca inventar dado**: valor/taxa/prazo/indexador/carência não documentado na fonte oficial
-  fica `NULL`/`NAO_INFORMADO`, nunca estimado/inferido. Vale pro catálogo de Linhas Incentivadas
-  e pro Radar Primário (CVM) igualmente.
+  fica `NULL`/`NAO_INFORMADO`, nunca estimado/inferido (catálogo de Linhas Incentivadas).
 - **Rotas da webapp usam `get_connection(pooled=True)`** (pool `psycopg_pool`, `max_size=2`).
   Scripts de pipeline (rodados só via GitHub Actions) usam `get_connection()` sem pool. Não
   inverter — ver `docs/incidentes-infra.md` pro histórico de esgotamento de conexão no Aiven.
@@ -60,8 +56,8 @@ camada de dados + API/busca + frontend completos (toggle de mercado na topbar) �
   banco de produção) — ver `docs/painel-admin.md` pra como mintar uma sessão de teste sem UI.
 - **Sempre matar processos `uvicorn` soltos** antes/depois de testar contra produção — o teto
   de conexões do Aiven já estourou 3x por processos esquecidos rodando.
-- **Filtros estruturados (UF, setor, agência/instrumento, etc.) são sempre `AND`, nunca entram
-  no ranking de texto livre da busca** — ver `docs/motor-busca.md`.
+- **Filtros estruturados (UF, setor, agência, etc.) são sempre `AND`, nunca entram no ranking
+  de texto livre da busca** — ver `docs/motor-busca.md`.
 - **`limit`/`offset` de rotas públicas sempre com teto/clamp** (`max(1, min(limit, N))`) — já
   aplicado em todas as rotas de listagem, manter o padrão em rotas novas.
 
@@ -70,17 +66,14 @@ camada de dados + API/busca + frontend completos (toggle de mercado na topbar) �
 | Tabela | O que é |
 |---|---|
 | `bndes_raw`, `finep_credito_direto_raw`, `finep_credito_descentralizado_raw` | staging, quase cru da fonte oficial |
-| `operations` | tabela UNIFICADA BNDES+FINEP — todo dashboard/busca do mercado Incentivado lê daqui |
+| `operations` | tabela UNIFICADA BNDES+FINEP — todo dashboard/busca lê daqui |
 | `cnpj_cnae` | cache CNPJ→CNAE/razão social/porte/uf/município (Receita Federal) |
 | `de_para_cnae` | crosswalk oficial BNDES: divisão CNAE → Setor/Subsetor |
 | `editais_raw` | editais (chamadas públicas) da FINEP — não entra no rebuild de `operations` |
 | `linhas_incentivadas` | catálogo de produtos permanentes (não transações) |
 | `operations_correcoes_manuais` | correções manuais, reaplicadas a cada refresh |
-| `refresh_log` / `refresh_editais_log` / `refresh_primario_log` | histórico de cada rodada de pipeline |
-| `cvm_oferta_distribuicao_raw` / `cvm_oferta_resolucao_160_raw` | staging CVM (2 fontes distintas) |
-| `operations_primario` | tabela unificada do Radar de Crédito Primário |
+| `refresh_log` / `refresh_editais_log` | histórico de cada rodada de pipeline |
 | `admin_usuarios` / `admin_sessoes` / `admin_acessos_log` | contas, sessão e log de acesso (painel + site principal) |
-| `usuario_operacoes_salvas` / `usuario_busca_historico` | Transações Salvas (favoritos/histórico por conta) |
 
 ## Onde procurar o quê (mapa rápido — histórico/detalhe em `docs/`)
 
@@ -91,16 +84,13 @@ camada de dados + API/busca + frontend completos (toggle de mercado na topbar) �
 | Motor de busca (sem IA / IA opcional) | `src/search_fts.py`, `src/search_taxonomy.py`, `src/search.py`, `src/embeddings.py` | `docs/motor-busca.md` |
 | Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` | `docs/linhas-incentivadas.md` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` | — |
-| Radar Primário — pipeline CVM | `src/download_cvm.py`, `src/parse_cvm.py`, `src/parse_cvm_resolucao160.py`, `src/unify_primario.py`, `src/refresh_primario.py` | `docs/radar-primario-pipeline.md` |
-| Radar Primário — API/rotas + busca | `webapp/primario/routes.py`, `src/search_fts_primario.py` | `docs/radar-primario-api-busca.md` |
-| Radar Primário — frontend/toggle de mercado | `webapp/static/js/common.js` (`_MERCADOS`/`alternarMercado`), `consolidado.js`/`tendencias.js`/`busca.js` | `docs/radar-primario-frontend.md` |
-| API/rotas (mercado Incentivado) | `webapp/main.py` | — |
+| API/rotas | `webapp/main.py` | — |
 | Frontend — abas, roteamento, filtros na URL | `webapp/static/js/common.js`, `webapp/static/index.html` | `docs/frontend-abas.md` |
 | Frontend — cada aba | `webapp/static/js/{consolidado,tendencias,busca,editais,linhas}.js` | — |
 | Painel de Admin (`/admin`) | `webapp/admin/*`, `webapp/static/admin.html`, `webapp/static/js/admin.js` | `docs/painel-admin.md` |
-| Transações Salvas (favoritos/histórico) | `webapp/salvos.py`, `webapp/static/js/salvos.js` | `docs/transacoes-salvas.md` |
 | Deploy Vercel | `vercel.json`, `api/index.py`, `DEPLOY.md` | `docs/stack-deploy.md` |
 | Automação (GitHub Actions) | `.github/workflows/*.yml` | `docs/automacao.md` |
 | Gotchas de infra/produção (Aiven, pool, sequences, cookie) | — | `docs/incidentes-infra.md` |
 | Bugs reais já corrigidos (armadilhas a não repetir) | — | `docs/bugs-corrigidos.md` |
 | Auditorias de otimização já feitas (o que já foi medido/aplicado) | — | `docs/auditoria-otimizacao.md` |
+| Funcionalidades removidas (Mercado Primário, Exportações, Favoritos/Transações Salvas) — SÓ consultar se a tarefa exigir restaurar algo | — | `docs/archive/removed-features.md` (backup técnico, não operacional — nunca carregar por rotina) |

@@ -228,8 +228,10 @@ tracking novo — explicitamente MENOR que uma V2 de analytics (que continua for
 ver acima). **V2 construída depois (2026-09-16), pedido explícito do usuário confirmando o
 que antes estava marcado como fora de escopo** — ver bloco abaixo.
 
-**Log de navegação por aba + histórico de busca no drill-down (V2, aprovado 2026-09-16)**:
-o mesmo modal de drill-down por usuário passou a reunir 3 fontes:
+**Log de navegação por aba no drill-down (V2, aprovado 2026-09-16)**: o mesmo modal de
+drill-down por usuário passou a reunir 2 fontes (era 3 — a terceira, histórico de busca via
+`usuario_busca_historico`, foi removida em 2026-09-22 junto com Transações Salvas, ver
+`docs/archive/removed-features.md`):
 1. **Login/logout** (já existia, `admin_acessos_log`).
 2. **Navegação por aba** (`evento='view_aba'`) — NÃO virou tabela nova; reaproveita
    `admin_acessos_log` com uma coluna genérica nova, `detalhe` (`ALTER TABLE ... ADD COLUMN
@@ -240,11 +242,7 @@ o mesmo modal de drill-down por usuário passou a reunir 3 fontes:
    a troca de aba é de verdade (`mudouDeAba` — não duplica evento reabrindo a mesma aba já
    ativa) — fire-and-forget (`.catch(() => {})`), nunca atrasa nem trava a troca de aba em
    si, e o backend (`registrar_navegacao`) também nunca deixa uma falha de log virar erro
-   pro cliente (best-effort dos dois lados, mesmo espírito de
-   `_registrar_busca_se_logado`/histórico de busca).
-3. **Histórico de busca** (`usuario_busca_historico`, já existia pra Transações Salvas —
-   ver seção própria abaixo) — só exposto no mesmo endpoint/modal via
-   `salvos.listar_busca_historico`, nenhuma duplicação de lógica.
+   pro cliente (best-effort dos dois lados).
 
 **Cuidado real de volume, levantado ANTES de construir**: navegação por aba gera MUITO mais
 linhas que login/logout (uma por troca de aba, de cada usuário logado, toda visita) — bem
@@ -253,7 +251,7 @@ diferente do volume de login/logout. Duas decisões tomadas por causa disso:
   usuários) continua filtrando `WHERE evento IN ('login', 'logout')` — `view_aba` NUNCA
   aparece ali, só no drill-down POR PESSOA. Sem esse filtro, poucos minutos de uso normal já
   afogariam o sinal de "quem entrou/saiu" que essa lista existe pra mostrar.
-- O drill-down por pessoa (`GET .../usuarios/{id}/acessos`) mistura os 3 tipos de evento na
+- O drill-down por pessoa (`GET .../usuarios/{id}/acessos`) mistura os 2 tipos de evento na
   mesma lista, mas continua limitado a 200 linhas mais recentes (mesmo teto que já existia
   pra login/logout sozinho) — **sem paginação ainda**. Não é um problema resolvido de vez,
   só o suficiente pro escopo pedido agora; se o volume real crescer a ponto de 200 linhas

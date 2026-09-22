@@ -1,29 +1,13 @@
-// Aba Consolidado: KPIs + serie temporal + setores + UF + porte (+ taxas/prazos
-// no modo Primario -- ver bloco no final do arquivo). CLAUDE.md, secao "Radar
-// de Credito Primario -- Frontend" documenta TODOS os endpoints /api/primario/*
-// assumidos aqui (ainda nao construidos/testados contra um backend real).
+// Aba Consolidado: KPIs + serie temporal + setores + UF + porte.
 
-let chartSerie, chartSetores, chartPorte, chartTaxas, chartPrazos, chartIncentivada, chartRegimeFiduciario, chartTipoLastro;
+let chartSerie, chartSetores, chartPorte;
 
 function kpiCard(label, value, sub) {
   return `<div class="kpi-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 }
 
 async function loadKPIs(filters) {
-  const data = await fetchJSON(apiMercado("/api/kpis") + "?" + qs(filters));
-  if (_mercadoAtivo === "primario") {
-    // Sem "desembolso" no mercado de capitais (o valor da oferta e captado de
-    // uma vez, nao em parcelas como um financiamento BNDES/FINEP) -- 4o KPI
-    // vira "emissores distintos" em vez de "volume desembolsado".
-    const porInstrumento = data.por_instrumento || data.por_agencia || [];
-    const porInstrumentoTxt = porInstrumento.map((a) => `${a.instrumento || a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
-    document.getElementById("kpi-row").innerHTML =
-      kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
-      kpiCard("Volume total emitido", fmtBRL(data.valor_contratado_total ?? data.valor_total), porInstrumentoTxt) +
-      kpiCard("Emissores distintos", fmtNum(data.n_emissores_distintos ?? data.n_emissores)) +
-      kpiCard("Ticket médio por operação", fmtBRL(data.cheque_medio));
-    return;
-  }
+  const data = await fetchJSON("/api/kpis?" + qs(filters));
   const porAgencia = data.por_agencia.map((a) => `${a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
   document.getElementById("kpi-row").innerHTML =
     kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
@@ -65,20 +49,17 @@ function _sequenciaCompletaPeriodos(granularidade, pares) {
 
 async function loadSerieTemporal(filters) {
   const granularidade = document.getElementById("serie-granularidade").value;
-  const data = await fetchJSON(apiMercado("/api/serie_temporal") + "?" + qs({ ...filters, granularidade }));
+  const data = await fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade }));
   if (!Array.isArray(data)) { if (chartSerie) { chartSerie.destroy(); chartSerie = null; } return; }
-  // Incentivado agrupa por agencia (BNDES/FINEP, 2 valores fixos, cores
-  // proprias); Primario agrupa por instrumento (Debênture/CRI/CRA/... --
-  // numero variavel, sem paleta fixa -- usa AZUL_TONS em sequencia).
-  const agrupador = _mercadoAtivo === "primario" ? "instrumento" : "agencia";
+  const agrupador = "agencia";
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
   const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos).map((s) => s.label);
   const grupos = [...new Set(data.map((d) => d[agrupador]))];
   const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC" };
 
-  const datasets = grupos.map((g, i) => ({
+  const datasets = grupos.map((g) => ({
     label: g,
-    backgroundColor: _mercadoAtivo === "primario" ? AZUL_TONS[i % AZUL_TONS.length] : (coresIncentivado[g] || "#5878A0"),
+    backgroundColor: coresIncentivado[g] || "#5878A0",
     data: periodos.map((p) => {
       const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo) === p && d[agrupador] === g);
       return row ? row.valor_total : 0;
@@ -98,23 +79,16 @@ async function loadSerieTemporal(filters) {
   });
 }
 
-// Incentivado: ranking por setor_bndes (CNAE). Primario: ranking por
-// instrumento_padronizado (Debênture/CRI/CRA/Nota Comercial/Letra Financeira/
-// CDCA/CCB) -- a dimensao mais especifica e distintiva de renda fixa, dai
-// virar o destaque do Consolidado em vez de repetir "setor" (que ja aparece
-// no filtro compartilhado e no drill-down de Tendencias). Suposicao de
-// contrato: GET /api/primario/instrumentos devolve [{instrumento,
-// valor_total, n_operacoes}], mesmo formato de /api/setores.
+// Ranking por setor_bndes (CNAE).
 async function loadSetores(filters) {
-  const endpoint = _mercadoAtivo === "primario" ? "/api/primario/instrumentos" : "/api/setores";
   let data;
   try {
-    data = (await fetchJSON(endpoint + "?" + qs(filters))).slice(0, 10);
+    data = (await fetchJSON("/api/setores?" + qs(filters))).slice(0, 10);
   } catch (e) {
     data = [];
   }
   if (!Array.isArray(data)) data = [];
-  const campo = _mercadoAtivo === "primario" ? "instrumento" : "setor";
+  const campo = "setor";
   if (chartSetores) chartSetores.destroy();
   chartSetores = new Chart(document.getElementById("chart-setores"), {
     type: "bar",
@@ -134,8 +108,7 @@ async function loadSetores(filters) {
       onClick: (evt, els) => {
         if (!els.length) return;
         const valor = data[els[0].index][campo];
-        if (_mercadoAtivo === "primario") openOperacoesModal(`Instrumento: ${valor}`, { instrumento: valor });
-        else openOperacoesModal(`Setor: ${valor}`, { setor: valor });
+        openOperacoesModal(`Setor: ${valor}`, { setor: valor });
       },
     },
   });
@@ -247,13 +220,9 @@ function _garantirSvgMapaUF() {
 }
 
 async function loadUF(filters) {
-  // Primario: uf_emissor (localizacao do emissor do titulo) -- mesmo conceito
-  // de "UF" que o mapa ja mostra pro Incentivado, so a coluna de origem muda
-  // no backend. Suposicao de contrato: /api/primario/uf devolve o MESMO
-  // formato de /api/uf ({uf, valor_total, n_operacoes}).
   let data;
   try {
-    data = await fetchJSON(apiMercado("/api/uf") + "?" + qs(filters));
+    data = await fetchJSON("/api/uf?" + qs(filters));
   } catch (e) {
     data = [];
   }
@@ -323,19 +292,9 @@ async function loadUF(filters) {
 }
 
 async function loadPorte(filters) {
-  // So no Incentivado -- ver index.html/CLAUDE.md, seção Frontend: medido ao
-  // vivo que porte_emissor é ~99,85% "Demais" (nenhum poder discriminante
-  // pra emissores de mercado de capitais), então este card foi REMOVIDO do
-  // modo Primario (substituído por "Por tipo de lastro", ver loadTipoLastro
-  // abaixo) -- sai cedo (e limpa qualquer grafico antigo) quando o mercado
-  // ativo é Primario, mesmo padrão de loadTaxas/loadPrazos.
-  if (_mercadoAtivo === "primario") {
-    if (chartPorte) { chartPorte.destroy(); chartPorte = null; }
-    return;
-  }
   let data;
   try {
-    data = await fetchJSON(apiMercado("/api/porte") + "?" + qs(filters));
+    data = await fetchJSON("/api/porte?" + qs(filters));
   } catch (e) {
     data = [];
   }
@@ -360,265 +319,6 @@ async function loadPorte(filters) {
   });
 }
 
-// ============ Taxas e prazos (renda fixa, so modo Primario) ============
-// Sem equivalente no credito de fomento (BNDES/FINEP nao tem "taxa"/
-// "indexador" de mercado nem "prazo" no mesmo sentido de um titulo de
-// divida) -- as duas funcoes abaixo saem cedo (e limpam qualquer grafico
-// antigo) quando o mercado ativo NAO e o Primario, entao e seguro chamalas
-// incondicionalmente em refreshConsolidado(). SUPOSICAO DE CONTRATO (ver
-// aviso no topo de common.js e CLAUDE.md, secao "Radar de Credito Primario
-// -- Frontend"): endpoints /api/primario/graficos/taxas e /prazos ainda NAO
-// existem/nao foram testados contra um backend real -- formato assumido:
-// { n_total, n_com_taxa|n_com_prazo, cobertura_pct, linhas: [...] }.
-
-// Distribuicao de TAXA por indexador. taxa_tipo 'spread'/'taxa_fixa' sao a
-// MESMA unidade (pontos percentuais a.a., aditivos) -- as unicas incluidas
-// no grafico; 'percentual_indexador' (ex: "108% do CDI") e MULTIPLICATIVO,
-// unidade diferente, nunca misturado no mesmo grafico -- so contado no aviso.
-async function loadTaxas(filters) {
-  if (_mercadoAtivo !== "primario") {
-    if (chartTaxas) { chartTaxas.destroy(); chartTaxas = null; }
-    return;
-  }
-  const aviso = document.getElementById("chart-taxas-aviso");
-  const vazio = document.getElementById("chart-taxas-vazio");
-  let data = null;
-  try {
-    data = await fetchJSON("/api/primario/graficos/taxas?" + qs(filters));
-  } catch (e) {
-    data = null;
-  }
-  const linhasTodas = data && Array.isArray(data.linhas) ? data.linhas : [];
-  const comparaveis = linhasTodas.filter((l) => l.taxa_tipo === "spread" || l.taxa_tipo === "taxa_fixa");
-  const multiplicativas = linhasTodas.filter((l) => l.taxa_tipo === "percentual_indexador");
-
-  if (aviso) {
-    if (data && typeof data.n_total === "number") {
-      const nComTaxa = data.n_com_taxa ?? linhasTodas.reduce((acc, l) => acc + (l.n || 0), 0);
-      const pct = data.cobertura_pct != null
-        ? data.cobertura_pct.toFixed(1).replace(".", ",")
-        : (data.n_total ? ((nComTaxa / data.n_total) * 100).toFixed(1).replace(".", ",") : "0,0");
-      let txt = `⚠ Amostra parcial: taxa extraída em ${fmtNum(nComTaxa)} de ${fmtNum(data.n_total)} operações (${pct}%) — nem toda oferta tem a taxa registrada em formato reconhecível.`;
-      if (multiplicativas.length) {
-        const nMult = multiplicativas.reduce((acc, l) => acc + (l.n || 0), 0);
-        txt += ` Mais ${fmtNum(nMult)} operações cotadas como % do indexador (ex: "108% do CDI") não entram neste gráfico por usarem outra unidade.`;
-      }
-      aviso.textContent = txt;
-      aviso.style.display = "block";
-    } else {
-      aviso.style.display = "none";
-    }
-  }
-
-  if (!comparaveis.length) {
-    if (vazio) vazio.style.display = "block";
-    if (chartTaxas) { chartTaxas.destroy(); chartTaxas = null; }
-    return;
-  }
-  if (vazio) vazio.style.display = "none";
-
-  if (chartTaxas) chartTaxas.destroy();
-  chartTaxas = new Chart(document.getElementById("chart-taxas"), {
-    type: "bar",
-    data: {
-      labels: comparaveis.map((l) => l.indexador),
-      datasets: [{ data: comparaveis.map((l) => l.taxa_mediana), backgroundColor: AZUL_TONS[1] }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${Number(ctx.raw).toFixed(2).replace(".", ",")} p.p. (n=${fmtNum(comparaveis[ctx.dataIndex].n || 0)})`,
-          },
-        },
-      },
-      scales: { y: { ticks: { callback: (v) => v + " p.p." } } },
-    },
-  });
-}
-
-// Distribuicao de PRAZO (meses) por instrumento -- dado EXATO quando existe
-// (data_vencimento - data_emissao, ver CLAUDE.md), so a COBERTURA e parcial.
-async function loadPrazos(filters) {
-  if (_mercadoAtivo !== "primario") {
-    if (chartPrazos) { chartPrazos.destroy(); chartPrazos = null; }
-    return;
-  }
-  const aviso = document.getElementById("chart-prazos-aviso");
-  const vazio = document.getElementById("chart-prazos-vazio");
-  let data = null;
-  try {
-    data = await fetchJSON("/api/primario/graficos/prazos?" + qs(filters));
-  } catch (e) {
-    data = null;
-  }
-  const linhas = data && Array.isArray(data.linhas) ? data.linhas : [];
-
-  if (aviso) {
-    if (data && typeof data.n_total === "number") {
-      const nComPrazo = data.n_com_prazo ?? linhas.reduce((acc, l) => acc + (l.n || 0), 0);
-      const pct = data.cobertura_pct != null
-        ? data.cobertura_pct.toFixed(1).replace(".", ",")
-        : (data.n_total ? ((nComPrazo / data.n_total) * 100).toFixed(1).replace(".", ",") : "0,0");
-      aviso.textContent = `⚠ Amostra parcial: prazo calculável em ${fmtNum(nComPrazo)} de ${fmtNum(data.n_total)} operações (${pct}%) — só quando emissão e vencimento estão preenchidos na fonte (CVM).`;
-      aviso.style.display = "block";
-    } else {
-      aviso.style.display = "none";
-    }
-  }
-
-  if (!linhas.length) {
-    if (vazio) vazio.style.display = "block";
-    if (chartPrazos) { chartPrazos.destroy(); chartPrazos = null; }
-    return;
-  }
-  if (vazio) vazio.style.display = "none";
-
-  if (chartPrazos) chartPrazos.destroy();
-  chartPrazos = new Chart(document.getElementById("chart-prazos"), {
-    type: "bar",
-    data: {
-      labels: linhas.map((l) => l.instrumento),
-      datasets: [{ data: linhas.map((l) => l.prazo_mediano_meses), backgroundColor: AZUL_TONS[2] }],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${fmtNum(Math.round(ctx.raw))} meses (n=${fmtNum(linhas[ctx.dataIndex].n || 0)})`,
-          },
-        },
-      },
-      scales: { x: { ticks: { callback: (v) => v + "m" } } },
-    },
-  });
-}
-
-// ---- Estrutura da oferta (Incentivada Lei 12.431 / Regime fiduciário) ----
-// Substitui o antigo "Ranking por instrumento" no Consolidado -- ver
-// index.html e CLAUDE.md, seção Frontend, redesenho de 2026-09-17:
-// aquele card era redundante com a série temporal empilhada por instrumento
-// (acima) + o texto por_instrumento já mostrado no KPI de volume total, e
-// nunca tinha sido de fato REPENSADO pro contexto de renda fixa (só um
-// relabel do "Ranking de setores" do Incentivado). `incentivada` (Lei
-// 12.431) é o cross-link temático mais óbvio com o resto do site ("Radar de
-// Crédito INCENTIVADO") e nunca tinha aparecido em nenhum card até aqui.
-// `incentivada`/`regime_fiduciario` podem ser NULL (campo S/N vazio na
-// fonte CVM) -- SEMPRE as 3 fatias (Sim/Não/Não informado) desenhadas,
-// nunca só 2, pra nunca esconder uma parte real dos dados atrás de um
-// booleano que assume sempre preenchido.
-function _donutBooleano(canvasId, breakdown) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return null;
-  const chaves = ["sim", "nao", "nao_informado"];
-  const labels = ["Sim", "Não", "Não informado"];
-  const valores = chaves.map((c) => (breakdown && breakdown[c] ? breakdown[c].valor_total : 0));
-  const ns = chaves.map((c) => (breakdown && breakdown[c] ? breakdown[c].n : 0));
-  if (!valores.some((v) => v > 0) && !ns.some((n) => n > 0)) return null;
-  return new Chart(canvas, {
-    type: "doughnut",
-    data: { labels, datasets: [{ data: valores, backgroundColor: [AZUL_TONS[0], AZUL_TONS[4], "#D9D9D9"] }] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)} (${fmtNum(ns[ctx.dataIndex])} op.)`,
-          },
-        },
-      },
-    },
-  });
-}
-
-// Tipo de lastro (Pulverizado/Concentrado) -- reusa o MESMO fetch de
-// /estrutura_mercado (nao e outro round-trip de rede), so desenhado como
-// donut separado por ficar num CARD diferente (substitui "Por porte do
-// emissor" no grid UF/porte, ver index.html). Sempre inclui "Não informado"
-// como fatia (83,7% medido ao vivo -- so linhas do rito automatico/
-// Resolucao 160 tem esse campo, ver CLAUDE.md) -- mesma logica de nunca
-// esconder a fatia desconhecida atras de um grafico que parece 100%
-// resolvido.
-function _donutCategorico(canvasId, linhas, chaveLabel) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas || !Array.isArray(linhas) || !linhas.length) return null;
-  return new Chart(canvas, {
-    type: "doughnut",
-    data: {
-      labels: linhas.map((l) => l[chaveLabel]),
-      datasets: [{ data: linhas.map((l) => l.valor_total), backgroundColor: AZUL_TONS.slice(0, linhas.length) }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)} (${fmtNum(linhas[ctx.dataIndex].n || 0)} op.)`,
-          },
-        },
-      },
-    },
-  });
-}
-
-async function loadEstruturaOferta(filters) {
-  if (_mercadoAtivo !== "primario") {
-    if (chartIncentivada) { chartIncentivada.destroy(); chartIncentivada = null; }
-    if (chartRegimeFiduciario) { chartRegimeFiduciario.destroy(); chartRegimeFiduciario = null; }
-    if (chartTipoLastro) { chartTipoLastro.destroy(); chartTipoLastro = null; }
-    return;
-  }
-  let data = null;
-  try {
-    data = await fetchJSON("/api/primario/estrutura_mercado?" + qs(filters));
-  } catch (e) {
-    data = null;
-  }
-  if (chartIncentivada) { chartIncentivada.destroy(); chartIncentivada = null; }
-  if (chartRegimeFiduciario) { chartRegimeFiduciario.destroy(); chartRegimeFiduciario = null; }
-  if (chartTipoLastro) { chartTipoLastro.destroy(); chartTipoLastro = null; }
-  if (!data) return;
-  chartIncentivada = _donutBooleano("chart-incentivada", data.incentivada);
-  chartRegimeFiduciario = _donutBooleano("chart-regime-fiduciario", data.regime_fiduciario);
-  chartTipoLastro = _donutCategorico("chart-tipo-lastro", data.tipo_lastro, "tipo_lastro");
-}
-
-// Rotulos/hints dos cards do Consolidado que trocam de significado por
-// mercado -- chamada por common.js::_aplicarIdentidadeMercado() (via
-// `typeof` check, nunca o inverso, pra common.js nao depender de detalhe de
-// implementacao desta aba).
-function _aplicarRotulosMercadoConsolidado() {
-  const primario = _mercadoAtivo === "primario";
-  const set = (id, texto) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = texto;
-  };
-  set("chart-serie-titulo", primario ? "Evolução temporal — por instrumento" : "Evolução temporal de emissões");
-  set("chart-serie-hint", primario ? "R$ emitido por período" : "R$ contratado por período");
-  // "chart-setores-titulo" (Ranking de setores) so existe mais no card
-  // Incentivado (ver index.html, data-mercado-only="incentivado") -- o slot
-  // Primario virou "Estrutura da oferta" (titulo estatico, sem troca por
-  // JS), entao nao ha mais uma variante primario deste rotulo pra aplicar.
-  set("chart-uf-titulo", primario ? "Por UF do emissor" : "Por UF");
-  // "chart-porte-titulo" (Por porte do cliente) so existe mais no card
-  // Incentivado (ver index.html, data-mercado-only="incentivado") -- o slot
-  // Primario virou "Por tipo de lastro" (titulo estatico) depois de medir
-  // ao vivo que porte_emissor e ~99,85% "Demais" (sem poder discriminante
-  // nenhum pra emissores de mercado de capitais, ver comentario no
-  // index.html) -- nao ha mais uma variante primario deste rotulo.
-}
-
 async function refreshConsolidado(filters) {
   filters = filters || currentFilters();
   await Promise.all([
@@ -627,9 +327,6 @@ async function refreshConsolidado(filters) {
     loadSetores(filters),
     loadUF(filters),
     loadPorte(filters),
-    loadTaxas(filters),
-    loadPrazos(filters),
-    loadEstruturaOferta(filters),
   ]);
 }
 

@@ -4,25 +4,6 @@
 
 let ultimosResultados = [];
 
-// Ids de operacao ja salvos do usuario logado (Transacoes Salvas) -- carregado 1x
-// por busca (ver runBusca) via /api/salvos/operacoes/ids (rota em lote, ver
-// webapp/main.py::salvos_ids), NUNCA um GET por card: os resultados podem trazer
-// ate 200 linhas, e cada card ja tem sua propria estrelinha (`.fav-btn-mini`, ver
-// renderListaResultados) que precisa saber, de cara, se aquela operacao ja esta
-// favoritada. Vazio (nunca erro) tanto pra "ninguem logado" quanto pra qualquer
-// falha de rede -- nesses casos nenhuma estrela nasce preenchida, mas a busca em
-// si segue funcionando normalmente.
-let idsSalvosAtual = new Set();
-
-async function _carregarIdsSalvos() {
-  try {
-    const data = await fetchJSON("/api/salvos/operacoes/ids");
-    idsSalvosAtual = new Set(data.ids || []);
-  } catch (e) {
-    idsSalvosAtual = new Set();
-  }
-}
-
 // Historico de buscas: pessoal e temporario (so no navegador da propria pessoa,
 // via localStorage -- nunca vai pro servidor). Substitui os chips de exemplo
 // fixos que existiam antes (pedido do usuario).
@@ -126,64 +107,20 @@ function renderListaResultados() {
     return;
   }
 
-  // Suposicao de contrato (ver CLAUDE.md): GET /api/primario/busca devolve
-  // resultados com nomes de campo proprios do dominio CVM (emissor/
-  // instrumento/setor_emissor/data_referencia/valor_emissao) -- fallback pro
-  // nome "generico" (mesmo usado pelo Incentivado) cobre o caso do backend
-  // real acabar espelhando os MESMOS nomes por conveniencia.
   container.innerHTML = lista
-    .map((r) => {
-      const nomeCliente = r.cliente ?? r.emissor ?? r.razao_social_oficial_emissor;
-      const nomeAgencia = r.agencia ?? r.instrumento ?? r.instrumento_padronizado;
-      const nomeSetor = r.setor_bndes ?? r.setor_emissor;
-      const nomeSubsetor = r.subsetor_bndes ?? r.subsetor_emissor;
-      const nomeSegmento = r.segmento ?? r.segmento_emissor;
-      const nomeData = r.data_contratacao ?? r.data_referencia;
-      const nomeValor = r.valor_contratado ?? r.valor_emissao ?? r.valor_oferta;
-      // Estrelinha de favoritar: escondida no Primario -- "Transacoes Salvas"
-      // ainda nao suporta operations_primario (ver TODO em
-      // common.js::_configurarBotaoFavoritar).
-      const favBtn = _mercadoAtivo === "primario"
-        ? ""
-        : `<button class="fav-btn-mini${idsSalvosAtual.has(r.id) ? " ativo" : ""}" data-op-id="${r.id}" title="${idsSalvosAtual.has(r.id) ? "Remover dos salvos" : "Salvar operação"}">${idsSalvosAtual.has(r.id) ? "★" : "☆"}</button>`;
-      return `<div class="result-card" data-id="${r.id}">
-        ${favBtn}
+    .map((r) => `<div class="result-card" data-id="${r.id}">
         <div class="top-row">
-          <span class="cliente">${nomeCliente || "-"}</span>
-          <span class="valor">${fmtBRLFull(nomeValor)}</span>
+          <span class="cliente">${r.cliente || "-"}</span>
+          <span class="valor">${fmtBRLFull(r.valor_contratado)}</span>
         </div>
-        <div class="meta">${nomeAgencia || "-"} · ${nomeSetor || "Não classificado"}${nomeSubsetor ? " · " + nomeSubsetor : ""}${nomeSegmento ? " · " + nomeSegmento : ""} · ${r.uf || "-"} · ${nomeData || "-"}</div>
+        <div class="meta">${r.agencia || "-"} · ${r.setor_bndes || "Não classificado"}${r.subsetor_bndes ? " · " + r.subsetor_bndes : ""}${r.segmento ? " · " + r.segmento : ""} · ${r.uf || "-"} · ${r.data_contratacao || "-"}</div>
         <div class="meta">${r.descricao_projeto ? r.descricao_projeto.slice(0, 160) : ""}</div>
         <div class="score">${typeof r.score === "number" ? `similaridade: ${(r.score * 100).toFixed(0)}%` : r.motivo || ""}</div>
-      </div>`;
-    })
+      </div>`)
     .join("");
 
   container.querySelectorAll(".result-card").forEach((card) => {
     card.addEventListener("click", () => openOperacaoDetalhe(card.dataset.id));
-  });
-
-  // Estrelinha mini (só aparece no hover do card, ver .fav-btn-mini em style.css) --
-  // favorita/desfavorita sem abrir o modal de detalhe. stopPropagation() é
-  // essencial aqui: o card inteiro (acima) já tem seu próprio click que abre o
-  // modal, e os dois nunca devem disparar juntos. UI otimista (ver
-  // common.js::alternarFavoritoOtimista) -- pinta ★/☆ na hora do clique, só
-  // reverte se a chamada ao servidor falhar.
-  container.querySelectorAll(".fav-btn-mini").forEach((btn) => {
-    const opId = Number(btn.dataset.opId);
-    const renderizar = (ativo) => {
-      btn.classList.toggle("ativo", ativo);
-      btn.textContent = ativo ? "★" : "☆";
-      btn.title = ativo ? "Remover dos salvos" : "Salvar operação";
-      if (ativo) idsSalvosAtual.add(opId);
-      else idsSalvosAtual.delete(opId);
-    };
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      alternarFavoritoOtimista(btn, opId, btn.classList.contains("ativo"), renderizar, () => {
-        if (typeof recarregarSalvos === "function") recarregarSalvos();
-      });
-    });
   });
 }
 
@@ -192,17 +129,13 @@ function renderResultados(data) {
   let html = "";
 
   if (data.confianca_baixa) {
-    const baseTxt = _mercadoAtivo === "primario" ? "na base de ofertas do mercado de capitais (CVM)" : "na base do BNDES/FINEP";
-    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${data.query}" ${baseTxt}. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round(data.melhor_score * 100)}%).</div>`;
+    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${data.query}" na base do BNDES/FINEP. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round(data.melhor_score * 100)}%).</div>`;
   }
   if (data.enriquecido_via_web) {
     html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${data.query_original || data.query}" na web, para tentar entender melhor do que se trata.</div>`;
   }
 
-  // Taxa de aprovacao (Crédito Direto FINEP) -- sem equivalente no mercado
-  // de capitais (nao existe um rito de "aprovacao/recusa de projeto" pra uma
-  // oferta publica de debenture/CRI/CRA); escondida de proposito no Primario.
-  const prob = _mercadoAtivo === "primario" ? null : data.probabilidade_aprovacao;
+  const prob = data.probabilidade_aprovacao;
   if (prob) {
     if (prob.disponivel) {
       html += `<div class="aprovacao-box aprovacao-disponivel">
@@ -223,7 +156,6 @@ function renderResultados(data) {
   html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px;">
     <span class="progress-label" id="busca-contagem">${fmtNum(ultimosResultados.length)} operações parecidas encontradas</span>
     <div style="display:flex; gap:8px; align-items:center;">
-      <button id="busca-exportar-btn" class="acao-btn" style="padding:6px 12px; font-size:13px;">Exportar Excel</button>
       <select id="busca-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
         <option value="relevancia">Mais relevante</option>
         <option value="data-desc">Mais recente</option>
@@ -238,45 +170,9 @@ function renderResultados(data) {
 
   document.getElementById("busca-resultado").innerHTML = html;
   document.getElementById("busca-ordenar").addEventListener("change", renderListaResultados);
-  document.getElementById("busca-exportar-btn").addEventListener("click", async (ev) => {
-    const btn = ev.currentTarget;
-    const textoOriginal = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Gerando...";
-    try {
-      // Reenvia as MESMAS linhas ja renderizadas na tela (ultimosResultados) -- o
-      // backend monta o .xlsx em cima delas, nunca re-roda a busca, pra garantir que
-      // o arquivo bate exatamente com o que a pessoa viu (ver webapp/exportar_excel.py).
-      const resp = await fetch("/api/busca/exportar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: data.query, resultados: ultimosResultados }),
-      });
-      if (!resp.ok) throw new Error("falha ao gerar excel");
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `busca-${(data.query || "resultado").replace(/[^a-z0-9]+/gi, "-")}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      alert("Não foi possível gerar o Excel. Tente novamente.");
-    } finally {
-      btn.disabled = false;
-      btn.textContent = textoOriginal;
-    }
-  });
   renderListaResultados();
 }
 
-// #bu-f-agencia e #bu-f-produto sao os MESMOS 2 selects reaproveitados com
-// significado diferente por mercado -- "Entidade"/"Tipo de linha" (BNDES/
-// FINEP) no Incentivado, "Instrumento"/"Indexador" (CVM) no Primario. Ver
-// _aplicarRotulosMercadoBusca() (troca os <label>) e _popularFiltrosBusca()
-// (troca as <option>).
 function _filtrosBusca() {
   // Valor minimo e digitado em R$ MILHOES na UI (ex: "15" = R$15.000.000) -- mais
   // facil de digitar do que o valor cheio; a API continua recebendo o valor real
@@ -288,14 +184,9 @@ function _filtrosBusca() {
     porte: document.getElementById("bu-f-porte").value,
     setor: document.getElementById("bu-f-setor").value,
     uf: document.getElementById("bu-f-uf").value,
+    agencia: document.getElementById("bu-f-agencia").value,
+    produto: document.getElementById("bu-f-produto").value,
   };
-  if (_mercadoAtivo === "primario") {
-    filtros.instrumento = document.getElementById("bu-f-agencia").value;
-    filtros.indexador = document.getElementById("bu-f-produto").value;
-  } else {
-    filtros.agencia = document.getElementById("bu-f-agencia").value;
-    filtros.produto = document.getElementById("bu-f-produto").value;
-  }
   return filtros;
 }
 
@@ -311,25 +202,18 @@ function _sincronizarFiltrosBuscaNaURL(q) {
     porte: document.getElementById("bu-f-porte").value,
     setor: document.getElementById("bu-f-setor").value,
     uf: document.getElementById("bu-f-uf").value,
+    agencia: document.getElementById("bu-f-agencia").value,
+    produto: document.getElementById("bu-f-produto").value,
   };
-  if (_mercadoAtivo === "primario") {
-    params.instrumento = document.getElementById("bu-f-agencia").value;
-    params.indexador = document.getElementById("bu-f-produto").value;
-  } else {
-    params.agencia = document.getElementById("bu-f-agencia").value;
-    params.produto = document.getElementById("bu-f-produto").value;
-  }
   sincronizarFiltrosNaURL(params);
 }
 
 function _aplicarFiltrosBuscaDaURL() {
   const params = paramsDaURL();
-  const chaveTopo = _mercadoAtivo === "primario" ? "instrumento" : "agencia";
-  const chaveProduto = _mercadoAtivo === "primario" ? "indexador" : "produto";
-  if (params.has(chaveTopo)) document.getElementById("bu-f-agencia").value = params.get(chaveTopo);
+  if (params.has("agencia")) document.getElementById("bu-f-agencia").value = params.get("agencia");
   if (params.has("valor_minimo")) document.getElementById("bu-f-valor-minimo").value = params.get("valor_minimo");
   if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
-  if (params.has(chaveProduto)) document.getElementById("bu-f-produto").value = params.get(chaveProduto);
+  if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
   if (params.has("porte")) document.getElementById("bu-f-porte").value = params.get("porte");
   if (params.has("setor")) document.getElementById("bu-f-setor").value = params.get("setor");
   if (params.has("uf")) document.getElementById("bu-f-uf").value = params.get("uf");
@@ -344,9 +228,7 @@ function _aplicarFiltrosBuscaDaURL() {
 }
 
 // Remove tudo alem da 1a <option> (o "Todas"/"Todos" fixo do HTML) -- torna
-// esta funcao segura de chamar de novo ao trocar de mercado (ver
-// alternarMercado em common.js), sem duplicar opcao nem herdar optgroup do
-// mercado anterior (setor/subsetor usam <optgroup>, removidos junto).
+// esta funcao segura de chamar de novo sem duplicar opcao.
 function _limparOpcoesBuscaFiltro(id) {
   const sel = document.getElementById(id);
   while (sel.children.length > 1) sel.removeChild(sel.lastElementChild);
@@ -360,10 +242,8 @@ async function _popularFiltrosBusca() {
       const sel = document.getElementById(id);
       (values || []).filter(Boolean).forEach((v) => sel.appendChild(new Option(v, v)));
     };
-    // #bu-f-agencia/#bu-f-produto: instrumentos/indexadores no Primario (ver
-    // CLAUDE.md), agencias/produtos no Incentivado -- mesmo select reaproveitado.
-    fill("bu-f-agencia", _mercadoAtivo === "primario" ? filtros.instrumentos : filtros.agencias);
-    fill("bu-f-produto", _mercadoAtivo === "primario" ? filtros.indexadores : filtros.produtos);
+    fill("bu-f-agencia", filtros.agencias);
+    fill("bu-f-produto", filtros.produtos);
     fill("bu-f-porte", filtros.portes);
     fill("bu-f-uf", filtros.ufs);
 
@@ -371,7 +251,6 @@ async function _popularFiltrosBusca() {
     // granulares) NA MESMA lista (pedido do usuario) -- agrupados por <optgroup> so
     // pra ficar visualmente claro qual e qual, mas os dois viram o MESMO parametro
     // `setor` na busca (o backend testa contra as duas colunas, ver search_fts.py).
-    // Mesma logica assumida pro Primario (setor_emissor/subsetor_emissor).
     const selSetor = document.getElementById("bu-f-setor");
     const grupoSetor = document.createElement("optgroup");
     grupoSetor.label = "Setor";
@@ -382,26 +261,8 @@ async function _popularFiltrosBusca() {
     selSetor.appendChild(grupoSetor);
     selSetor.appendChild(grupoSubsetor);
   } catch (e) {
-    // filtros da busca sao um extra -- se /api/{primario/}filtros falhar aqui, a
+    // filtros da busca sao um extra -- se /api/filtros falhar aqui, a
     // busca livre (sem filtro nenhum) continua funcionando normalmente.
-  }
-}
-
-// Labels do filterbar PROPRIO da Busca que trocam de significado por mercado
-// (ver #bu-label-agencia/#bu-label-produto em index.html) + placeholder do
-// campo de busca livre. Chamada por common.js::_aplicarIdentidadeMercado()
-// via `typeof` check.
-function _aplicarRotulosMercadoBusca() {
-  const primario = _mercadoAtivo === "primario";
-  const labelAgencia = document.getElementById("bu-label-agencia");
-  const labelProduto = document.getElementById("bu-label-produto");
-  if (labelAgencia) labelAgencia.textContent = primario ? "Instrumento" : "Entidade";
-  if (labelProduto) labelProduto.textContent = primario ? "Indexador" : "Tipo de linha";
-  const input = document.getElementById("busca-input");
-  if (input) {
-    input.placeholder = primario
-      ? "Descreva um emissor, instrumento ou indexador. Ex: debênture de infraestrutura indexada a IPCA no setor de energia"
-      : "Descreva uma empresa ou setor. Ex: fintech de crédito para pequenas empresas do agro no Nordeste";
   }
 }
 
@@ -455,7 +316,7 @@ async function runBusca(q) {
       // estruturados (entidade/valor minimo/regiao/tipo de linha) so se aplicam
       // aqui -- o modo por IA (embeddings) e legado/opcional, nao vale a pena
       // estender pra um caminho que nem roda por padrao.
-      data = await fetchJSON(apiMercado("/api/busca") + "?" + qs({ q, ..._filtrosBusca() }));
+      data = await fetchJSON("/api/busca?" + qs({ q, ..._filtrosBusca() }));
     }
   } catch (e) {
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
@@ -467,8 +328,6 @@ async function runBusca(q) {
     return;
   }
 
-  // 1x por busca (nunca 1 checagem por card) -- ver _carregarIdsSalvos acima.
-  await _carregarIdsSalvos();
   renderResultados(data);
 }
 
