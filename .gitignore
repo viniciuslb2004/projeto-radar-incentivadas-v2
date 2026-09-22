@@ -23,3 +23,6 @@ scratch_*
 .claude/
 *.local.json
 .env
+
+# Vault pessoal do Obsidian (conhecimento de produto/decisoes, nunca codigo/dado do site)
+Ártica - Incetivadas/
