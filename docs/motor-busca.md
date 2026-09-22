@@ -92,3 +92,16 @@ isso os sinônimos incluem singular E plural quando relevante.
 produto explícita do usuário: manter essa estrutura "guardada e flexível" pra religar no
 futuro, não removida. Se for reativar de verdade um dia, reconferir se `data/embeddings.npz`
 está atualizado (ver pipeline acima).
+
+**Paginação (2026-09-22)**: `/api/busca` continua capado em 200 resultados (`limite` default
+de `buscar_texto()`, nunca exposto ao caller) — medido ao vivo que o tempo de resposta é
+dominado quase inteiramente pela query em si (~4-6s, seq scan das tiers 1-3, ver Performance
+acima), não pelo tamanho do payload. Por isso a paginação de 20/página é **client-side**
+(`busca.js`, fatia o array já ordenado) em vez de OFFSET no backend — paginar no backend
+reexecutaria essa mesma query cara a cada troca de página, uma regressão. Reavaliar só se o
+teto de 200 crescer muito.
+
+**Bug conhecido (achado 2026-09-22, correção em sessão separada)**: combinar um filtro
+estruturado (`valor_minimo`/`uf`/etc.) com uma query que cai no fallback de trigrama (tier 6,
+poucos resultados nas tiers 1-5) quebra com erro do Postgres (`function lower(double precision)
+does not exist`) — desalinhamento posicional de parâmetros SQL. Reproduzido via `curl` puro.

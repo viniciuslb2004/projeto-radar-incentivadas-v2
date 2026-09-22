@@ -78,3 +78,29 @@ incentivadas "potencialmente compatíveis" (nunca "elegível", a menos que confi
 chamado por `refresh.py`) — é essencialmente estático, atualizado manualmente quando alguém
 cura mais linhas. Rode `python src/linhas_incentivadas.py` pra reaplicar depois de editar as
 listas `_XXX_MANUAL`.
+
+## Reposicionamento público/lead-gen (2026-09-22)
+
+**Filtros normalizados**: `porte_grupo` (coluna computada nova, bucketing por regex/keyword
+sobre `porte_padronizado` — 42 valores livres → ~5 categorias: Micro/Pequena, Média, Grande,
+Todos os portes, Não informado) e `destinacao_grupo` (97 valores livres → 8 categorias +
+Outros). `porte_padronizado` original é preservado, nunca apagado. Filtro **Status removido da
+UI** — hoje só existe 1 valor real (`'aberta'`, 112/112 linhas), não discrimina nada; a coluna
+`status` continua no schema (não usada), e as 112 linhas NÃO foram re-verificadas contra as
+fontes externas (ficou como limitação conhecida, não decidida unilateralmente — ver
+`Backlog.md`/`Decisões.md` do vault Obsidian se precisar retomar essa decisão). Setor continua
+1 valor único por linha (nunca ganhou subsetor — decisão de produto documentada, dado não
+suporta sem inventar).
+
+**Detalhe de uma linha reorganizado** (`linhas.js::openLinhaDetalhe`): resumo executivo no
+topo (Taxa/Prazo/Carência/Participação no projeto/Enquadramento/O que pode ser financiado),
+resto reagrupado depois (descrição/instituição/setores/condições/garantias/observações/fonte).
+Nenhum campo foi escondido, só reordenado.
+
+**"Potenciais Linhas"** (aba nova, `webapp/potenciais.py` isolado + `potenciais.js`): usuário
+informa Setor/Porte/Volume/Uso dos recursos, recebe linhas ranqueadas por **scoring
+determinístico** (regras/pesos por critério informado, sem chamada de IA em tempo real —
+prioriza precisão com baixo custo operacional, conforme pedido). Linguagem sempre "potencial
+aderência", nunca "elegível". Inclui **"Transações Semelhantes"**: reaproveita `/api/operacoes`
+(parâmetros opcionais novos, retrocompatíveis) pra mostrar operações reais comparáveis, deixando
+claro que são referência histórica, não garantia.

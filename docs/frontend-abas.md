@@ -2,13 +2,24 @@
 
 ## Frontend: roteamento e abas
 
-5 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
-Insights, Busca, Editais, Linhas Incentivadas. A URL reflete qual aba está aberta como CAMINHO
-(`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`), via
-`history.pushState`/`popstate` em `common.js` (`_ativarView`/`_ligarBotoesDeAba`/
-`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas URLs (digitar/recarregar)
-funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro modo local `uvicorn`)
-+ rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+6 abas (`.tab-btn[data-view=...]` / `<section id="view-...">`): Consolidado, Tendências &
+Insights, Busca, Editais, Linhas Incentivadas, Potenciais Linhas (nova, 2026-09-22 — ver
+`docs/linhas-incentivadas.md`, seção "Potenciais Linhas"). A URL reflete qual aba está aberta
+como CAMINHO (`/consolidado`, `/tendencias`, `/busca`, `/editais`, `/linhas-incentivadas`,
+`/potenciais-linhas`), via `history.pushState`/`popstate` em `common.js` (`_ativarView`/
+`_ligarBotoesDeAba`/`_viewInicialDaURL`). Navegação direta pra qualquer uma dessas URLs
+(digitar/recarregar) funciona via: rota catch-all `spa_pagina` em `webapp/main.py` (serve pro
+modo local `uvicorn`) + rewrites equivalentes em `vercel.json` (serve pro deploy hospedado).
+
+**Login (2026-09-22)**: não existe mais overlay de login com senha — `#landing-overlay`
+(landing pública + identificação passwordless por e-mail) aparece sempre que uma rota `/api/*`
+devolve 401 (tratado globalmente em `fetchJSON`/`postJSON`, nunca deixa a aplicação "quebrada"
+em branco). Ver `docs/painel-admin.md` (seção atualizada no topo) pro fluxo completo.
+
+**Setor→Subsetor em cascata (Consolidado/Tendências, 2026-09-22)**: `#f-subsetor` (mesmo
+`#filterbar` compartilhado) só mostra os subsetores do Setor escolhido (`/api/subsetores?setor=`),
+resetando se o Subsetor atual ficar incompatível ao trocar de Setor — ver
+`consolidado.js::_repopularSubsetorCascata`.
 
 **Filtros na URL (query string)**: cada aba reflete os PRÓPRIOS filtros na query string do
 mesmo caminho (nunca no path, que já indica a aba) — pra dar pra compartilhar um link que abre

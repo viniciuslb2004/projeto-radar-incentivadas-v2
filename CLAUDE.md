@@ -12,8 +12,10 @@ não confiar neles como fonte de verdade.
 **Última reestruturação deste arquivo: 2026-09-21** (redução de ~2400 para ~150 linhas,
 conteúdo integral preservado em `docs/`).
 
-**Última revisão desta linha: 2026-09-22** (remoção de Mercado Primário, Exportações e
-Favoritos/Transações Salvas — reposicionamento pra plataforma pública/lead-gen).
+**Última revisão desta linha: 2026-09-22** — reposicionamento pra plataforma pública/lead-gen:
+Mercado Primário/Exportações/Favoritos removidos; login do site principal virou passwordless
+por e-mail (`POST /api/identificar`/`/api/cadastrar`, sem senha — `/admin` continua com senha
+normalmente); nova aba "Potenciais Linhas". Ver `docs/painel-admin.md`/`docs/linhas-incentivadas.md`.
 
 ## O que é a plataforma
 
@@ -52,8 +54,9 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
 - **Sessões de IA concorrentes podem compartilhar este working directory** — rodar
   `git diff <arquivo>` antes de `git add`/`commit` se houver qualquer suspeita de edição
   paralela de outra sessão.
-- **Testar a webapp local exige login de verdade** (contas reais em `admin_usuarios`, mesmo
-  banco de produção) — ver `docs/painel-admin.md` pra como mintar uma sessão de teste sem UI.
+- **Testar a webapp local exige sessão de verdade** (site principal: passwordless via
+  `POST /api/identificar`/`/api/cadastrar`, mesmo banco de produção; painel `/admin`: usuário+
+  senha normalmente) — ver `docs/painel-admin.md` pra como mintar uma sessão de teste sem UI.
 - **Sempre matar processos `uvicorn` soltos** antes/depois de testar contra produção — o teto
   de conexões do Aiven já estourou 3x por processos esquecidos rodando.
 - **Filtros estruturados (UF, setor, agência, etc.) são sempre `AND`, nunca entram no ranking
@@ -82,7 +85,7 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
 | Schema do banco / pipeline semanal | `src/db.py`, `src/refresh.py`, `src/unify.py` | `docs/modelo-dados-pipeline.md` |
 | Enriquecimento CNPJ→CNAE | `src/enrich_cnae.py`, `src/sector_taxonomy.py` | `docs/bugs-corrigidos.md` |
 | Motor de busca (sem IA / IA opcional) | `src/search_fts.py`, `src/search_taxonomy.py`, `src/search.py`, `src/embeddings.py` | `docs/motor-busca.md` |
-| Catálogo Linhas Incentivadas | `src/linhas_incentivadas.py` | `docs/linhas-incentivadas.md` |
+| Catálogo Linhas Incentivadas / Potenciais Linhas / Transações Semelhantes | `src/linhas_incentivadas.py`, `webapp/potenciais.py` | `docs/linhas-incentivadas.md` |
 | Editais da FINEP | `src/finep_editais.py`, `src/refresh_editais.py` | — |
 | API/rotas | `webapp/main.py` | — |
 | Frontend — abas, roteamento, filtros na URL | `webapp/static/js/common.js`, `webapp/static/index.html` | `docs/frontend-abas.md` |
