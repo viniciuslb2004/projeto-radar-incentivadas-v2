@@ -1,17 +1,22 @@
 # Funcionalidades removidas (2026-09-21/22) — backup técnico de restauração
 
-Este arquivo é um backup técnico puro, para quem precisar RECONSTRUIR uma das três
-funcionalidades removidas nesta sessão. Não é lido rotineiramente por nenhuma sessão de IA —
-não é referenciado a partir do `CLAUDE.md` nem de nenhum outro doc operacional. Se você chegou
-aqui, é porque decidiu religar Mercado Primário, Exportações ou Transações Salvas.
+Este arquivo é um backup técnico puro, para quem precisar RECONSTRUIR uma das funcionalidades
+removidas. Não é lido rotineiramente por nenhuma sessão de IA — não é referenciado a partir do
+`CLAUDE.md` nem de nenhum outro doc operacional. Se você chegou aqui, é porque decidiu religar
+Mercado Primário, Exportações, Transações Salvas, o cadastro com aprovação (login por
+usuário+senha do site principal) ou a seção "Saúde do banco" do painel.
 
-As três funcionalidades foram removidas juntas, na mesma sessão, a pedido explícito do usuário.
-Nada abaixo é short — é deliberadamente verboso o suficiente pra reconstruir sem precisar
-vasculhar `git log` a fundo, mas os NÚMEROS/achados-ao-vivo detalhados de cada decisão de
-produto (ex: por que "Ranking por instrumento" foi removido do Consolidado do modo Primário)
-ficam só no histórico do git (`git log --all --oneline -- webapp/primario/`,
-`git log --all -- webapp/salvos.py` etc.) e nos commits do CLAUDE.md anteriores a esta remoção
-— este arquivo prioriza "o que existia e como recriar", não repetir cada frase de raciocínio.
+As três primeiras funcionalidades (seções 1-3) foram removidas juntas, em 2026-09-21/22, a
+pedido explícito do usuário (reposicionamento inicial da plataforma). A seção 4 (cadastro com
+aprovação + "Saúde do banco") foi removida numa sessão seguinte, também em 2026-09-22, como
+parte do MESMO reposicionamento (de ferramenta com cadastro pra plataforma pública de
+geração de leads, com identificação passwordless — ver `docs/painel-admin.md`). Nada abaixo é
+short — é deliberadamente verboso o suficiente pra reconstruir sem precisar vasculhar `git log`
+a fundo, mas os NÚMEROS/achados-ao-vivo detalhados de cada decisão de produto (ex: por que
+"Ranking por instrumento" foi removido do Consolidado do modo Primário) ficam só no histórico
+do git (`git log --all --oneline -- webapp/primario/`, `git log --all -- webapp/salvos.py`
+etc.) e nos commits do CLAUDE.md anteriores a esta remoção — este arquivo prioriza "o que
+existia e como recriar", não repetir cada frase de raciocínio.
 
 ---
 
@@ -784,4 +789,166 @@ na resposta, seção HTML + JS do modal).
 6. Re-adicionar `_configurarBotaoFavoritar`/`alternarFavoritoOtimista`/`_animarPopFavorito`/
    `deleteJSON`/`patchJSON` em `common.js`.
 7. Re-adicionar `.fav-btn-mini`/`.fav-pop`/`.salvos-nota`/etc. em `style.css`.
+
+---
+
+## 4. Cadastro com aprovação (substituído por identificação passwordless) + "Saúde do banco"
+
+Duas coisas removidas juntas em 2026-09-22, na mesma sessão que reposicionou o site de
+"ferramenta com cadastro+senha" pra "plataforma pública de geração de leads" — ver
+`docs/painel-admin.md`, seção "Identificação passwordless do site principal", pro fluxo NOVO
+que substituiu o primeiro item abaixo. O painel `/admin` em si (login por usuário+senha, hash
+PBKDF2, `admin_sessoes`, `exigir_admin`) **não foi tocado** — só o login do site principal e a
+seção "Saúde do banco" do painel.
+
+### 4.1 Login por usuário+senha do site principal + cadastro público com aprovação
+
+Login do site principal era `POST /api/login` (usuário+senha, mesma tabela `admin_usuarios`
+do painel, `autenticar_credenciais`/`mensagem_status_bloqueado` de `webapp/admin/auth.py`,
+ainda existentes e usadas pelo login do painel). Cadastro público (`POST /api/registrar`) BEM
+mais simples que qualquer coisa passwordless: usuário escolhia username+senha (≥8 caracteres)
++ e-mail, conta nascia `role='usuario'` + `status='pendente'`, e só conseguia logar depois que
+um admin aprovasse pelo painel (`GET /admin/api/usuarios/pendentes` +
+`POST .../{id}/aprovar`/`.../rejeitar`).
+
+**Rotas removidas de `webapp/main.py`**:
+```python
+@app.post("/api/login")
+def site_login(payload: dict, request: Request, response: Response):
+    username = (payload.get("username") or "").strip()
+    senha = payload.get("password") or ""
+    conn = get_connection(pooled=True)
+    try:
+        usuario = autenticar_credenciais(conn, username, senha)
+        if usuario is None:
+            raise HTTPException(status_code=401, detail="Usuario ou senha incorretos")
+        mensagem_bloqueio = mensagem_status_bloqueado(usuario["status"])
+        if mensagem_bloqueio:
+            raise HTTPException(status_code=401, detail=mensagem_bloqueio)
+        token = criar_sessao(conn, usuario["id"])
+        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "login", _ip_do_request(request))
+    finally:
+        conn.close()
+    definir_cookie_sessao(response, token)
+    return {"ok": True, "username": usuario["username"]}
+
+
+@app.post("/api/registrar")
+def site_registrar(payload: dict):
+    username = (payload.get("username") or "").strip()
+    senha = payload.get("password") or ""
+    email = (payload.get("email") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Usuario e obrigatorio")
+    if len(senha) < 8:
+        raise HTTPException(status_code=400, detail="Senha precisa ter pelo menos 8 caracteres")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Informe um e-mail valido")
+    password_hash = gerar_hash_senha(senha)
+    conn = get_connection(pooled=True)
+    try:
+        ja_existe = conn.execute("SELECT 1 FROM admin_usuarios WHERE username = ?", (username,)).fetchone()
+        if ja_existe:
+            raise HTTPException(status_code=409, detail="Ja existe uma conta com esse nome de usuario")
+        conn.execute(
+            "INSERT INTO admin_usuarios (username, password_hash, email, role, status, ativo, criado_em) "
+            "VALUES (?, ?, ?, 'usuario', 'pendente', TRUE, ?)",
+            (username, password_hash, email, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+```
+`GET /api/me` devolvia só `{"username": ...}` (agora devolve `{"username", "nome"}`).
+
+**Rotas removidas de `webapp/admin/routes.py`** (aprovação, painel):
+```python
+@router.get("/api/usuarios/pendentes")
+def listar_pendentes(usuario: dict = Depends(exigir_admin)):
+    conn = get_connection(pooled=True)
+    try:
+        rows = conn.execute(
+            "SELECT id, username, email, criado_em FROM admin_usuarios WHERE status = 'pendente' ORDER BY criado_em"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"pendentes": [{"id": r[0], "username": r[1], "email": r[2], "criado_em": r[3]} for r in rows]}
+
+
+@router.post("/api/usuarios/{usuario_id}/aprovar")
+def aprovar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    ...  # UPDATE admin_usuarios SET status = 'aprovado' WHERE id = ?
+
+
+@router.post("/api/usuarios/{usuario_id}/rejeitar")
+def rejeitar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+    ...  # UPDATE admin_usuarios SET status = 'rejeitado' WHERE id = ?
+```
+`GET /admin/api/usuarios` (CRUD normal) tinha `AND status != 'pendente'` no `WHERE` — hoje
+filtra `password_hash != ''` (ver `docs/painel-admin.md`).
+
+**Frontend removido** (`webapp/static/index.html`/`common.js`/`style.css`): `#login-overlay`
+tinha DOIS formulários — `#login-card` (usuário/senha/"Criar conta") e `#registrar-card`
+(usuário/e-mail/senha/"Solicitar conta", com mensagem "Sua conta precisa ser aprovada por um
+administrador antes de acessar."). `common.js` tinha `_tentarLogin()`, `_mostrarLoginOverlay()`,
+`_mostrarRegistrarOverlay()`, `_voltarParaLogin()` + os 2 listeners de submit
+(`#login-card`/`#registrar-card`) + o listener de `#login-ir-criar-conta`/`#registrar-ir-login`.
+Topbar tinha `#topbar-usuario` (nome do usuário + botão `#topbar-logout-btn` "Sair"), CSS
+`.topbar-usuario`/`.topbar-logout-btn`. Estilo dos cards em `style.css`: `#login-card,
+#registrar-card` (caixa), `.login-logo`/`.login-titulo`/`.login-subtitulo` (ainda usadas —
+compartilhadas com o login do painel `/admin`, NÃO removidas), `#login-btn`/`#registrar-btn`.
+Painel admin (`admin.html`) tinha uma seção "Contas pendentes de aprovação" (tabela
+`#admin-pendentes-tbody`, botões Aprovar/Rejeitar) + `admin.js`:
+`renderPendentes`/`carregarPendentes`/listener de `pendentesTbody`.
+
+**Schema**: coluna `admin_usuarios.status` (`'pendente'|'aprovado'|'rejeitado'`, default
+`'aprovado'`) NÃO foi removida (ainda existe, inofensiva) — só parou de ser escrita/lida por
+qualquer rota nova; toda conta passwordless nasce direto com `status='aprovado'`.
+
+**Se for restaurar**: 1) reverter `webapp/main.py` pras 2 rotas acima (e tirar
+`/api/identificar`/`/api/cadastrar`/`/api/interesse` de `_ROTAS_PUBLICAS_API`, recolocando
+`/api/login`/`/api/registrar`); 2) reverter `webapp/admin/routes.py`
+(`listar_pendentes`/`aprovar_usuario`/`rejeitar_usuario`, filtro `status != 'pendente'` em
+`listar_usuarios`); 3) reverter o HTML/CSS/JS do site (`#login-overlay` com os 2 cards,
+`#topbar-usuario`) e do painel (`admin-pendentes-tbody` + JS); 4) decidir o que fazer com as
+contas já criadas via `/api/cadastrar` (`password_hash=''`) — elas não têm senha, não
+conseguiriam logar no fluxo antigo sem um reset administrativo de senha (`POST
+/admin/api/usuarios/{id}/senha`, ainda existe).
+
+### 4.2 "Saúde do banco" (seção do painel)
+
+Proxy via SQL (`pg_database_size`, `pg_stat_activity`, `pg_stat_user_tables`) — nunca o % de
+disco oficial da Aiven (só existe no console.aiven.io). Removida do painel principal (pedido
+explícito do usuário: fora do fluxo de usuários/leads) — nenhum dado apagado, só a tela.
+
+**Rota removida de `webapp/admin/routes.py`**:
+```python
+@router.get("/api/saude-banco")
+def saude_banco(usuario: dict = Depends(exigir_admin)):
+    conn = get_connection(pooled=True)
+    try:
+        tamanho_logico_bytes = conn.execute("SELECT pg_database_size(current_database())").fetchone()[0]
+        conexoes_abertas = conn.execute("SELECT COUNT(*) FROM pg_stat_activity").fetchone()[0]
+        tabelas = conn.execute(
+            "SELECT relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum "
+            "FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 10"
+        ).fetchall()
+    finally:
+        conn.close()
+    campos = ["tabela", "linhas_vivas", "linhas_mortas", "ultimo_vacuum", "ultimo_autovacuum"]
+    return {
+        "tamanho_logico_mb": round(tamanho_logico_bytes / (1024 * 1024), 1),
+        "conexoes_abertas": conexoes_abertas,
+        "tabelas_por_bloat": [dict(zip(campos, (t[0], t[1], t[2], str(t[3]) if t[3] else None, str(t[4]) if t[4] else None))) for t in tabelas],
+    }
+```
+**Frontend removido** (`admin.html`): seção "Saúde do banco" (aviso `.admin-aviso`, cards
+`#admin-saude-cards`, tabela `#admin-saude-tbody`); (`admin.js`): `carregarSaudeBanco()`,
+`fmtNumOuTraco()`, chamada em `iniciarPainel()`.
+
+**Se for restaurar**: recriar a rota acima em `webapp/admin/routes.py`, a seção HTML (ver
+histórico do git pra `admin.html` antes de 2026-09-22) e as duas funções JS + a chamada em
+`iniciarPainel()`. Considerar torná-la uma página técnica separada em vez de reintegrar ao
+fluxo principal (foi essa a sugestão do próprio pedido de remoção).
 8. Se quiser a V2 do log de acessos de volta com histórico de busca: reverter a seção 3.6.

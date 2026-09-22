@@ -15,7 +15,10 @@
   const logoutBtn = document.getElementById("admin-logout-btn");
   const buscaInput = document.getElementById("admin-busca-usuario");
   const usuariosTbody = document.getElementById("admin-usuarios-tbody");
-  const pendentesTbody = document.getElementById("admin-pendentes-tbody");
+  const buscaUsuarioSiteInput = document.getElementById("admin-busca-usuario-site");
+  const usuariosSiteTbody = document.getElementById("admin-usuarios-site-tbody");
+  const leadsTbody = document.getElementById("admin-leads-tbody");
+  const atividadeTbody = document.getElementById("admin-atividade-tbody");
   const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
   const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
@@ -24,8 +27,6 @@
   const refreshOperacoesBtn = document.getElementById("admin-refresh-operacoes-btn");
   const refreshEditaisBtn = document.getElementById("admin-refresh-editais-btn");
   const enriquecerBtn = document.getElementById("admin-enriquecer-btn");
-  const saudeCardsEl = document.getElementById("admin-saude-cards");
-  const saudeTbody = document.getElementById("admin-saude-tbody");
   const correcaoBuscaInput = document.getElementById("admin-correcao-busca");
   const correcaoResultadosEl = document.getElementById("admin-correcao-resultados");
   const correcaoSelecionadaEl = document.getElementById("admin-correcao-selecionada");
@@ -91,7 +92,10 @@
 
   function renderCards(dashboard) {
     const itens = [
-      { rotulo: "Usuários do painel", valor: dashboard.total_usuarios },
+      { rotulo: "Usuários do site", valor: dashboard.total_usuarios_site },
+      { rotulo: "Leads (Quero saber mais)", valor: dashboard.total_leads },
+      { rotulo: "Leads a abordar", valor: dashboard.leads_pendentes },
+      { rotulo: "Contas do painel", valor: dashboard.total_usuarios },
       { rotulo: "Operações (BNDES + FINEP)", valor: dashboard.total_operacoes },
       { rotulo: "Linhas incentivadas", valor: dashboard.total_linhas_incentivadas },
       { rotulo: "Editais FINEP", valor: dashboard.total_editais },
@@ -158,43 +162,114 @@
     renderUsuarios(dado.usuarios);
   }
 
-  function renderPendentes(pendentes) {
-    if (!pendentes.length) {
-      pendentesTbody.innerHTML = '<tr><td colspan="4">Nenhuma solicitação pendente.</td></tr>';
+  // ============ Usuarios do site (identificacao passwordless) ============
+  function renderUsuariosSite(usuarios) {
+    if (!usuarios.length) {
+      usuariosSiteTbody.innerHTML = '<tr><td colspan="7">Nenhum usuário encontrado.</td></tr>';
       return;
     }
-    pendentesTbody.innerHTML = pendentes
+    usuariosSiteTbody.innerHTML = usuarios
       .map(
-        (p) => `<tr>
-          <td>${p.username}</td>
-          <td>${p.email || "--"}</td>
-          <td>${formatarData(p.criado_em)}</td>
-          <td>
-            <button class="admin-toggle-btn" data-acao="aprovar" data-id="${p.id}">Aprovar</button>
-            <button class="admin-toggle-btn" data-acao="rejeitar" data-id="${p.id}">Rejeitar</button>
-          </td>
+        (u) => `<tr>
+          <td>${u.nome || "--"}</td>
+          <td>${u.email || "--"}</td>
+          <td>${u.empresa || "--"}</td>
+          <td>${u.cargo || "--"}</td>
+          <td>${formatarData(u.primeiro_acesso)}</td>
+          <td>${formatarData(u.ultimo_acesso)}</td>
+          <td>${u.qtd_acessos != null ? u.qtd_acessos : 0}</td>
         </tr>`
       )
       .join("");
   }
 
-  async function carregarPendentes() {
-    const resp = await apiFetch("/usuarios/pendentes");
+  async function carregarUsuariosSite(q) {
+    const resp = await apiFetch("/usuarios-site?q=" + encodeURIComponent(q || ""));
     const dado = await resp.json();
-    renderPendentes(dado.pendentes);
+    renderUsuariosSite(dado.usuarios);
   }
 
-  pendentesTbody.addEventListener("click", async function (ev) {
-    const btn = ev.target.closest(".admin-toggle-btn[data-acao]");
+  let buscaUsuarioSiteTimeout = null;
+  buscaUsuarioSiteInput.addEventListener("input", function () {
+    clearTimeout(buscaUsuarioSiteTimeout);
+    buscaUsuarioSiteTimeout = setTimeout(function () {
+      carregarUsuariosSite(buscaUsuarioSiteInput.value);
+    }, 250);
+  });
+
+  // ============ Interessados / Leads ("Quero saber mais") ============
+  function renderLeads(leads) {
+    if (!leads.length) {
+      leadsTbody.innerHTML = '<tr><td colspan="7">Nenhum lead registrado ainda.</td></tr>';
+      return;
+    }
+    leadsTbody.innerHTML = leads
+      .map(function (l) {
+        const pillClasse = l.contatado ? "ativo" : "inativo";
+        const pillTexto = l.contatado ? "Contatado" : "Precisa ser abordado";
+        const acaoTexto = l.contatado ? "Marcar como pendente" : "Marcar como contatado";
+        return `<tr>
+          <td>${l.nome || "--"}</td>
+          <td>${l.email || "--"}</td>
+          <td>${l.empresa || "--"}</td>
+          <td>${l.cargo || "--"}</td>
+          <td>${formatarData(l.criado_em)}</td>
+          <td><span class="admin-pill ${pillClasse}">${pillTexto}</span></td>
+          <td><button class="admin-toggle-btn" data-id="${l.id}" data-contatado="${l.contatado}">${acaoTexto}</button></td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  async function carregarLeads() {
+    const resp = await apiFetch("/leads");
+    const dado = await resp.json();
+    renderLeads(dado.leads);
+  }
+
+  leadsTbody.addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".admin-toggle-btn[data-id]");
     if (!btn) return;
     btn.disabled = true;
     try {
-      await apiFetch(`/usuarios/${btn.dataset.id}/${btn.dataset.acao}`, { method: "POST" });
-      await Promise.all([carregarPendentes(), carregarUsuarios(buscaInput.value)]);
+      const contatadoAtual = btn.dataset.contatado === "true";
+      await apiFetch(`/leads/${btn.dataset.id}/contatado`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contatado: !contatadoAtual }),
+      });
+      await carregarLeads();
     } finally {
       btn.disabled = false;
     }
   });
+
+  // ============ Atividade (sessoes agregadas) ============
+  function renderAtividade(sessoes) {
+    if (!sessoes.length) {
+      atividadeTbody.innerHTML = '<tr><td colspan="5">Nenhuma atividade registrada ainda.</td></tr>';
+      return;
+    }
+    atividadeTbody.innerHTML = sessoes
+      .map(function (s) {
+        const duracao = s.duracao_min != null ? `${s.duracao_min} min` : "--";
+        const paginas = s.paginas && s.paginas.length ? s.paginas.join(", ") : "--";
+        return `<tr>
+          <td>${s.username}</td>
+          <td>${formatarData(s.entrada)}</td>
+          <td>${s.saida ? formatarData(s.saida) : "(sessão em aberto)"}</td>
+          <td>${duracao}</td>
+          <td title="${paginas}">${s.paginas_visitadas}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  async function carregarAtividade() {
+    const resp = await apiFetch("/atividade?limit=200");
+    const dado = await resp.json();
+    renderAtividade(dado.sessoes);
+  }
 
   function renderAcessos(acessos) {
     if (!acessos.length) {
@@ -436,35 +511,6 @@
     }
   });
 
-  // ============ Saude do banco (proxy) ============
-  async function carregarSaudeBanco() {
-    const resp = await apiFetch("/saude-banco");
-    const dado = await resp.json();
-    saudeCardsEl.innerHTML = `
-      <div class="admin-card"><div class="valor">${dado.tamanho_logico_mb} MB</div><div class="rotulo">Tamanho lógico do banco</div></div>
-      <div class="admin-card"><div class="valor">${dado.conexoes_abertas}</div><div class="rotulo">Conexões abertas agora</div></div>
-    `;
-    if (!dado.tabelas_por_bloat.length) {
-      saudeTbody.innerHTML = '<tr><td colspan="5">Sem dados de estatísticas ainda.</td></tr>';
-      return;
-    }
-    saudeTbody.innerHTML = dado.tabelas_por_bloat
-      .map(
-        (t) => `<tr>
-          <td>${t.tabela}</td>
-          <td>${fmtNumOuTraco(t.linhas_vivas)}</td>
-          <td>${fmtNumOuTraco(t.linhas_mortas)}</td>
-          <td>${formatarData(t.ultimo_vacuum)}</td>
-          <td>${formatarData(t.ultimo_autovacuum)}</td>
-        </tr>`
-      )
-      .join("");
-  }
-
-  function fmtNumOuTraco(v) {
-    return v != null ? v : "--";
-  }
-
   // ============ Correcoes manuais ============
   let buscaCorrecaoTimeout = null;
   // A lista de resultados fica ABERTA/VISIVEL o tempo todo que houver um termo de
@@ -599,10 +645,11 @@
     mostrarPainel();
     await Promise.all([
       carregarDashboard(),
+      carregarUsuariosSite(""),
+      carregarLeads(),
+      carregarAtividade(),
       carregarUsuarios(""),
-      carregarPendentes(),
       carregarAcessos(),
-      carregarSaudeBanco(),
       carregarCorrecoes(),
     ]);
   }

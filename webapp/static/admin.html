@@ -69,30 +69,83 @@
     </section>
 
     <section class="admin-secao">
-      <h2>Contas pendentes de aprovação</h2>
+      <div class="admin-secao-header">
+        <h2>Usuários</h2>
+      </div>
       <p class="admin-secao-desc">
-        Pedidos de cadastro feitos pela tela de login do site principal. Contas aprovadas
-        nascem sempre com papel "Usuário" — promover a admin é uma ação separada, pelo CRUD
-        abaixo.
+        Quem já se identificou no site principal (fluxo passwordless por e-mail — ver
+        CLAUDE.md). Nome, empresa e cargo vêm do próprio formulário de acesso.
+      </p>
+      <div class="admin-usuarios-toolbar">
+        <input type="text" id="admin-busca-usuario-site" placeholder="Buscar por nome, e-mail ou empresa...">
+      </div>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Nome</th>
+            <th>E-mail</th>
+            <th>Empresa</th>
+            <th>Cargo</th>
+            <th>Primeiro acesso</th>
+            <th>Último acesso</th>
+            <th>Qtd. acessos</th>
+          </tr>
+        </thead>
+        <tbody id="admin-usuarios-site-tbody">
+          <tr><td colspan="7">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Interessados / Leads</h2>
+      <p class="admin-secao-desc">
+        Quem clicou em "Quero saber mais" na topbar do site principal — pedido de contato,
+        com os dados já coletados na identificação.
+      </p>
+      <table class="admin-tabela">
+        <thead>
+          <tr>
+            <th>Nome</th>
+            <th>E-mail</th>
+            <th>Empresa</th>
+            <th>Cargo</th>
+            <th>Manifestado em</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="admin-leads-tbody">
+          <tr><td colspan="7">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="admin-secao">
+      <h2>Atividade</h2>
+      <p class="admin-secao-desc">
+        Sessões de uso do site principal — entrada, saída (ou próximo login, se não houve
+        logout explícito), duração aproximada e páginas visitadas nesse intervalo.
       </p>
       <table class="admin-tabela">
         <thead>
           <tr>
             <th>Usuário</th>
-            <th>E-mail</th>
-            <th>Solicitado em</th>
-            <th></th>
+            <th>Entrada</th>
+            <th>Saída</th>
+            <th>Duração aprox.</th>
+            <th>Páginas visitadas</th>
           </tr>
         </thead>
-        <tbody id="admin-pendentes-tbody">
-          <tr><td colspan="4">Carregando...</td></tr>
+        <tbody id="admin-atividade-tbody">
+          <tr><td colspan="5">Carregando...</td></tr>
         </tbody>
       </table>
     </section>
 
     <section class="admin-secao">
       <div class="admin-secao-header">
-        <h2>Usuários do painel</h2>
+        <h2>Contas do painel (equipe Ártica)</h2>
         <button id="admin-novo-usuario-btn" class="admin-btn-primario">+ Novo usuário</button>
       </div>
       <form id="admin-novo-usuario-form" class="admin-form-usuario hidden">
@@ -119,31 +172,6 @@
           </tr>
         </thead>
         <tbody id="admin-usuarios-tbody">
-          <tr><td colspan="5">Carregando...</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-    <section class="admin-secao">
-      <h2>Saúde do banco</h2>
-      <p class="admin-secao-desc admin-aviso">
-        <strong>Atenção:</strong> estes números são um proxy calculado via SQL (tamanho lógico,
-        bloat, conexões abertas) — <strong>NÃO</strong> é o % de disco oficial da Aiven (que
-        conta WAL/backup e só aparece no console.aiven.io). Útil como sinal de alerta cedo,
-        não como espelho exato do painel deles.
-      </p>
-      <section class="admin-cards" id="admin-saude-cards"></section>
-      <table class="admin-tabela admin-tabela-compacta">
-        <thead>
-          <tr>
-            <th>Tabela</th>
-            <th>Linhas vivas</th>
-            <th>Linhas mortas</th>
-            <th>Último vacuum</th>
-            <th>Último autovacuum</th>
-          </tr>
-        </thead>
-        <tbody id="admin-saude-tbody">
           <tr><td colspan="5">Carregando...</td></tr>
         </tbody>
       </table>

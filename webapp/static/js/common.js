@@ -79,14 +79,39 @@ function obterUsuarioAtual() {
   return _usuarioAtualPromise;
 }
 
-// ============ Login (tela custom, ver #login-overlay em index.html) ============
-// Ate 2026-09: HTTP Basic + header guardado em sessionStorage. Substituido por
-// sessao de cookie (conta individual, tabela `admin_usuarios`, EXCECAO documentada
-// a segregacao do painel /admin -- ver webapp/admin/auth.py e CLAUDE.md, secao
-// "Painel de Admin"). O cookie e httponly (JS nunca le/escreve ele diretamente) e
-// enviado automaticamente pelo navegador via `credentials: "include"` -- por isso
-// fetchJSON/postJSON abaixo nao precisam mais montar nenhum header de Authorization.
+// ============ Landing / identificacao passwordless (ver #landing-overlay em
+// index.html) ============
+// Ate 2026-09-22: login por usuario+senha (contas individuais, `admin_usuarios`).
+// Substituido por identificacao passwordless por e-mail (reposicionamento pra
+// plataforma publica de lead-gen -- ver CLAUDE.md/docs/painel-admin.md e
+// docs/archive/removed-features.md secao 4 pro fluxo antigo). O cookie de sessao
+// e httponly (JS nunca le/escreve ele diretamente) e enviado automaticamente pelo
+// navegador via `credentials: "include"`.
 class ErroAutenticacao extends Error {}
+
+// Mostra a landing em QUALQUER 401 de rota protegida -- sessao expirada, cookie
+// ausente, usuario removido/inativo, sessao invalida (todas essas caem em 401 no
+// backend, ver webapp/admin/auth.py::verificar_acesso_principal). Chamado direto
+// de dentro de fetchJSON/postJSON (abaixo), nao so no carregamento inicial da
+// pagina -- antes disso, um 401 no MEIO do uso (sessao expirando) so era tratado
+// no primeiro fetch de /api/status; qualquer outro fetch que caisse num catch
+// generico (varios arquivos fazem `catch (e) { data = []; }`) deixava a tela
+// vazia sem nunca voltar pra landing (bug real relatado pelo usuario: "o site
+// quebra, fica em branco"). Idempotente -- seguro chamar varias vezes.
+function _mostrarLanding(mensagemErro) {
+  document.getElementById("landing-overlay").classList.remove("hidden");
+  document.getElementById("cadastro-form").classList.add("hidden");
+  document.getElementById("identificar-form").classList.remove("hidden");
+  const erro = document.getElementById("identificar-erro");
+  if (mensagemErro) {
+    erro.textContent = mensagemErro;
+    erro.classList.remove("hidden");
+  } else {
+    erro.classList.add("hidden");
+  }
+  const emailInput = document.getElementById("identificar-email");
+  if (emailInput) emailInput.focus();
+}
 
 async function fetchJSON(url, timeoutMs) {
   const fullUrl = _urlCompleta(url);
@@ -94,7 +119,10 @@ async function fetchJSON(url, timeoutMs) {
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
   try {
     const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
-    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
+    if (r.status === 401) {
+      _mostrarLanding();
+      throw new ErroAutenticacao("nao autenticado");
+    }
     return await r.json();
   } finally {
     clearTimeout(timer);
@@ -115,152 +143,164 @@ async function postJSON(url, body, timeoutMs) {
       credentials: "include",
       signal: controller.signal,
     });
-    if (r.status === 401) throw new ErroAutenticacao("nao autenticado");
+    if (r.status === 401) {
+      _mostrarLanding();
+      throw new ErroAutenticacao("nao autenticado");
+    }
     return await r.json();
   } finally {
     clearTimeout(timer);
   }
 }
 
-function _mostrarLoginOverlay(mensagemErro) {
-  document.getElementById("login-overlay").classList.remove("hidden");
-  // Garante que a tela de LOGIN (nao a de cadastro) fica visivel -- cobre o caso
-  // raro de uma chamada de fundo devolver 401 enquanto o usuario esta na tela de
-  // "Criar conta" (ver registrar-card).
-  document.getElementById("registrar-card").classList.add("hidden");
-  document.getElementById("login-card").classList.remove("hidden");
-  const erro = document.getElementById("login-erro");
-  if (mensagemErro) {
-    erro.textContent = mensagemErro;
-    erro.classList.remove("hidden");
-  } else {
-    erro.classList.add("hidden");
+// Backstop: qualquer ErroAutenticacao que escape sem handler nenhum (ex: um
+// `await fetchJSON(...)` novo que alguem esqueca de proteger no futuro) tambem
+// mostra a landing, em vez de virar um erro silencioso no console com a tela
+// parada atras dela. fetchJSON/postJSON acima ja cobrem o caso comum (chamador
+// que faz `catch` e ignora); isso cobre o caso sem catch nenhum.
+window.addEventListener("unhandledrejection", (ev) => {
+  if (ev.reason instanceof ErroAutenticacao) {
+    ev.preventDefault();
+    _mostrarLanding();
   }
-  document.getElementById("login-usuario").focus();
-}
+});
 
-// POST /api/login com as credenciais digitadas -- em caso de sucesso, o backend ja
-// devolve o cookie de sessao (Set-Cookie), nada pra guardar manualmente aqui.
-// Devolve {ok, mensagem} em vez de so um booleano -- desde que contas podem ficar
-// 'pendente'/'rejeitado' (ver cadastro publico abaixo), o motivo da falha nao e
-// mais sempre "usuario ou senha incorretos", e o backend ja manda a mensagem certa.
-async function _tentarLogin(usuario, senha) {
+// 1o passo: so e-mail. "Ja usado nos ultimos 3 meses" -> acesso imediato (backend
+// ja cria a sessao e devolve o cookie); senao -> pede os dados completos (2o
+// passo, formulario #cadastro-form).
+async function _identificarEmail(email) {
   try {
-    const r = await fetch(_urlCompleta("/api/login"), {
+    const r = await fetch(_urlCompleta("/api/identificar"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: usuario, password: senha }),
+      body: JSON.stringify({ email }),
       credentials: "include",
     });
-    if (r.status === 200) return { ok: true };
     const dado = await r.json().catch(() => ({}));
-    return { ok: false, mensagem: dado.detail || "Usuário ou senha incorretos." };
+    if (r.status !== 200) {
+      return { ok: false, mensagem: dado.detail || "Não foi possível continuar. Tente novamente." };
+    }
+    return { ok: true, precisaDados: !!dado.precisa_dados };
   } catch (e) {
-    // erro de rede tratado como falha de login tambem -- usuario ve a mesma
-    // mensagem e pode tentar de novo.
-    return { ok: false, mensagem: "Usuário ou senha incorretos." };
+    return { ok: false, mensagem: "Erro de rede -- tente novamente." };
   }
 }
 
-function _mostrarRegistrarOverlay() {
-  document.getElementById("login-card").classList.add("hidden");
-  document.getElementById("registrar-card").classList.remove("hidden");
-  document.getElementById("registrar-erro").classList.add("hidden");
-  document.getElementById("registrar-sucesso").classList.add("hidden");
-  document.getElementById("registrar-usuario").focus();
-}
-
-function _voltarParaLogin() {
-  document.getElementById("registrar-card").classList.add("hidden");
-  document.getElementById("login-card").classList.remove("hidden");
-  document.getElementById("login-usuario").focus();
+// 2o passo (e-mail novo OU ultimo acesso ha mais de 3 meses): nome/empresa/cargo.
+// Sem senha em nenhum caso -- acesso concedido na hora, sem aprovacao de admin.
+async function _cadastrarLead(dados) {
+  try {
+    const r = await fetch(_urlCompleta("/api/cadastrar"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados),
+      credentials: "include",
+    });
+    const dado = await r.json().catch(() => ({}));
+    if (r.status !== 200) {
+      return { ok: false, mensagem: dado.detail || "Não foi possível concluir seu acesso." };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, mensagem: "Erro de rede -- tente novamente." };
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("login-card").addEventListener("submit", async (e) => {
+  document.getElementById("identificar-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = document.getElementById("login-btn");
-    btn.disabled = true;
-    btn.textContent = "Entrando...";
-    const usuario = document.getElementById("login-usuario").value;
-    const senha = document.getElementById("login-senha").value;
-    const resultado = await _tentarLogin(usuario, senha);
-    btn.disabled = false;
-    btn.textContent = "Entrar";
-    if (resultado.ok) {
-      // Recarrega a pagina inteira em vez de tentar re-disparar manualmente a
-      // inicializacao de cada aba (consolidado.js, tendencias.js etc, cada um so
-      // roda seu proprio DOMContentLoaded uma vez) -- mais simples e robusto:
-      // com o header ja guardado, o proximo /api/status já passa direto.
-      location.reload();
-    } else {
-      document.getElementById("login-senha").value = "";
-      _mostrarLoginOverlay(resultado.mensagem);
+    const btn = document.getElementById("identificar-btn");
+    const erroEl = document.getElementById("identificar-erro");
+    erroEl.classList.add("hidden");
+    const email = document.getElementById("identificar-email").value.trim();
+    if (!email) {
+      erroEl.textContent = "Informe seu e-mail.";
+      erroEl.classList.remove("hidden");
+      return;
     }
+    btn.disabled = true;
+    btn.textContent = "Verificando...";
+    const resultado = await _identificarEmail(email);
+    btn.disabled = false;
+    btn.textContent = "Continuar";
+    if (!resultado.ok) {
+      erroEl.textContent = resultado.mensagem;
+      erroEl.classList.remove("hidden");
+      return;
+    }
+    if (!resultado.precisaDados) {
+      // E-mail ja conhecido e usado recentemente -- acesso concedido, sessao ja
+      // criada pelo backend. Recarrega a pagina inteira em vez de tentar
+      // re-disparar manualmente a inicializacao de cada aba (consolidado.js,
+      // tendencias.js etc, cada um so roda seu proprio DOMContentLoaded uma vez).
+      location.reload();
+      return;
+    }
+    // E-mail novo OU ultimo acesso ha mais de 3 meses -- pede os dados completos.
+    document.getElementById("cadastro-email").value = email;
+    document.getElementById("identificar-form").classList.add("hidden");
+    document.getElementById("cadastro-form").classList.remove("hidden");
+    document.getElementById("cadastro-nome").focus();
   });
 
-  document.getElementById("login-ir-criar-conta").addEventListener("click", _mostrarRegistrarOverlay);
-  document.getElementById("registrar-ir-login").addEventListener("click", _voltarParaLogin);
+  document.getElementById("cadastro-voltar-btn").addEventListener("click", () => {
+    document.getElementById("cadastro-form").classList.add("hidden");
+    document.getElementById("identificar-form").classList.remove("hidden");
+    document.getElementById("identificar-email").focus();
+  });
 
-  // Cadastro publico (POST /api/registrar) -- conta nasce 'pendente', precisa de
-  // aprovacao de um admin pelo painel antes de conseguir logar (ver
-  // webapp/admin/routes.py::aprovar_usuario / CLAUDE.md, secao "Painel de Admin").
-  document.getElementById("registrar-card").addEventListener("submit", async (e) => {
+  document.getElementById("cadastro-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = document.getElementById("registrar-btn");
-    const erroEl = document.getElementById("registrar-erro");
-    const sucessoEl = document.getElementById("registrar-sucesso");
+    const btn = document.getElementById("cadastro-btn");
+    const erroEl = document.getElementById("cadastro-erro");
     erroEl.classList.add("hidden");
-    sucessoEl.classList.add("hidden");
-    const usuario = document.getElementById("registrar-usuario").value.trim();
-    const email = document.getElementById("registrar-email").value.trim();
-    const senha = document.getElementById("registrar-senha").value;
+    const dados = {
+      nome: document.getElementById("cadastro-nome").value.trim(),
+      empresa: document.getElementById("cadastro-empresa").value.trim(),
+      cargo: document.getElementById("cadastro-cargo").value.trim(),
+      email: document.getElementById("cadastro-email").value.trim(),
+    };
+    if (!dados.nome || !dados.empresa || !dados.cargo || !dados.email) {
+      erroEl.textContent = "Preencha todos os campos.";
+      erroEl.classList.remove("hidden");
+      return;
+    }
     btn.disabled = true;
     btn.textContent = "Enviando...";
-    try {
-      const r = await fetch(_urlCompleta("/api/registrar"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: usuario, email: email, password: senha }),
-        credentials: "include",
-      });
-      const dado = await r.json().catch(() => ({}));
-      if (r.status === 200) {
-        document.getElementById("registrar-usuario").value = "";
-        document.getElementById("registrar-email").value = "";
-        document.getElementById("registrar-senha").value = "";
-        sucessoEl.classList.remove("hidden");
-      } else {
-        erroEl.textContent = dado.detail || "Não foi possível enviar a solicitação.";
-        erroEl.classList.remove("hidden");
-      }
-    } catch (e2) {
-      erroEl.textContent = "Erro de rede -- tente novamente.";
+    const resultado = await _cadastrarLead(dados);
+    btn.disabled = false;
+    btn.textContent = "Acessar plataforma";
+    if (!resultado.ok) {
+      erroEl.textContent = resultado.mensagem;
       erroEl.classList.remove("hidden");
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Solicitar conta";
-    }
-  });
-
-  // Nome do usuario logado + botao Sair no canto da topbar (so aparece quando o
-  // login por conta individual estiver configurado E alguem estiver logado --
-  // ver /api/me em webapp/main.py). Sem login configurado (dev local sem nenhuma
-  // conta ainda), a rota devolve username=null e este bloco fica escondido.
-  obterUsuarioAtual().then((usuario) => {
-    if (!usuario) return;
-    document.getElementById("topbar-usuario-nome").textContent = usuario;
-    document.getElementById("topbar-usuario").classList.remove("hidden");
-  });
-
-  document.getElementById("topbar-logout-btn").addEventListener("click", async () => {
-    try {
-      await fetch(_urlCompleta("/api/logout"), { method: "POST", credentials: "include" });
-    } catch (e) {
-      // segue pro reload mesmo assim -- o pior caso e o cookie continuar valido
-      // ate expirar sozinho (24h), sem travar o usuario na tela.
+      return;
     }
     location.reload();
+  });
+
+  // "Quero saber mais" (substitui usuario logado + Sair na topbar, ver CLAUDE.md)
+  // -- so aparece pra quem ja se identificou (ver /api/me em webapp/main.py). Sem
+  // ninguem identificado (ou identificacao ainda nao configurada, dev local sem
+  // nenhuma conta), a rota devolve username=null e o botao fica escondido.
+  obterUsuarioAtual().then((usuario) => {
+    if (!usuario) return;
+    document.getElementById("topbar-interesse-btn").classList.remove("hidden");
+  });
+
+  document.getElementById("topbar-interesse-btn").addEventListener("click", async () => {
+    const modal = document.getElementById("interesse-modal-overlay");
+    // Mostra o agradecimento IMEDIATAMENTE (a pessoa ja informou os dados dela na
+    // identificacao, nao ha formulario adicional aqui) -- o registro em si e
+    // best-effort, uma falha de rede nao deve incomodar quem ja clicou.
+    modal.classList.remove("hidden");
+    try {
+      await postJSON("/api/interesse", {});
+    } catch (e) {
+      // best-effort -- ver comentario acima.
+    }
+  });
+  document.getElementById("interesse-modal-fechar").addEventListener("click", () => {
+    document.getElementById("interesse-modal-overlay").classList.add("hidden");
   });
 });
 
@@ -610,7 +650,7 @@ async function _initFiltersAndTabsImpl() {
   } catch (e) {
     _esconderLoadingOverlay();
     if (e instanceof ErroAutenticacao) {
-      _mostrarLoginOverlay();
+      _mostrarLanding();
       return;
     }
     pill.textContent = "não foi possível conectar ao servidor";

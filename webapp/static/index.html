@@ -16,35 +16,68 @@
   <div class="loading-texto">Carregando dados...</div>
 </div>
 
-<div id="login-overlay" class="hidden">
-  <form id="login-card">
-    <img src="/img/logo-artica.png" alt="Ártica" class="login-logo">
-    <div class="login-titulo brand-texto">Radar de Crédito Incentivado</div>
-    <div class="login-subtitulo">Acesso restrito &middot; entre com suas credenciais</div>
-    <label for="login-usuario">Usuário</label>
-    <input type="text" id="login-usuario" autocomplete="username" autofocus>
-    <label for="login-senha">Senha</label>
-    <input type="password" id="login-senha" autocomplete="current-password">
-    <div id="login-erro" class="login-erro hidden">Usuário ou senha incorretos.</div>
-    <button type="submit" id="login-btn">Entrar</button>
-    <button type="button" id="login-ir-criar-conta" class="login-link-btn">Criar conta</button>
-  </form>
+<!-- Landing institucional + identificacao passwordless (substitui login+senha do
+     site principal -- ver CLAUDE.md/docs/painel-admin.md e
+     docs/archive/removed-features.md secao 4 pro fluxo antigo). So aparece
+     enquanto nao ha sessao valida (ver common.js: fetchJSON/postJSON mostram esta
+     tela automaticamente em qualquer 401, alem da checagem inicial em
+     initFiltersAndTabs()). -->
+<div id="landing-overlay" class="hidden">
+  <div class="landing-content">
+    <div class="landing-hero">
+      <img src="/img/logo-artica.png" alt="Ártica" class="landing-logo">
+      <h1 class="landing-titulo brand-texto">Radar de Crédito Incentivado</h1>
+      <p class="landing-subtitulo">
+        Inteligência de mercado sobre crédito incentivado no Brasil — operações reais do
+        BNDES e da FINEP, tendências por setor e região, e o catálogo de linhas de crédito
+        permanentes das principais instituições de fomento, em um só lugar.
+      </p>
+      <ul class="landing-bullets">
+        <li>Milhares de operações de crédito incentivado, desde 2002</li>
+        <li>Tendências e rankings por setor, UF e agência de fomento</li>
+        <li>Catálogo de linhas de crédito permanentes de 7 instituições</li>
+        <li>Busca dedicada por empresa, CNPJ, setor ou produto</li>
+      </ul>
+    </div>
 
-  <form id="registrar-card" class="hidden">
-    <img src="/img/logo-artica.png" alt="Ártica" class="login-logo">
-    <div class="login-titulo">Criar conta</div>
-    <div class="login-subtitulo">Sua conta precisa ser aprovada por um administrador antes de acessar.</div>
-    <label for="registrar-usuario">Usuário</label>
-    <input type="text" id="registrar-usuario" autocomplete="username">
-    <label for="registrar-email">E-mail</label>
-    <input type="email" id="registrar-email" autocomplete="email">
-    <label for="registrar-senha">Senha</label>
-    <input type="password" id="registrar-senha" autocomplete="new-password" placeholder="Mínimo 8 caracteres">
-    <div id="registrar-erro" class="login-erro hidden"></div>
-    <div id="registrar-sucesso" class="login-sucesso hidden">Solicitação enviada! Aguarde a aprovação de um administrador.</div>
-    <button type="submit" id="registrar-btn">Solicitar conta</button>
-    <button type="button" id="registrar-ir-login" class="login-link-btn">Já tenho conta &middot; entrar</button>
-  </form>
+    <div class="landing-acesso">
+      <div class="landing-acesso-card">
+        <h2>Acesse a plataforma</h2>
+        <p class="landing-acesso-sub">Informe seu e-mail corporativo para continuar. Sem senha.</p>
+
+        <form id="identificar-form">
+          <label for="identificar-email">E-mail</label>
+          <input type="email" id="identificar-email" autocomplete="email" autofocus placeholder="voce@empresa.com.br">
+          <div id="identificar-erro" class="login-erro hidden"></div>
+          <button type="submit" id="identificar-btn">Continuar</button>
+        </form>
+
+        <form id="cadastro-form" class="hidden">
+          <div class="landing-acesso-sub" id="cadastro-intro">Conte um pouco sobre você para liberar o acesso.</div>
+          <label for="cadastro-nome">Nome</label>
+          <input type="text" id="cadastro-nome" autocomplete="name">
+          <label for="cadastro-empresa">Empresa</label>
+          <input type="text" id="cadastro-empresa" autocomplete="organization">
+          <label for="cadastro-cargo">Cargo</label>
+          <input type="text" id="cadastro-cargo" autocomplete="organization-title">
+          <label for="cadastro-email">E-mail</label>
+          <input type="email" id="cadastro-email" autocomplete="email" readonly>
+          <div id="cadastro-erro" class="login-erro hidden"></div>
+          <button type="submit" id="cadastro-btn">Acessar plataforma</button>
+          <button type="button" id="cadastro-voltar-btn" class="login-link-btn">Usar outro e-mail</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- "Obrigado pelo interesse" (ver botao "Quero saber mais" na topbar) -->
+<div id="interesse-modal-overlay" class="interesse-modal-overlay hidden">
+  <div class="interesse-modal">
+    <div class="interesse-modal-titulo">Obrigado pelo interesse!</div>
+    <p class="interesse-modal-texto">Nosso time entrará em contato com você.</p>
+    <button type="button" id="interesse-modal-fechar" class="login-link-btn">Fechar</button>
+  </div>
 </div>
 
 <div class="topbar">
@@ -61,10 +94,7 @@
       <button class="tab-btn" data-view="linhas">Linhas Incentivadas</button>
     </div>
   </div>
-  <div class="topbar-usuario hidden" id="topbar-usuario">
-    <span id="topbar-usuario-nome"></span>
-    <button id="topbar-logout-btn" class="topbar-logout-btn">Sair</button>
-  </div>
+  <button id="topbar-interesse-btn" class="topbar-interesse-btn hidden">Quero saber mais</button>
 </div>
 
 <div class="filterbar" id="filterbar">

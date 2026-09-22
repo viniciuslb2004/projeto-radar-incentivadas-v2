@@ -9,14 +9,15 @@ COMO REMOVER ESTE PAINEL INTEIRO (se um dia for descontinuado):
   4. Remover a linha `app.include_router(admin_router, prefix="/admin")` (e o import
      correspondente) de `webapp/main.py`.
   5. Remover o rewrite `/admin` -> `/admin.html` de `vercel.json`.
-  6. ATENCAO -- EXCECAO a segregacao (ver CLAUDE.md, secao "Painel de Admin"): desde que
-     o login do SITE PRINCIPAL passou a usar `admin_usuarios` (substituindo o antigo
-     SITE_PASSWORD), remover so os itens 1-5 acima QUEBRA o login do site inteiro. Reverta
-     primeiro `_verificar_acesso`/`/api/login`/`/api/logout`/`/api/registrar` em
-     `webapp/main.py` (o cadastro publico tambem depende de `admin_usuarios`) para algum
-     mecanismo de auth do site principal (o antigo SITE_PASSWORD ou outro) ANTES de apagar
-     as tabelas/pacote. Reverter tambem exige tirar o botao "Criar conta"/formulario de
-     cadastro de `webapp/static/index.html`/`common.js`.
+  6. ATENCAO -- EXCECAO a segregacao (ver CLAUDE.md/docs/painel-admin.md, secao "Painel de
+     Admin"): desde que o login do SITE PRINCIPAL passou a usar `admin_usuarios`
+     (substituindo o antigo SITE_PASSWORD, depois login+senha, depois identificacao
+     passwordless por e-mail -- ver docs/painel-admin.md), remover so os itens 1-5 acima
+     QUEBRA o acesso ao site inteiro. Reverta primeiro `_verificar_acesso`/
+     `/api/identificar`/`/api/cadastrar`/`/api/interesse`/`/api/logout` em `webapp/main.py`
+     pra algum outro mecanismo de auth do site principal ANTES de apagar as tabelas/pacote.
+     Reverter tambem exige tirar a landing/identificacao (`#landing-overlay`) de
+     `webapp/static/index.html`/`common.js`.
 Fora essa excecao documentada, nada neste painel toca em `operations`,
 `linhas_incentivadas`, `editais_raw` nem em qualquer outra tabela do dado de negocio.
 """
@@ -105,7 +106,23 @@ def dashboard(usuario: dict = Depends(exigir_admin)):
             "SELECT started_at, finished_at, total_editais, abertos, status, detalhe "
             "FROM refresh_editais_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        total_usuarios = conn.execute("SELECT COUNT(*) FROM admin_usuarios").fetchone()[0]
+        # Distincao staff (conta com senha real, gerenciada pelo CRUD abaixo) vs
+        # usuario/lead do site (password_hash = '' -- sentinela de conta criada
+        # pelo fluxo passwordless, ver webapp/main.py::site_cadastrar). Mantem os
+        # dois totais separados no dashboard pra nao confundir "conta do painel"
+        # com "pessoa que se identificou no site publico".
+        total_usuarios = conn.execute(
+            "SELECT COUNT(*) FROM admin_usuarios WHERE password_hash != ''"
+        ).fetchone()[0]
+        total_usuarios_site = conn.execute(
+            "SELECT COUNT(*) FROM admin_usuarios WHERE password_hash = ''"
+        ).fetchone()[0]
+        total_leads = conn.execute(
+            "SELECT COUNT(*) FROM admin_acessos_log WHERE evento = 'interesse_lead'"
+        ).fetchone()[0]
+        leads_pendentes = conn.execute(
+            "SELECT COUNT(*) FROM admin_acessos_log WHERE evento = 'interesse_lead' AND NOT contatado"
+        ).fetchone()[0]
         total_operacoes = conn.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
         total_linhas = conn.execute("SELECT COUNT(*) FROM linhas_incentivadas").fetchone()[0]
         total_editais = conn.execute("SELECT COUNT(*) FROM editais_raw").fetchone()[0]
@@ -130,6 +147,9 @@ def dashboard(usuario: dict = Depends(exigir_admin)):
             ["started_at", "finished_at", "total_editais", "abertos", "status", "detalhe"],
         ),
         "total_usuarios": total_usuarios,
+        "total_usuarios_site": total_usuarios_site,
+        "total_leads": total_leads,
+        "leads_pendentes": leads_pendentes,
         "total_operacoes": total_operacoes,
         "total_linhas_incentivadas": total_linhas,
         "total_editais": total_editais,
@@ -140,14 +160,18 @@ def dashboard(usuario: dict = Depends(exigir_admin)):
 
 @router.get("/api/usuarios")
 def listar_usuarios(q: str = "", usuario: dict = Depends(exigir_admin)):
-    # So contas ja decididas (aprovado/rejeitado) -- pendentes tem secao propria
-    # (GET /api/usuarios/pendentes) pra nao misturar aprovacao com o CRUD normal.
+    # So CONTAS DO PAINEL (staff Artica, senha real) -- distinguidas de
+    # usuarios/leads do site publico por password_hash != '' (sentinela de conta
+    # passwordless criada por webapp/main.py::site_cadastrar, ver comentario em
+    # /api/dashboard acima). Usuarios/leads do site tem secao propria
+    # (GET /api/usuarios-site) pra nao misturar gestao de acesso interno (CRUD com
+    # senha/role) com a lista de leads/usuarios publicos.
     conn = get_connection(pooled=True)
     try:
         termo = f"%{q.strip()}%" if q.strip() else "%"
         rows = conn.execute(
             "SELECT id, username, role, ativo, criado_em FROM admin_usuarios "
-            "WHERE username ILIKE ? AND status != 'pendente' ORDER BY username",
+            "WHERE username ILIKE ? AND password_hash != '' ORDER BY username",
             (termo,),
         ).fetchall()
     finally:
@@ -159,54 +183,135 @@ def listar_usuarios(q: str = "", usuario: dict = Depends(exigir_admin)):
     }
 
 
-@router.get("/api/usuarios/pendentes")
-def listar_pendentes(usuario: dict = Depends(exigir_admin)):
-    """Contas criadas via cadastro publico (POST /api/registrar) esperando
-    aprovacao/rejeicao de um admin -- ver CLAUDE.md, secao 'Painel de Admin'."""
+# ============ Usuarios do site (identificacao passwordless) ============
+# "Usuarios" no sentido do reposicionamento pra lead-gen (ver CLAUDE.md) -- gente
+# que passou por POST /api/identificar ou /api/cadastrar (site principal), NUNCA
+# uma conta com senha do painel (ver filtro password_hash acima/abaixo).
+@router.get("/api/usuarios-site")
+def listar_usuarios_site(q: str = "", usuario: dict = Depends(exigir_admin)):
     conn = get_connection(pooled=True)
     try:
+        termo = f"%{q.strip()}%" if q.strip() else "%"
         rows = conn.execute(
-            "SELECT id, username, email, criado_em FROM admin_usuarios WHERE status = 'pendente' ORDER BY criado_em"
+            "SELECT u.id, u.nome, u.email, u.empresa, u.cargo, "
+            "  (SELECT MIN(l.criado_em) FROM admin_acessos_log l WHERE l.usuario_id = u.id AND l.evento = 'login') AS primeiro_acesso, "
+            "  (SELECT MAX(l.criado_em) FROM admin_acessos_log l WHERE l.usuario_id = u.id AND l.evento = 'login') AS ultimo_acesso, "
+            "  (SELECT COUNT(*) FROM admin_acessos_log l WHERE l.usuario_id = u.id AND l.evento = 'login') AS qtd_acessos "
+            "FROM admin_usuarios u "
+            "WHERE u.password_hash = '' "
+            "  AND (u.nome ILIKE ? OR u.email ILIKE ? OR u.empresa ILIKE ?) "
+            "ORDER BY ultimo_acesso DESC NULLS LAST",
+            (termo, termo, termo),
         ).fetchall()
     finally:
         conn.close()
-    return {
-        "pendentes": [
-            {"id": r[0], "username": r[1], "email": r[2], "criado_em": r[3]} for r in rows
-        ]
-    }
+    campos = ["id", "nome", "email", "empresa", "cargo", "primeiro_acesso", "ultimo_acesso", "qtd_acessos"]
+    return {"usuarios": [dict(zip(campos, r)) for r in rows]}
 
 
-@router.post("/api/usuarios/{usuario_id}/aprovar")
-def aprovar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+# ============ Interessados / Leads ("Quero saber mais") ============
+@router.get("/api/leads")
+def listar_leads(usuario: dict = Depends(exigir_admin)):
+    """Quem clicou 'Quero saber mais' (POST /api/interesse, site principal) --
+    reaproveita admin_acessos_log (evento='interesse_lead'), sem tabela nova.
+    `contatado` (coluna generica em admin_acessos_log, ver seed.py) alimenta o
+    indicador de 'precisa ser abordado' no frontend."""
+    conn = get_connection(pooled=True)
+    try:
+        rows = conn.execute(
+            "SELECT l.id, u.nome, u.email, u.empresa, u.cargo, l.criado_em, l.contatado "
+            "FROM admin_acessos_log l JOIN admin_usuarios u ON u.id = l.usuario_id "
+            "WHERE l.evento = 'interesse_lead' ORDER BY l.criado_em DESC LIMIT 300"
+        ).fetchall()
+    finally:
+        conn.close()
+    campos = ["id", "nome", "email", "empresa", "cargo", "criado_em", "contatado"]
+    return {"leads": [dict(zip(campos, r)) for r in rows]}
+
+
+@router.post("/api/leads/{log_id}/contatado")
+def marcar_lead_contatado(log_id: int, payload: dict, usuario: dict = Depends(exigir_admin)):
+    contatado = bool(payload.get("contatado"))
     conn = get_connection(pooled=True)
     try:
         row = conn.execute(
-            "SELECT status FROM admin_usuarios WHERE id = ?", (usuario_id,)
+            "SELECT id FROM admin_acessos_log WHERE id = ? AND evento = 'interesse_lead'", (log_id,)
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
-        conn.execute("UPDATE admin_usuarios SET status = 'aprovado' WHERE id = ?", (usuario_id,))
+            raise HTTPException(status_code=404, detail="Lead nao encontrado")
+        conn.execute("UPDATE admin_acessos_log SET contatado = ? WHERE id = ?", (contatado, log_id))
         conn.commit()
     finally:
         conn.close()
     return {"ok": True}
 
 
-@router.post("/api/usuarios/{usuario_id}/rejeitar")
-def rejeitar_usuario(usuario_id: int, usuario: dict = Depends(exigir_admin)):
+# ============ Atividade (sessoes agregadas: login -> logout/proximo login) ============
+@router.get("/api/atividade")
+def atividade(limit: int = 300, usuario: dict = Depends(exigir_admin)):
+    """Visao agregada e legivel de 'quem entrou, quando, o que visitou, por quanto
+    tempo' -- reaproveita admin_acessos_log (login/logout/view_aba do SITE
+    principal, ja gravados por outros fluxos), sem nenhum sistema de analytics
+    novo. Uma 'sessao' comeca num evento 'login' e termina no proximo 'logout' OU
+    no proximo 'login' da MESMA pessoa (o que vier primeiro) -- cobre o caso comum
+    de fechar a aba sem clicar em nada (nao ha botao de Sair no site publico, ver
+    CLAUDE.md). Agrupamento feito em Python (nao SQL) de proposito -- o volume de
+    admin_acessos_log e pequeno o suficiente pra isso ser simples e correto, em vez
+    de uma janela SQL correlacionada mais dificil de revisar."""
+    limit = max(1, min(limit, 1000))
     conn = get_connection(pooled=True)
     try:
-        row = conn.execute(
-            "SELECT status FROM admin_usuarios WHERE id = ?", (usuario_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
-        conn.execute("UPDATE admin_usuarios SET status = 'rejeitado' WHERE id = ?", (usuario_id,))
-        conn.commit()
+        rows = conn.execute(
+            "SELECT usuario_id, username_snapshot, evento, detalhe, criado_em "
+            "FROM admin_acessos_log WHERE origem = 'site' AND evento IN ('login', 'logout', 'view_aba') "
+            "ORDER BY usuario_id, criado_em"
+        ).fetchall()
     finally:
         conn.close()
-    return {"ok": True}
+
+    sessoes = []
+    atual = None
+    for usuario_id, username, evento, detalhe, criado_em in rows:
+        if evento == "login":
+            if atual:
+                sessoes.append(atual)
+            atual = {"usuario_id": usuario_id, "username": username, "entrada": criado_em, "saida": None, "paginas": []}
+        elif atual is not None and atual["usuario_id"] == usuario_id:
+            if evento == "logout":
+                atual["saida"] = criado_em
+                sessoes.append(atual)
+                atual = None
+            elif evento == "view_aba":
+                atual["paginas"].append(detalhe)
+    if atual:
+        sessoes.append(atual)
+
+    sessoes.sort(key=lambda s: s["entrada"], reverse=True)
+    sessoes = sessoes[:limit]
+
+    from datetime import datetime as _dt
+
+    resultado = []
+    for s in sessoes:
+        duracao_min = None
+        if s["saida"]:
+            try:
+                entrada_dt = _dt.fromisoformat(s["entrada"])
+                saida_dt = _dt.fromisoformat(s["saida"])
+                duracao_min = round((saida_dt - entrada_dt).total_seconds() / 60, 1)
+            except ValueError:
+                duracao_min = None
+        resultado.append(
+            {
+                "username": s["username"],
+                "entrada": s["entrada"],
+                "saida": s["saida"],
+                "duracao_min": duracao_min,
+                "paginas_visitadas": len(s["paginas"]),
+                "paginas": s["paginas"][:20],
+            }
+        )
+    return {"sessoes": resultado}
 
 
 def _contar_admins_ativos(conn, excluir_id: int = None) -> int:
@@ -644,28 +749,7 @@ def desativar_correcao(correcao_id: int, usuario: dict = Depends(exigir_admin)):
     return {"ok": True}
 
 
-# ============ Saude do banco (proxy -- NAO e o %% de disco oficial da Aiven) ============
-# Descoberta real do incidente de disco cheio (ver CLAUDE.md): pg_database_size() so
-# mostra o tamanho LOGICO, nao bate com o "disco cheio" que a Aiven alerta (que conta
-# WAL/backup tambem) -- o numero oficial so aparece no console.aiven.io, e exigiria a
-# API deles (token novo) pra puxar aqui. Esses proxies (tamanho logico, bloat via
-# n_dead_tup, conexoes abertas, ultimo vacuum) sao uteis e baratos (so SQL, sem
-# credencial nova), mas a UI precisa deixar claro que NAO sao o numero oficial.
-@router.get("/api/saude-banco")
-def saude_banco(usuario: dict = Depends(exigir_admin)):
-    conn = get_connection(pooled=True)
-    try:
-        tamanho_logico_bytes = conn.execute("SELECT pg_database_size(current_database())").fetchone()[0]
-        conexoes_abertas = conn.execute("SELECT COUNT(*) FROM pg_stat_activity").fetchone()[0]
-        tabelas = conn.execute(
-            "SELECT relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum "
-            "FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 10"
-        ).fetchall()
-    finally:
-        conn.close()
-    campos = ["tabela", "linhas_vivas", "linhas_mortas", "ultimo_vacuum", "ultimo_autovacuum"]
-    return {
-        "tamanho_logico_mb": round(tamanho_logico_bytes / (1024 * 1024), 1),
-        "conexoes_abertas": conexoes_abertas,
-        "tabelas_por_bloat": [dict(zip(campos, (t[0], t[1], t[2], str(t[3]) if t[3] else None, str(t[4]) if t[4] else None))) for t in tabelas],
-    }
+# "Saude do banco" (proxy via pg_database_size/pg_stat_*) foi REMOVIDA do painel
+# em 2026-09-22 (reestruturacao focada em usuarios/leads/comportamento, pedido
+# explicito do usuario) -- ver docs/archive/removed-features.md secao 4 pro
+# codigo original, caso precise reconstruir como uma tela tecnica separada.
