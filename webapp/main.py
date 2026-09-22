@@ -515,8 +515,14 @@ def filtros():
 
 
 @app.get("/api/kpis")
-def kpis(agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
+def kpis(
+    agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
+    data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+):
+    # subsetor: cascata Setor -> Subsetor do filterbar compartilhado (Consolidado/
+    # Tendencias, ver common.js/consolidado.js) -- mesma posicao ja aceita por
+    # _filters_clause, so precisava ser exposta nesta rota tambem.
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -557,13 +563,13 @@ GRANULARIDADES_SERIE = {
 
 @app.get("/api/serie_temporal")
 def serie_temporal(
-    agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None,
+    agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None, data_inicio: str = None,
     data_fim: str = None, instrumento: str = None, granularidade: str = "trimestral",
 ):
     if granularidade not in GRANULARIDADES_SERIE:
         granularidade = "trimestral"
     periodo_expr = GRANULARIDADES_SERIE[granularidade]
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -657,8 +663,11 @@ def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: 
 
 
 @app.get("/api/uf")
-def uf_breakdown(agencia: str = None, setor: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
-    where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento)
+def uf_breakdown(
+    agencia: str = None, setor: str = None, subsetor: str = None,
+    data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+):
+    where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento, subsetor)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -677,8 +686,11 @@ def uf_breakdown(agencia: str = None, setor: str = None, data_inicio: str = None
 
 
 @app.get("/api/porte")
-def porte_breakdown(agencia: str = None, setor: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim)
+def porte_breakdown(
+    agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
+    data_inicio: str = None, data_fim: str = None,
+):
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, subsetor=subsetor)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -859,6 +871,7 @@ def operacoes(
     valor_min: float = None,
     valor_max: float = None,
     produto: str = None,
+    produto_ou_instrumento: str = None,
     order_by: str = "valor",
     order_dir: str = "desc",
     limit: int = 200,
@@ -870,6 +883,16 @@ def operacoes(
         agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento,
         porte, valor_min, valor_max, produto,
     )
+    # produto_ou_instrumento: usado pelo clique em "Destinacao dos Recursos" (Tendencias,
+    # ver /api/tendencias/produtos), que agrupa por COALESCE(produto, instrumento, 'Nao
+    # informado') -- um grupo cujo rotulo veio do FALLBACK (produto NULO na linha, usou
+    # instrumento) precisa filtrar pelo MESMO criterio, senao "produto=<rotulo>" bateria
+    # zero linhas. Parametro ISOLADO desta rota (fora de _filters_clause, que e
+    # compartilhada por ~10 outras rotas/subsistemas, ex: Potenciais Linhas/Transacoes
+    # Semelhantes -- nao queria mudar o significado do filtro "produto" ali).
+    if produto_ou_instrumento and produto_ou_instrumento not in ("Todos", "Todas"):
+        where = where + (" AND " if where else "WHERE ") + "COALESCE(produto, instrumento, 'Nao informado') = ?"
+        params = params + [produto_ou_instrumento]
     coluna_ordenacao = ORDENACAO_COLUNAS.get(order_by, "valor_contratado")
     direcao = "ASC" if order_dir == "asc" else "DESC"
     conn = get_connection(pooled=True)

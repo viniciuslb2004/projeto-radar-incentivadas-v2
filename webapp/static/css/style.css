@@ -634,6 +634,15 @@ table.ops-table th {
 table.ops-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
 table.ops-table tr:hover { background: var(--blue-lightest); cursor: pointer; }
 
+/* Agrupamento de transacoes consecutivas da mesma empresa (ver
+   common.js::_renderTabelaOperacoesAgrupada) -- cabecalho clicavel que expande/
+   recolhe as linhas daquele grupo. */
+table.ops-table tr.ops-grupo-header { background: var(--blue-lightest); font-weight: 600; }
+table.ops-table tr.ops-grupo-header:hover { background: var(--blue-light); }
+table.ops-table tr.ops-grupo-header .ops-grupo-seta { display: inline-block; width: 12px; }
+table.ops-table tr.ops-grupo-header .ops-grupo-resumo { font-weight: 400; color: var(--text-muted); margin-left: 8px; font-size: 11.5px; }
+table.ops-table tr.ops-grupo-item td:first-child { padding-left: 24px; }
+
 /* ============ Detalhe amigavel da operacao ============ */
 .detalhe-secoes { display: flex; flex-direction: column; gap: 16px; }
 

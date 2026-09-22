@@ -319,6 +319,54 @@ async function loadPorte(filters) {
   });
 }
 
+// ---- Cascata Setor -> Subsetor (#f-setor -> #f-subsetor, filterbar compartilhado
+// com Tendencias, ver docs/frontend-abas.md) ----
+// Escolher um Setor restringe as opcoes de #f-subsetor as daquele setor (via
+// /api/subsetores?setor=X, que ja existe e ja e usado em Tendencias pro drill-down).
+// Quando o Setor muda pra um que nao contem mais o subsetor selecionado, o subsetor
+// e resetado pra "Todos" -- nunca deixa um par Setor/Subsetor incompativel aplicado
+// em silencio (ex: Setor=Comercio e Servicos + Subsetor=Industria de Base nao existe).
+// Exposta como window.aoMudarSetorFiltro -- chamada por common.js (listener
+// generico de #f-setor) ANTES de notifyFiltersChange/sincronizarFiltrosNaURL, pra
+// garantir que #f-subsetor.value ja esteja coerente antes dos graficos recarregarem
+// (ver comentario em common.js sobre a ordem dos listeners).
+async function _repopularSubsetorCascata(preservarValorAtual) {
+  const setorSel = document.getElementById("f-setor");
+  const subsetorSel = document.getElementById("f-subsetor");
+  if (!setorSel || !subsetorSel) return;
+  const setor = setorSel.value;
+  const valorAnterior = subsetorSel.value;
+
+  let subsetores;
+  if (!setor || setor === "Todos") {
+    // Sem setor escolhido: volta pra lista completa (todos os subsetores, de
+    // qualquer setor) -- mesma fonte usada na populacao inicial do filterbar
+    // (_fetchFiltrosCompartilhado ja cacheia a promise, entao isso nao bate rede
+    // de novo depois da carga inicial).
+    let filtros;
+    try {
+      filtros = await _fetchFiltrosCompartilhado();
+    } catch (e) {
+      filtros = {};
+    }
+    subsetores = (filtros.subsetores || []).filter(Boolean);
+  } else {
+    let data;
+    try {
+      data = await fetchJSON("/api/subsetores?setor=" + encodeURIComponent(setor));
+    } catch (e) {
+      data = [];
+    }
+    if (!Array.isArray(data)) data = [];
+    subsetores = data.map((d) => d.subsetor).filter((s) => s && s !== "Não classificado");
+  }
+
+  _preencherSelectFiltro("f-subsetor", subsetores);
+  subsetorSel.value = (preservarValorAtual && subsetores.includes(valorAnterior)) ? valorAnterior : "Todos";
+}
+
+window.aoMudarSetorFiltro = () => _repopularSubsetorCascata(false);
+
 async function refreshConsolidado(filters) {
   filters = filters || currentFilters();
   await Promise.all([
@@ -336,6 +384,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     loadSerieTemporal(currentFilters());
   });
   await initFiltersAndTabs();
+  // Narrowa #f-subsetor pro setor ja resolvido nesse ponto (default "Todos", ou
+  // restaurado de um link com filtro na URL -- ver common.js) -- preserva o valor
+  // de subsetor ja setado quando ele for compativel (caso de link direto), so
+  // reseta se nao for (link com par Setor/Subsetor incompativel).
+  await _repopularSubsetorCascata(true);
   onFiltersChange(refreshConsolidado);
   refreshConsolidado(currentFilters());
 });

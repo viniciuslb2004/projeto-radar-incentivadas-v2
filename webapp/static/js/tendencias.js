@@ -218,8 +218,23 @@ async function loadProdutos(filters) {
       indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => fmtBRLFull(ctx.raw) } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => fmtBRLFull(ctx.raw) } },
+      },
       scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
+      // Item 12.2 (Insights): clicavel -- abre o detalhamento das operacoes que
+      // compoem aquela destinacao, reaproveitando o mesmo modal de drill-down
+      // (common.js::openOperacoesModal) ja usado pelos outros graficos desta pagina.
+      // `produto_ou_instrumento` e um filtro PROPRIO de /api/operacoes (webapp/main.py)
+      // -- o rotulo exibido vem de COALESCE(produto, instrumento, 'Nao informado')
+      // (ver a query acima), entao filtrar so por `produto` deixaria de fora as
+      // linhas cujo rotulo veio do fallback (produto nulo na origem).
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        const valor = linhas[els[0].index][campo];
+        openOperacoesModal(`Destinação: ${valor}`, { produto_ou_instrumento: valor });
+      },
     },
   });
 }

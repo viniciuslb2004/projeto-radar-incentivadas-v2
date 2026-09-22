@@ -310,6 +310,7 @@ function currentFilters() {
   const filters = {
     agencia: document.getElementById("f-agencia").value,
     setor: document.getElementById("f-setor").value,
+    subsetor: document.getElementById("f-subsetor").value,
     uf: document.getElementById("f-uf").value,
   };
 
@@ -685,6 +686,11 @@ async function _initFiltersAndTabsImpl() {
     const paramsIniciais = paramsDaURL();
     if (paramsIniciais.has("agencia")) document.getElementById("f-agencia").value = paramsIniciais.get("agencia");
     if (paramsIniciais.has("setor")) document.getElementById("f-setor").value = paramsIniciais.get("setor");
+    // Restaura o valor bruto -- a lista de opcoes de #f-subsetor ainda esta com o
+    // conjunto COMPLETO neste ponto (so restrita ao setor escolhido depois, ver
+    // _repopularSubsetorCascata em consolidado.js, chamada logo apos
+    // initFiltersAndTabs()), entao o valor de um link salvo sempre existe como opcao.
+    if (paramsIniciais.has("subsetor")) document.getElementById("f-subsetor").value = paramsIniciais.get("subsetor");
     if (paramsIniciais.has("uf")) document.getElementById("f-uf").value = paramsIniciais.get("uf");
     if (paramsIniciais.has("mes_ini")) document.getElementById("f-mes-ini").value = paramsIniciais.get("mes_ini");
     if (paramsIniciais.has("ano_ini")) document.getElementById("f-ano-ini").value = paramsIniciais.get("ano_ini");
@@ -693,9 +699,18 @@ async function _initFiltersAndTabsImpl() {
   }
 
   const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
-  ["f-agencia", "f-setor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
-    document.getElementById(id).addEventListener("change", () => {
+  ["f-agencia", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
+    document.getElementById(id).addEventListener("change", async () => {
       if (CAMPOS_DATA.includes(id)) validarIntervaloDatas(id);
+      // Cascata Setor -> Subsetor (ver consolidado.js::_repopularSubsetorCascata):
+      // quando o Setor muda, o Subsetor precisa ser repopulado/resetado ANTES do
+      // notifyFiltersChange logo abaixo, senao os graficos disparariam por uma
+      // fracao de segundo com um subsetor incompativel com o novo setor. Hook
+      // opcional (definido em consolidado.js) pra nao hardcodar logica de
+      // subsetor aqui -- common.js so sabe que "algo pode precisar reagir antes".
+      if (id === "f-setor" && typeof window.aoMudarSetorFiltro === "function") {
+        await window.aoMudarSetorFiltro();
+      }
       notifyFiltersChange();
       _sincronizarFiltrosCompartilhadosNaURL();
     });
@@ -762,6 +777,10 @@ function _preencherAnosEMeses(filtros) {
 function _popularFiltrosCompartilhados(filtros) {
   _preencherSelectFiltro("f-agencia", filtros.agencias);
   _preencherSelectFiltro("f-setor", (filtros.setores || []).filter(Boolean));
+  // Populacao inicial de #f-subsetor com a lista COMPLETA (todos os subsetores, de
+  // qualquer setor) -- narrada pra so os do setor escolhido em consolidado.js
+  // (_repopularSubsetorCascata), chamada logo apos initFiltersAndTabs() retornar.
+  _preencherSelectFiltro("f-subsetor", (filtros.subsetores || []).filter(Boolean));
   _preencherSelectFiltro("f-uf", (filtros.ufs || []).filter(Boolean));
   _preencherAnosEMeses(filtros);
 }
@@ -775,6 +794,7 @@ function _sincronizarFiltrosCompartilhadosNaURL() {
   const params = {
     agencia: document.getElementById("f-agencia").value,
     setor: document.getElementById("f-setor").value,
+    subsetor: document.getElementById("f-subsetor").value,
     uf: document.getElementById("f-uf").value,
     mes_ini: document.getElementById("f-mes-ini").value,
     ano_ini: document.getElementById("f-ano-ini").value,
@@ -827,11 +847,38 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
     return;
   }
 
-  let html = '<table class="ops-table"><thead><tr>' +
-    "<th>Cliente</th><th>Agência</th><th>UF</th><th>Setor</th><th>Data</th><th>Valor contratado</th>" +
-    "</tr></thead><tbody>";
+  body.innerHTML = _renderTabelaOperacoesAgrupada(ops);
+
+  body.querySelectorAll("tr[data-id]").forEach((tr) => {
+    tr.addEventListener("click", () => openOperacaoDetalhe(tr.dataset.id));
+  });
+  _ligarGruposOperacoes(body);
+}
+
+// ============ Agrupamento de transacoes consecutivas da mesma empresa ============
+// Pedido (Insights, item 12.1): no detalhamento de operacoes (este modal, aberto ao
+// clicar num setor/subsetor/segmento/UF/porte/"Destinacao dos Recursos"), quando a
+// MESMA empresa aparece em linhas CONSECUTIVAS (depende da ordenacao escolhida em
+// #modal-ordenar -- ex: "Cliente (A-Z)" tende a agrupar, "Maior valor" so por
+// coincidencia), agrupa visualmente sob um cabecalho clicavel com um resumo (qtd de
+// operacoes + volume total); clique expande/recolhe. NUNCA reordena os dados (a
+// ordenacao ja escolhida e respeitada tal como veio da API) -- so detecta sequencias
+// JA adjacentes, uma empresa com 2 operacoes nao-consecutivas (outra empresa no meio)
+// vira 2 "grupos" de 1 linha cada, sem forcar nada. Agrupa por CNPJ (mais confiavel
+// que o nome) com fallback pro nome do cliente quando o CNPJ nao esta disponivel.
+function _renderTabelaOperacoesAgrupada(ops) {
+  const grupos = [];
   ops.forEach((op) => {
-    html += `<tr data-id="${op.id}">
+    const chave = op.cnpj || op.cliente || "";
+    const ultimo = grupos[grupos.length - 1];
+    if (chave && ultimo && ultimo.chave === chave) {
+      ultimo.ops.push(op);
+    } else {
+      grupos.push({ chave, cliente: op.cliente, ops: [op] });
+    }
+  });
+
+  const linhaOperacao = (op, atributosExtra) => `<tr data-id="${op.id}" ${atributosExtra || ""}>
       <td>${op.cliente || "-"}</td>
       <td>${op.agencia || "-"}</td>
       <td>${op.uf || "-"}</td>
@@ -839,12 +886,39 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
       <td>${op.data_contratacao || "-"}</td>
       <td>${fmtBRLFull(op.valor_contratado)}</td>
     </tr>`;
+
+  let html = '<table class="ops-table"><thead><tr>' +
+    "<th>Cliente</th><th>Agência</th><th>UF</th><th>Setor</th><th>Data</th><th>Valor contratado</th>" +
+    "</tr></thead><tbody>";
+  grupos.forEach((g, i) => {
+    if (g.ops.length === 1) {
+      html += linhaOperacao(g.ops[0]);
+      return;
+    }
+    const valorTotal = g.ops.reduce((acc, op) => acc + (op.valor_contratado || 0), 0);
+    html += `<tr class="ops-grupo-header" data-grupo="${i}">
+        <td colspan="6"><span class="ops-grupo-seta">▸</span> ${g.cliente || "-"}
+          <span class="ops-grupo-resumo">${g.ops.length} operações · ${fmtBRLFull(valorTotal)}</span></td>
+      </tr>`;
+    g.ops.forEach((op) => {
+      html += linhaOperacao(op, `class="ops-grupo-item" data-grupo-item="${i}" style="display:none;"`);
+    });
   });
   html += "</tbody></table>";
-  body.innerHTML = html;
+  return html;
+}
 
-  body.querySelectorAll("tr[data-id]").forEach((tr) => {
-    tr.addEventListener("click", () => openOperacaoDetalhe(tr.dataset.id));
+function _ligarGruposOperacoes(body) {
+  body.querySelectorAll("tr.ops-grupo-header").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const idx = tr.dataset.grupo;
+      const aberto = tr.classList.toggle("aberto");
+      const seta = tr.querySelector(".ops-grupo-seta");
+      if (seta) seta.textContent = aberto ? "▾" : "▸";
+      body.querySelectorAll(`tr[data-grupo-item="${idx}"]`).forEach((item) => {
+        item.style.display = aberto ? "" : "none";
+      });
+    });
   });
 }
 
