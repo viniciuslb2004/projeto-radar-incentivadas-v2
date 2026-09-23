@@ -530,9 +530,21 @@ def _warmup_busca():
         print(f"Aviso: motor de busca nao pode ser pre-carregado ({e}).")
 
 
+def _cols_setor(agencia=None, classificacao=None):
+    """(coluna_setor, coluna_subsetor) conforme a classificacao pedida. Padrao
+    (2026-09-23): setor PADRONIZADO por CNAE (setor_cnae/subsetor_cnae -- mesmo
+    caminho CNAE -> de_para_cnae para BNDES e FINEP, comparavel entre agencias).
+    "Classificacao nativa BNDES" (setor_bndes/subsetor_bndes da propria planilha)
+    so vale com agencia=BNDES -- a FINEP nao tem classificacao nativa."""
+    if classificacao == "nativo" and agencia == "BNDES":
+        return "setor_bndes", "subsetor_bndes"
+    return "setor_cnae", "subsetor_cnae"
+
+
 def _filters_clause(
     agencia=None, setor=None, uf=None, data_inicio=None, data_fim=None, instrumento=None,
     subsetor=None, segmento=None, porte=None, valor_min=None, valor_max=None, produto=None,
+    classificacao=None, agente=None,
 ):
     # Defesa contra intervalo invertido (data_inicio > data_fim): o frontend ja impede
     # o usuario de chegar nesse estado (ver validarIntervaloDatas em common.js), mas
@@ -549,12 +561,18 @@ def _filters_clause(
     if agencia and agencia != "Todas":
         clauses.append("agencia = ?")
         params.append(agencia)
+    col_setor, col_subsetor = _cols_setor(agencia, classificacao)
     if setor and setor != "Todos":
-        clauses.append("setor_bndes = ?")
+        clauses.append(f"{col_setor} = ?")
         params.append(setor)
     if subsetor and subsetor != "Todos":
-        clauses.append("subsetor_bndes = ?")
+        clauses.append(f"{col_subsetor} = ?")
         params.append(subsetor)
+    # Agente financeiro (repassador do Inovacred) -- filtro discreto, so faz
+    # sentido com agencia=FINEP (ignorado nos demais casos).
+    if agente and agente != "Todos" and agencia == "FINEP":
+        clauses.append("agente_financeiro = ?")
+        params.append(agente)
     if segmento and segmento != "Todos":
         clauses.append("segmento = ?")
         params.append(segmento)
@@ -695,8 +713,9 @@ def filtros():
         row = cur.execute(f"""
             SELECT
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT agencia AS x FROM operations WHERE agencia IS NOT NULL) t) AS agencias,
-              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT setor_bndes AS x FROM operations WHERE setor_bndes IS NOT NULL) t) AS setores,
-              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT subsetor_bndes AS x FROM operations WHERE subsetor_bndes IS NOT NULL) t) AS subsetores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT setor_cnae AS x FROM operations WHERE setor_cnae IS NOT NULL) t) AS setores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT subsetor_cnae AS x FROM operations WHERE subsetor_cnae IS NOT NULL) t) AS subsetores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT agente_financeiro AS x FROM operations WHERE agencia = 'FINEP' AND agente_financeiro IS NOT NULL) t) AS agentes_finep,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT uf AS x FROM operations WHERE uf IS NOT NULL) t) AS ufs,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT instrumento AS x FROM operations WHERE instrumento IS NOT NULL) t) AS instrumentos,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT produto AS x FROM operations WHERE produto IS NOT NULL) t) AS produtos,
@@ -705,7 +724,7 @@ def filtros():
               (SELECT MIN(data_contratacao) FROM operations) AS data_min,
               (SELECT MAX(data_contratacao) FROM operations) AS data_max
         """).fetchone()
-        (agencias, setores, subsetores, ufs, instrumentos, produtos, anos, portes_presentes, data_min, data_max) = row
+        (agencias, setores, subsetores, agentes_finep, ufs, instrumentos, produtos, anos, portes_presentes, data_min, data_max) = row
 
         # Portes: categorias CANONICAS (ver PORTE_NORMALIZADO_SQL), nao os 7 valores
         # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
@@ -717,6 +736,7 @@ def filtros():
             "agencias": agencias or [],
             "setores": setores or [],
             "subsetores": subsetores or [],
+            "agentes_finep": agentes_finep or [],
             "ufs": ufs or [],
             "instrumentos": instrumentos or [],
             "produtos": produtos or [],
@@ -733,11 +753,13 @@ def filtros():
 def kpis(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
     data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+    classificacao: str = None, agente: str = None,
 ):
     # subsetor: cascata Setor -> Subsetor do filterbar compartilhado (Consolidado/
     # Tendencias, ver common.js/consolidado.js) -- mesma posicao ja aceita por
     # _filters_clause, so precisava ser exposta nesta rota tambem.
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -780,11 +802,13 @@ GRANULARIDADES_SERIE = {
 def serie_temporal(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None, data_inicio: str = None,
     data_fim: str = None, instrumento: str = None, granularidade: str = "trimestral",
+    classificacao: str = None, agente: str = None,
 ):
     if granularidade not in GRANULARIDADES_SERIE:
         granularidade = "trimestral"
     periodo_expr = GRANULARIDADES_SERIE[granularidade]
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -807,16 +831,19 @@ def serie_temporal(
 
 
 @app.get("/api/setores")
-def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
-    where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim, instrumento)
+def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+            classificacao: str = None, agente: str = None):
+    where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim, instrumento,
+                                    classificacao=classificacao, agente=agente)
+    col, _ = _cols_setor(agencia, classificacao)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(setor_bndes, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE({col}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
-            GROUP BY setor_bndes
+            GROUP BY {col}
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
@@ -830,16 +857,19 @@ def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_f
 
 
 @app.get("/api/subsetores")
-def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None):
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento)
+def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+               classificacao: str = None, agente: str = None):
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento,
+                                    classificacao=classificacao, agente=agente)
+    _, col = _cols_setor(agencia, classificacao)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(subsetor_bndes, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE({col}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
-            GROUP BY subsetor_bndes
+            GROUP BY {col}
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
@@ -853,9 +883,11 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
 
 
 @app.get("/api/segmentos")
-def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None, limit: int = 20):
+def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None, limit: int = 20,
+              classificacao: str = None, agente: str = None):
     limit = max(1, min(limit, 500))
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor)
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -902,8 +934,10 @@ def produtos_por_agencia(agencia: str = None):
 def uf_breakdown(
     agencia: str = None, setor: str = None, subsetor: str = None,
     data_inicio: str = None, data_fim: str = None, instrumento: str = None,
+    classificacao: str = None, agente: str = None,
 ):
-    where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento, subsetor)
+    where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento, subsetor,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -924,9 +958,10 @@ def uf_breakdown(
 @app.get("/api/porte")
 def porte_breakdown(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
-    data_inicio: str = None, data_fim: str = None,
+    data_inicio: str = None, data_fim: str = None, classificacao: str = None, agente: str = None,
 ):
-    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, subsetor=subsetor)
+    where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, subsetor=subsetor,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -944,10 +979,15 @@ def porte_breakdown(
         conn.close()
 
 
-def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai, data_inicio, data_fim, subsetor_pai=None):
-    """Ranking generico de variacao de participacao entre periodo atual e anterior, respeitando filtros."""
+def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai, data_inicio, data_fim, subsetor_pai=None,
+                      classificacao=None, agente=None):
+    """Ranking generico de variacao de participacao entre periodo atual e anterior, respeitando filtros.
+    group_col "setor"/"subsetor" sao resolvidos pela classificacao (ver _cols_setor)."""
+    col_setor, col_subsetor = _cols_setor(agencia, classificacao)
+    group_col = {"setor": col_setor, "subsetor": col_subsetor}.get(group_col, group_col)
     data_inicio, data_fim, ant_inicio, ant_fim = _periodo_anterior(data_inicio, data_fim, conn)
-    where_base, params_base = _filters_clause(agencia, setor_pai, uf, None, None, instrumento, subsetor_pai)
+    where_base, params_base = _filters_clause(agencia, setor_pai, uf, None, None, instrumento, subsetor_pai,
+                                              classificacao=classificacao, agente=agente)
     cur = conn.cursor()
 
     def valor_por_grupo(d_ini, d_fim):
@@ -1004,11 +1044,13 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
 
 
 @app.get("/api/tendencias/setores")
-def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
+def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
+                       classificacao: str = None, agente: str = None):
     """Ranking de setores por variacao de participacao entre o periodo selecionado e o periodo anterior equivalente."""
     conn = get_connection(pooled=True)
     try:
-        r = _ranking_variacao(conn, "setor_bndes", agencia, uf, instrumento, None, data_inicio, data_fim)
+        r = _ranking_variacao(conn, "setor", agencia, uf, instrumento, None, data_inicio, data_fim,
+                              classificacao=classificacao, agente=agente)
         return {
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
             "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
@@ -1020,11 +1062,13 @@ def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = N
 
 
 @app.get("/api/tendencias/subsetores")
-def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
+def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
+                          classificacao: str = None, agente: str = None):
     """Ranking de subsetores (dentro de um setor) por variacao de participacao."""
     conn = get_connection(pooled=True)
     try:
-        r = _ranking_variacao(conn, "subsetor_bndes", agencia, uf, instrumento, setor, data_inicio, data_fim)
+        r = _ranking_variacao(conn, "subsetor", agencia, uf, instrumento, setor, data_inicio, data_fim,
+                              classificacao=classificacao, agente=agente)
         return {
             "setor": setor,
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
@@ -1037,11 +1081,13 @@ def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str 
 
 
 @app.get("/api/tendencias/segmentos")
-def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None):
+def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
+                         classificacao: str = None, agente: str = None):
     """Ranking de segmentos CNAE (granularidade fina) dentro de um setor, por variacao de participacao."""
     conn = get_connection(pooled=True)
     try:
-        r = _ranking_variacao(conn, "segmento", agencia, uf, instrumento, setor, data_inicio, data_fim, subsetor_pai=subsetor)
+        r = _ranking_variacao(conn, "segmento", agencia, uf, instrumento, setor, data_inicio, data_fim, subsetor_pai=subsetor,
+                              classificacao=classificacao, agente=agente)
         return {
             "setor": setor,
             "subsetor": subsetor,
@@ -1055,8 +1101,10 @@ def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia:
 
 
 @app.get("/api/tendencias/produtos")
-def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None):
-    where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim)
+def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None,
+                        classificacao: str = None, agente: str = None):
+    where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim,
+                                    classificacao=classificacao, agente=agente)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -1084,6 +1132,39 @@ def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = 
         conn.close()
 
 
+@app.get("/api/tendencias/operadores")
+def tendencias_operadores(
+    agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
+    data_inicio: str = None, data_fim: str = None, classificacao: str = None, agente: str = None,
+    limit: int = 10,
+):
+    """Operadores indiretos (agentes financeiros repassadores do Inovacred / credito
+    descentralizado FINEP): valor contratado e n de operacoes, top `limit` + "Outros".
+    O frontend so exibe com agencia=FINEP; a rota sempre restringe a FINEP
+    descentralizado, qualquer que seja o filtro de agencia recebido."""
+    limit = max(1, min(limit, 30))
+    where, params = _filters_clause("FINEP", setor, uf, data_inicio, data_fim, subsetor=subsetor,
+                                    classificacao=classificacao, agente=agente)
+    where = where + (" AND " if where else "WHERE ") + "instrumento = 'Credito Descentralizado' AND agente_financeiro IS NOT NULL"
+    conn = get_connection(pooled=True)
+    try:
+        rows = conn.execute(
+            f"SELECT agente_financeiro, COUNT(*), SUM(valor_contratado) FROM operations {where} "
+            f"GROUP BY agente_financeiro ORDER BY SUM(valor_contratado) DESC NULLS LAST",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    out = [{"agente": r[0], "n_operacoes": r[1], "valor_total": r[2] or 0} for r in rows[:limit]]
+    resto = rows[limit:]
+    if resto:
+        out.append({
+            "agente": f"Outros ({len(resto)} agentes)", "outros": True,
+            "n_operacoes": sum(r[1] for r in resto), "valor_total": sum(r[2] or 0 for r in resto),
+        })
+    return out
+
+
 ORDENACAO_COLUNAS = {
     "valor": "valor_contratado",
     "data": "data_contratacao",
@@ -1108,6 +1189,8 @@ def operacoes(
     valor_max: float = None,
     produto: str = None,
     produto_ou_instrumento: str = None,
+    classificacao: str = None,
+    agente: str = None,
     order_by: str = "valor",
     order_dir: str = "desc",
     limit: int = 200,
@@ -1117,8 +1200,9 @@ def operacoes(
     offset = max(0, offset)
     where, params = _filters_clause(
         agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor, segmento,
-        porte, valor_min, valor_max, produto,
+        porte, valor_min, valor_max, produto, classificacao=classificacao, agente=agente,
     )
+    col_setor, col_subsetor = _cols_setor(agencia, classificacao)
     # produto_ou_instrumento: usado pelo clique em "Destinacao dos Recursos" (Tendencias,
     # ver /api/tendencias/produtos), que agrupa por COALESCE(produto, instrumento, 'Nao
     # informado') -- um grupo cujo rotulo veio do FALLBACK (produto NULO na linha, usou
@@ -1137,7 +1221,8 @@ def operacoes(
         rows = cur.execute(
             f"""
             SELECT id, agencia, instrumento, cliente, cnpj, uf, municipio, data_contratacao,
-                   valor_contratado, valor_desembolsado, setor_bndes, subsetor_bndes, segmento,
+                   valor_contratado, valor_desembolsado,
+                   {col_setor} AS setor_bndes, {col_subsetor} AS subsetor_bndes, segmento,
                    produto, descricao_projeto, agente_financeiro
             FROM operations {where}
             ORDER BY {coluna_ordenacao} {direcao} NULLS LAST
@@ -1161,11 +1246,12 @@ def operacao_detalhe(op_id: int, request: Request):
     try:
         cur = conn.cursor()
         row = cur.execute(
-            "SELECT raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj FROM operations WHERE id = ?", (op_id,)
+            "SELECT raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj, setor_cnae, subsetor_cnae, "
+            "subsetor_bndes FROM operations WHERE id = ?", (op_id,)
         ).fetchone()
         if not row:
             return {"erro": "operacao nao encontrada"}
-        raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj = row
+        raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj, setor_cnae, subsetor_cnae, subsetor_bndes = row
 
         # Salvar/Notas (area interna, /interno-artica) -- so calculado quando quem
         # chama e' STAFF (ver webapp/salvos.py). Nunca pra lead publico: alem de ser
@@ -1192,10 +1278,14 @@ def operacao_detalhe(op_id: int, request: Request):
         if raw_table in ("finep_credito_direto_raw", "finep_credito_descentralizado_raw"):
             cond = cur.execute(
                 "SELECT indexador, taxa_juros, prazo_carencia_meses, prazo_amortizacao_meses, "
-                "instrumento_financeiro, descricao_projeto FROM operations WHERE id = ?", (op_id,)
+                "instrumento_financeiro, descricao_projeto, produto FROM operations WHERE id = ?", (op_id,)
             ).fetchone()
             if cond:
-                idx, taxa, car, amort, linha, desc = cond
+                idx, taxa, car, amort, linha, desc, produto_op = cond
+                # Produto/programa: descentralizado = "Inovacred" (decisao do usuario,
+                # 2026-09-23 -- a fonte nao traz esse campo); direto = coluna `demanda`.
+                secoes.append({"titulo": "Produto", "campos": [
+                    {"label": "Produto / programa", "tipo": "texto", "valor": produto_op}]})
                 taxa_txt = None
                 if idx or taxa is not None:
                     taxa_fmt = f"{taxa:g}".replace(".", ",") + "%" if taxa is not None else None
@@ -1234,6 +1324,16 @@ def operacao_detalhe(op_id: int, request: Request):
                 campos_empresa = [c for c in campos_empresa if c["valor"] not in (None, "")]
                 if campos_empresa:
                     secoes = [{"titulo": "Identificação da empresa", "campos": campos_empresa}] + secoes
+
+        # Classificacao setorial padronizada por CNAE (2026-09-23) -- a nativa do BNDES
+        # ja aparece nas secoes da planilha (montar_detalhe_amigavel).
+        if setor_cnae:
+            secoes.append({"titulo": "Classificação setorial (padronizada por CNAE)", "campos": [
+                c for c in (
+                    {"label": "Setor", "tipo": "texto", "valor": setor_cnae},
+                    {"label": "Subsetor", "tipo": "texto", "valor": subsetor_cnae},
+                ) if c["valor"]
+            ]})
 
         resposta = {
             "raw_table": raw_table, "agencia": agencia, "instrumento": instrumento,

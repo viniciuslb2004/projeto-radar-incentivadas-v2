@@ -483,7 +483,10 @@ CREATE TABLE IF NOT EXISTS operations (
     embedding_text TEXT,                 -- texto embutido pelo motor de busca por IA (ver src/embeddings.py) -- mantido/religavel, nao usado no caminho padrao
     search_document TEXT,                -- texto completo normalizado + sinonimos/taxonomia (legivel, para depuracao/exportacao) -- ver src/search_fts.py
     search_taxonomia_termos TEXT,        -- so os sinonimos/taxonomia (ver src/search_taxonomy.py) -- usado a parte na hora de montar o search_vector com peso por campo
-    search_vector TSVECTOR               -- tsvector (portugues, sem acento) COM PESO POR CAMPO (identificacao > setor/segmento > instrumento > texto livre) -- motor de busca padrao, sem IA
+    search_vector TSVECTOR,              -- tsvector (portugues, sem acento) COM PESO POR CAMPO (identificacao > setor/segmento > instrumento > texto livre) -- motor de busca padrao, sem IA
+    setor_cnae TEXT,                     -- setor PADRONIZADO (mesmo caminho CNAE -> de_para_cnae p/ BNDES e FINEP, ver sector_taxonomy.build_regras_cnae) -- padrao do dashboard desde 2026-09-23
+    subsetor_cnae TEXT,
+    setor_cnae_origem TEXT               -- cnae_de_para | cnae_desempate_bndes | ambiguo | sem_cnae | sem_de_para | corrigido_manual
 );
 
 CREATE INDEX IF NOT EXISTS idx_bndes_raw_hash ON bndes_raw(row_hash);
@@ -496,6 +499,7 @@ CREATE INDEX IF NOT EXISTS idx_operations_search_vector ON operations USING GIN(
 CREATE INDEX IF NOT EXISTS idx_operations_cliente_trgm ON operations USING GIN(cliente gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_operations_setor ON operations(setor_bndes);
+CREATE INDEX IF NOT EXISTS idx_operations_setor_cnae ON operations(setor_cnae);
 CREATE INDEX IF NOT EXISTS idx_operations_segmento ON operations(segmento);
 CREATE INDEX IF NOT EXISTS idx_operations_agencia ON operations(agencia);
 CREATE INDEX IF NOT EXISTS idx_operations_ano ON operations(ano);
@@ -781,6 +785,12 @@ MIGRACOES_COLUNAS = [
     # "Potenciais Linhas").
     ("linhas_incentivadas", "porte_grupo", "TEXT"),
     ("linhas_incentivadas", "destinacao_grupo", "TEXT"),
+    # Setor padronizado por CNAE (2026-09-23, ver sector_taxonomy.build_regras_cnae /
+    # unify.recalcular_setor_cnae) -- preenchido por unify a cada refresh (recalculo
+    # completo em lotes, so grava o que mudou).
+    ("operations", "setor_cnae", "TEXT"),
+    ("operations", "subsetor_cnae", "TEXT"),
+    ("operations", "setor_cnae_origem", "TEXT"),
 ]
 
 

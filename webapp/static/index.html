@@ -171,6 +171,20 @@
     <label id="f-agencia-label" for="f-agencia">Agência</label>
     <select id="f-agencia"><option value="Todas">Todas</option></select>
   </div>
+  <!-- Classificacao setorial: padrao = padronizada por CNAE (mesma regra p/ BNDES e
+       FINEP, comparavel). "Nativa BNDES" so aparece com Agencia = BNDES. -->
+  <div id="f-classificacao-wrap" style="display:none;">
+    <label for="f-classificacao">Classificação setorial</label>
+    <select id="f-classificacao">
+      <option value="cnae">Padronizada (CNAE)</option>
+      <option value="nativo">Nativa BNDES</option>
+    </select>
+  </div>
+  <!-- Agente financeiro (repassador do Inovacred): filtro discreto, so com Agencia = FINEP. -->
+  <div id="f-agente-wrap" style="display:none;">
+    <label for="f-agente">Agente financeiro</label>
+    <select id="f-agente"><option value="Todos">Todos</option></select>
+  </div>
   <div>
     <label for="f-setor">Setor</label>
     <select id="f-setor"><option value="Todos">Todos</option></select>
@@ -284,6 +298,15 @@
             <ul class="clickable-list" id="lista-segmento-queda"></ul>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Operadores indiretos (Inovacred): so aparece com Agencia = FINEP (ver tendencias.js::loadOperadores). -->
+    <div class="card" id="card-operadores" style="display:none;">
+      <div class="card-header"><span>Operadores indiretos · Inovacred <span class="hint">agentes financeiros por valor contratado · clique para detalhar</span></span></div>
+      <div class="card-body">
+        <div id="chart-operadores-vazio" class="empty-state" style="display:none;">Nenhuma operação indireta para este filtro.</div>
+        <div class="chart-wrap tall"><canvas id="chart-operadores"></canvas></div>
       </div>
     </div>
 

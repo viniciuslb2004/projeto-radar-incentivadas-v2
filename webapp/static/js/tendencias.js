@@ -90,10 +90,9 @@ async function loadTendenciasSetores(filters, token) {
 function _avisoClassificacaoVaziaHTML(setor, filters) {
   if (filters && filters.agencia === "FINEP") {
     return (
-      `Classificação por subsetor/segmento não disponível para operações da FINEP em "${setor}" com os filtros atuais. ` +
-      "A FINEP não informa setor nativamente (diferente do BNDES) -- a classificação vem só do CNAE da empresa, e a " +
-      "metodologia oficial do BNDES não permite separar este recorte usando só CNAE (depende de mais contexto, que não " +
-      "está disponível para operações da FINEP). Sem outra fonte oficial, não classificamos por estimativa."
+      `Sem operações da FINEP classificadas em "${setor}" com os filtros atuais. ` +
+      "A FINEP não informa setor nativamente -- a classificação é a padronizada por CNAE da empresa " +
+      "(mesma regra aplicada ao BNDES); operações sem CNPJ na fonte ficam como \"Não classificado\"."
     );
   }
   return "Sem operações classificadas por subsetor/segmento para este filtro.";
@@ -418,6 +417,61 @@ async function loadProdutos(filters) {
   });
 }
 
+// Operadores indiretos (agentes financeiros do Inovacred) -- so com agencia=FINEP.
+let chartOperadores = null;
+async function loadOperadores(filters) {
+  const card = document.getElementById("card-operadores");
+  if (filters.agencia !== "FINEP") {
+    card.style.display = "none";
+    if (chartOperadores) { chartOperadores.destroy(); chartOperadores = null; }
+    return;
+  }
+  card.style.display = "";
+  const vazio = document.getElementById("chart-operadores-vazio");
+  let data;
+  try {
+    data = await fetchJSON("/api/tendencias/operadores?" + qs(filters));
+  } catch (e) {
+    data = [];
+  }
+  if (!Array.isArray(data)) data = [];
+  if (chartOperadores) { chartOperadores.destroy(); chartOperadores = null; }
+  if (!data.length) { vazio.style.display = "block"; return; }
+  vazio.style.display = "none";
+  const curto = (t) => (t && t.length > 42 ? t.slice(0, 40) + "…" : t);
+  chartOperadores = new Chart(document.getElementById("chart-operadores"), {
+    type: "bar",
+    data: {
+      labels: data.map((d) => `${curto(d.agente)} (${fmtNum(d.n_operacoes)} ops)`),
+      datasets: [{
+        data: data.map((d) => d.valor_total),
+        backgroundColor: data.map((d) => (d.outros ? AZUL_TONS[5] : AZUL_TONS[1])),
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => data[items[0].dataIndex].agente,
+            label: (ctx) => `${fmtBRLFull(ctx.raw)} · ${fmtNum(data[ctx.dataIndex].n_operacoes)} operações`,
+          },
+        },
+      },
+      scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        const d = data[els[0].index];
+        if (d.outros) return;
+        openOperacoesModal(`Inovacred · ${d.agente}`, { agente: d.agente });
+      },
+    },
+  });
+}
+
 let _ultimasMaioresOperacoes = [];
 
 async function loadMaioresOperacoes(filters) {
@@ -461,6 +515,7 @@ async function refreshTendencias(filters) {
     loadTendenciasSetores(filters, token),
     loadProdutos(filters),
     loadMaioresOperacoes(filters),
+    loadOperadores(filters),
   ]);
   if (token !== _tendToken || !setoresRanking) return; // filtro mudou no meio
   await popularSeletorSubsetor(setoresRanking, filters);

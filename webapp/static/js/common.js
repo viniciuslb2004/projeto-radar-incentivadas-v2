@@ -561,6 +561,14 @@ function currentFilters() {
     subsetor: document.getElementById("f-subsetor").value,
     uf: document.getElementById("f-uf").value,
   };
+  // Classificacao nativa BNDES (so com agencia=BNDES) e agente financeiro (so com
+  // agencia=FINEP) -- fora desses casos nem vao pra query (backend tambem ignora).
+  if (filters.agencia === "BNDES" && document.getElementById("f-classificacao").value === "nativo") {
+    filters.classificacao = "nativo";
+  }
+  if (filters.agencia === "FINEP") {
+    filters.agente = document.getElementById("f-agente").value;
+  }
 
   const mesIni = document.getElementById("f-mes-ini").value;
   const anoIni = document.getElementById("f-ano-ini").value;
@@ -970,6 +978,8 @@ async function _initFiltersAndTabsImpl() {
     // initFiltersAndTabs()), entao o valor de um link salvo sempre existe como opcao.
     if (paramsIniciais.has("subsetor")) document.getElementById("f-subsetor").value = paramsIniciais.get("subsetor");
     if (paramsIniciais.has("uf")) document.getElementById("f-uf").value = paramsIniciais.get("uf");
+    if (paramsIniciais.has("classificacao")) document.getElementById("f-classificacao").value = paramsIniciais.get("classificacao");
+    if (paramsIniciais.has("agente")) document.getElementById("f-agente").value = paramsIniciais.get("agente");
     if (paramsIniciais.has("mes_ini")) document.getElementById("f-mes-ini").value = paramsIniciais.get("mes_ini");
     if (paramsIniciais.has("ano_ini")) document.getElementById("f-ano-ini").value = paramsIniciais.get("ano_ini");
     if (paramsIniciais.has("mes_fim")) document.getElementById("f-mes-fim").value = paramsIniciais.get("mes_fim");
@@ -980,9 +990,11 @@ async function _initFiltersAndTabsImpl() {
     _aplicarTetoMesFim();
   }
 
+  _atualizarFiltrosPorAgencia();
   const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
-  ["f-agencia", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
+  ["f-agencia", "f-classificacao", "f-agente", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
     document.getElementById(id).addEventListener("change", async () => {
+      if (id === "f-agencia") _atualizarFiltrosPorAgencia();
       // Teto dinamico (item 5): #f-ano-fim mudar pode tornar meses ja desabilitados
       // validos de novo (ano anterior ao mais recente) ou invalidar o mes atual (ano
       // mais recente da base) -- reaplica ANTES de validarIntervaloDatas, que compara
@@ -1090,8 +1102,17 @@ function _preencherAnosEMeses(filtros) {
 // resposta de /api/filtros -- extraido da carga inicial pra nao duplicar
 // listener nenhum (os `addEventListener` de change continuam so em
 // _initFiltersAndTabsImpl, que roda uma unica vez por carregamento de pagina).
+// Mostra "Classificacao setorial" so com agencia=BNDES e "Agente financeiro" so com
+// agencia=FINEP (filtros discretos, dependentes da agencia).
+function _atualizarFiltrosPorAgencia() {
+  const agencia = document.getElementById("f-agencia").value;
+  document.getElementById("f-classificacao-wrap").style.display = agencia === "BNDES" ? "" : "none";
+  document.getElementById("f-agente-wrap").style.display = agencia === "FINEP" ? "" : "none";
+}
+
 function _popularFiltrosCompartilhados(filtros) {
   _preencherSelectFiltro("f-agencia", filtros.agencias);
+  _preencherSelectFiltro("f-agente", (filtros.agentes_finep || []).filter(Boolean));
   _preencherSelectFiltro("f-setor", (filtros.setores || []).filter(Boolean));
   // Populacao inicial de #f-subsetor com a lista COMPLETA (todos os subsetores, de
   // qualquer setor) -- narrada pra so os do setor escolhido em consolidado.js
@@ -1112,6 +1133,8 @@ function _sincronizarFiltrosCompartilhadosNaURL() {
     setor: document.getElementById("f-setor").value,
     subsetor: document.getElementById("f-subsetor").value,
     uf: document.getElementById("f-uf").value,
+    classificacao: currentFilters().classificacao,
+    agente: currentFilters().agente,
     mes_ini: document.getElementById("f-mes-ini").value,
     ano_ini: document.getElementById("f-ano-ini").value,
     mes_fim: document.getElementById("f-mes-fim").value,

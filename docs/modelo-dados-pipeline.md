@@ -24,6 +24,24 @@
   funciona (depende de mais contexto que só CNAE). `build_divisao_map()` resolve por
   "última linha da tabela vence" — se um dia isso incomodar, é uma decisão de produto a tomar,
   não um bug a caçar às cegas.
+  **2026-09-23 — setor padronizado por CNAE (decisão de produto, opção A):** `operations`
+  ganhou `setor_cnae`/`subsetor_cnae`/`setor_cnae_origem`, calculados pelo MESMO caminho
+  CNAE→`de_para_cnae` para BNDES e FINEP (`sector_taxonomy.build_regras_cnae`/
+  `classificar_cnae`, gravado por `unify.recalcular_setor_cnae` a cada refresh — lotes de 5000
+  por faixa de id via tabela temporária, só grava o que mudou). CNAE = `cnpj_cnae.cnae_codigo`
+  (BNDES sem cache cai em `bndes_raw.subsetor_cnae_codigo`). Desempate: (1) regra de código mais
+  específico vence (subclasse > grupo > divisão, ex. D351 > D35); (2) mesma especificidade com
+  setores diferentes → vence o setor que o BNDES nativo usa em ≥80% (n≥5) das operações daquela
+  regra; (3) senão `AMBÍGUO` (hoje só divisões 39 e 53, 0 operações). `setor_bndes` continua
+  existindo (nativo BNDES / legado FINEP). Dashboard, filtro de setor e Busca usam `setor_cnae`;
+  `classificacao=nativo` (só com `agencia=BNDES`) volta para `setor_bndes` (`main.py::_cols_setor`).
+  Correção manual de `setor_bndes`/`subsetor_bndes` é espelhada em `setor_cnae`
+  (`setor_cnae_origem='corrigido_manual'`). Backfill: `scripts/backfill_setor_cnae_produto_finep.py`.
+  552 FINEP direto seguem sem setor: não têm CNPJ na fonte (não há o que enriquecer).
+- **Produto FINEP (2026-09-23):** descentralizado → `"Inovacred"` (decisão do usuário, a fonte
+  não traz o campo); direto → programa da coluna `demanda` com grafia unificada
+  (`unify.produto_finep_direto`). Rota `/api/tendencias/operadores` (agentes do Inovacred) e
+  filtro `agente` (só `agencia=FINEP`) em `_filters_clause`.
 - **`editais_raw`**: chamadas públicas (editais) abertas da FINEP — dado próprio, upsert
   (preserva id da própria FINEP), NÃO faz parte do rebuild de `operations`.
 - **`linhas_incentivadas`**: catálogo de PRODUTOS de crédito permanentes (não transações) —

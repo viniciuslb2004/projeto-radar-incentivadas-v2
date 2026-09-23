@@ -287,7 +287,8 @@ def buscar_texto(
         # setor, entao as duas colunas descrevem o MESMO conjunto de operacoes ali --
         # sem ambiguidade real). Um OR simples acha a operacao no nivel certo sem o
         # front precisar saber de antemao se o valor escolhido e setor ou subsetor.
-        filtros_extra.append("(setor_bndes = ? OR subsetor_bndes = ?)")
+        # 2026-09-23: setor padronizado por CNAE (setor_cnae/subsetor_cnae), o mesmo do dashboard.
+        filtros_extra.append("(setor_cnae = ? OR subsetor_cnae = ?)")
         params_extra_principal.extend([setor, setor])
         params_extra_trigrama.extend([setor, setor])
     filtro_sql = ("AND " + " AND ".join(filtros_extra)) if filtros_extra else ""
@@ -375,8 +376,8 @@ def buscar_texto(
         rows += rows_tier1
 
         rows_tier2 = _buscar_tier_like(
-            "busca_normalizar_texto(setor_bndes) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
-            " OR busca_normalizar_texto(subsetor_bndes) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            "busca_normalizar_texto(setor_cnae) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
+            " OR busca_normalizar_texto(subsetor_cnae) LIKE '%%' || busca_normalizar_texto(?) || '%%'"
             " OR busca_normalizar_texto(segmento) LIKE '%%' || busca_normalizar_texto(?) || '%%'",
             [query, query, query],
             2, TETO_TIERS123 - len(rows), [r[0] for r in rows],

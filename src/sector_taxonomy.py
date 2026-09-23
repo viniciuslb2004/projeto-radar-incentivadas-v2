@@ -103,3 +103,110 @@ def build_divisao_map(conn) -> dict:
         for divisao in divisoes:
             mapping[divisao] = (setor, subsetor)
     return mapping
+
+
+# ============ Setor padronizado por CNAE (setor_cnae/subsetor_cnae) ============
+# Decisao de produto 2026-09-23 (opcao A, ver Obsidian Decisoes.md e
+# docs/modelo-dados-pipeline.md): BNDES e FINEP passam a ter um setor COMPARAVEL,
+# calculado pelo MESMO caminho (CNAE da empresa -> de_para_cnae oficial do BNDES),
+# em colunas proprias de `operations` (setor_cnae/subsetor_cnae/setor_cnae_origem).
+# setor_bndes/subsetor_bndes continuam existindo (BNDES = classificacao nativa da
+# planilha; FINEP = legado "ultima linha vence" de build_divisao_map).
+#
+# Regra de desempate (substitui "ultima linha vence"):
+#   1. ESPECIFICIDADE: vence a regra do de_para cujo codigo casa com o MAIOR prefixo
+#      do CNAE da empresa (subclasse 7 dig. > grupo 3 dig. > divisao 2 dig.) -- ex
+#      D351 (Energia eletrica) vence D35 (Comercio e Servicos) para CNAE 3511-5/01.
+#   2. MESMA ESPECIFICIDADE com setores diferentes (conflito real do de_para, ex F42
+#      aparece como Infraestrutura/Construcao E como Comercio e Servicos): decide pela
+#      EVIDENCIA do proprio BNDES -- entre as operacoes BNDES cujo CNAE cai nessa
+#      mesma regra, se um dos setores candidatos tem >= DESEMPATE_SHARE_MIN do total
+#      (com pelo menos DESEMPATE_N_MIN operacoes), ele vence.
+#   3. Sem evidencia suficiente -> AMBIGUO (setor_cnae = subsetor_cnae = 'AMBÍGUO'),
+#      nunca chuta.
+AMBIGUO = "AMBÍGUO"
+DESEMPATE_SHARE_MIN = 0.8
+DESEMPATE_N_MIN = 5
+
+
+def _prefixos_da_faixa(faixa: str) -> list:
+    """Codigos (so digitos) que uma faixa do de_para cita, preservando a
+    especificidade: 'A01 a A03' -> ['01','02','03']; 'D352 e D353' -> ['352','353'];
+    'H4911,\nH4912401 e\nH4912402' -> ['4911','4912401','4912402']; 'H49 (restante)' ->
+    ['49'] (o "restante" e exatamente a semantica de prefixo menos especifico)."""
+    numeros = re.findall(r"\d+", faixa)
+    if " a " in faixa and len(numeros) >= 2:
+        divs = sorted({int(n[:2]) for n in numeros})
+        return [f"{d:02d}" for d in range(divs[0], divs[-1] + 1)]
+    return sorted({n for n in numeros if len(n) >= 2})
+
+
+def _so_digitos(cnae) -> str:
+    return re.sub(r"\D", "", str(cnae or ""))
+
+
+def _prefixo_mais_especifico(cnae_digitos: str, prefixos) -> str:
+    for n in range(len(cnae_digitos), 1, -1):
+        p = cnae_digitos[:n]
+        if p in prefixos:
+            return p
+    return None
+
+
+def build_regras_cnae(conn, evidencia_bndes=None) -> dict:
+    """{prefixo: (setor, subsetor, origem)} ja com conflitos resolvidos.
+
+    evidencia_bndes: iteravel de (cnae_digitos, setor_bndes_nativo) das operacoes BNDES
+    (usada so no passo 2 do desempate). origem: 'cnae_de_para' (sem conflito),
+    'cnae_desempate_bndes' (conflito resolvido pela evidencia) ou 'ambiguo'."""
+    rows = conn.execute(
+        "SELECT codigo_cnae_ibge_faixa, setor_bndes, subsetor_bndes FROM de_para_cnae ORDER BY id"
+    ).fetchall()
+    candidatos = {}
+    for faixa, setor, subsetor in rows:
+        par = (canonical_setor(setor), canonical_subsetor(subsetor))
+        for p in _prefixos_da_faixa(str(faixa or "")):
+            candidatos.setdefault(p, [])
+            if par not in candidatos[p]:
+                candidatos[p].append(par)
+
+    prefixos = set(candidatos)
+    conflitos = {p for p, c in candidatos.items() if len({s for s, _ in c}) > 1 or len(c) > 1}
+    contagem = {}
+    for cnae, setor_nativo in (evidencia_bndes or []):
+        p = _prefixo_mais_especifico(_so_digitos(cnae), prefixos)
+        if p in conflitos:
+            d = contagem.setdefault(p, {})
+            d[setor_nativo] = d.get(setor_nativo, 0) + 1
+
+    regras = {}
+    for p, cands in candidatos.items():
+        if p not in conflitos:
+            regras[p] = (cands[0][0], cands[0][1], "cnae_de_para")
+            continue
+        d = contagem.get(p, {})
+        total = sum(d.values())
+        vencedor = None
+        if total >= DESEMPATE_N_MIN:
+            for setor in {s for s, _ in cands}:
+                if d.get(setor, 0) / total >= DESEMPATE_SHARE_MIN:
+                    subs = [sub for s, sub in cands if s == setor]
+                    if len(subs) == 1:
+                        vencedor = (setor, subs[0])
+        if vencedor:
+            regras[p] = (vencedor[0], vencedor[1], "cnae_desempate_bndes")
+        else:
+            regras[p] = (AMBIGUO, AMBIGUO, "ambiguo")
+    return regras
+
+
+def classificar_cnae(cnae, regras: dict):
+    """(setor_cnae, subsetor_cnae, origem) para um codigo CNAE -- (None, None,
+    'sem_cnae') sem codigo; (None, None, 'sem_de_para') se nenhuma regra casa."""
+    dig = _so_digitos(cnae)
+    if len(dig) < 2:
+        return None, None, "sem_cnae"
+    p = _prefixo_mais_especifico(dig, regras)
+    if p is None:
+        return None, None, "sem_de_para"
+    return regras[p]

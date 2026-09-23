@@ -16,10 +16,12 @@ deixa de ser reconstruida do zero toda semana, uma pendencia resolvida no enriqu
 mensal nunca mais seria refletida.
 """
 import datetime
+import re
 
 import pandas as pd
 
 import search_taxonomy
+import sector_taxonomy
 from db import get_connection, get_engine
 from geo import regiao_de
 from incremental import insert_new_rows
@@ -114,6 +116,15 @@ def _reaplicar_correcoes_manuais(conn) -> int:
     for operation_id, campo, valor_novo in rows:
         if campo in CAMPOS_CORRIGIVEIS:
             conn.execute(f"UPDATE operations SET {campo} = ? WHERE id = ?", (valor_novo, operation_id))
+            # Correcao manual de setor vale tambem pro setor padronizado por CNAE
+            # (setor_cnae, padrao do dashboard desde 2026-09-23) -- senao ela sumiria
+            # da tela assim que o recalculo automatico rodasse.
+            if campo in ("setor_bndes", "subsetor_bndes"):
+                col = "setor_cnae" if campo == "setor_bndes" else "subsetor_cnae"
+                conn.execute(
+                    f"UPDATE operations SET {col} = ?, setor_cnae_origem = 'corrigido_manual' WHERE id = ?",
+                    (valor_novo, operation_id),
+                )
     conn.commit()
     return len(rows)
 
@@ -126,6 +137,87 @@ OPERATIONS_COLS = [
     "prazo_carencia_meses", "prazo_amortizacao_meses", "descricao_projeto", "agente_financeiro",
     "raw_table", "raw_id", "embedding_text", "search_document", "search_taxonomia_termos",
 ]
+
+
+# ============ Produto FINEP (2026-09-23, decisao do usuario -- ver Obsidian Decisoes.md) ============
+# Credito DESCENTRALIZADO/indireto: TODAS as operacoes viram "Inovacred". A planilha
+# da FINEP NAO traz um campo de programa/produto nessa aba -- isto e decisao
+# explicita do usuario (o Inovacred e o programa de credito descentralizado da FINEP
+# operado pelos agentes financeiros), nao dado lido da fonte.
+PRODUTO_FINEP_DESCENTRALIZADO = "Inovacred"
+PRODUTO_FINEP_DIRETO_FALLBACK = "Credito Direto (FINEP)"
+# Credito DIRETO: programa a partir da coluna `demanda` da propria fonte, so com a
+# grafia limpa/unificada (as duas grafias de "Demanda Espontanea" viram uma so).
+_PROGRAMAS_FINEP_DIRETO = [
+    ("FINEP CREDITO", "Finep Crédito"),
+    ("DEMANDA ESPONTANEA", "Demanda Espontânea"),
+    ("FINEP INOVACAO", "Finep Inovação"),
+    ("PROGRAMA JURO ZERO", "Programa Juro Zero"),
+    ("REEMBOLSAVEL - CEP - SF", "Reembolsável CEP-SF"),
+    ("INOVA PETRO", "Inova Petro"),
+]
+
+
+def produto_finep_direto(demanda) -> str:
+    import unicodedata
+    if demanda is None or (isinstance(demanda, float) and pd.isna(demanda)):
+        return PRODUTO_FINEP_DIRETO_FALLBACK
+    t = unicodedata.normalize("NFKD", str(demanda)).encode("ascii", "ignore").decode().upper()
+    t = re.sub(r"\s+", " ", t).strip()
+    for prefixo, rotulo in _PROGRAMAS_FINEP_DIRETO:
+        if t.startswith(prefixo):
+            return rotulo
+    # valor novo que ainda nao conhecemos: mantem o texto da fonte (so espacos limpos)
+    return re.sub(r"\s+", " ", str(demanda)).strip() or PRODUTO_FINEP_DIRETO_FALLBACK
+
+
+# ============ Setor padronizado por CNAE (setor_cnae/subsetor_cnae) ============
+def recalcular_setor_cnae(conn, tamanho_lote: int = 5000) -> dict:
+    """Recalcula setor_cnae/subsetor_cnae/setor_cnae_origem de TODAS as operacoes
+    (BNDES e FINEP) pelo mesmo caminho CNAE -> de_para_cnae (regras e desempate em
+    sector_taxonomy.build_regras_cnae). CNAE: cnpj_cnae.cnae_codigo (mesma fonte p/ as
+    duas agencias); BNDES sem CNPJ no cache cai no CNAE da propria planilha
+    (bndes_raw.subsetor_cnae_codigo). Grava via tabela temporaria + UPDATE ... FROM em
+    lotes curtos por faixa de id (commit por lote -- nunca uma transacao longa em
+    `operations`), e so as linhas que mudaram. Correcoes manuais sao reaplicadas
+    depois por _reaplicar_correcoes_manuais (quem chama)."""
+    rows = conn.execute(
+        "SELECT o.id, o.agencia, o.setor_bndes, COALESCE(c.cnae_codigo, b.subsetor_cnae_codigo) "
+        "FROM operations o LEFT JOIN cnpj_cnae c ON c.cnpj = o.cnpj "
+        "LEFT JOIN bndes_raw b ON o.raw_table = 'bndes_raw' AND b.id = o.raw_id"
+    ).fetchall()
+    evidencia = [(cnae, setor) for _, ag, setor, cnae in rows if ag == "BNDES" and cnae and setor]
+    regras = sector_taxonomy.build_regras_cnae(conn, evidencia)
+    valores = []
+    for op_id, _, _, cnae in rows:
+        setor, sub, origem = sector_taxonomy.classificar_cnae(cnae, regras)
+        valores.append((op_id, setor, sub, origem))
+
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS tmp_setor_cnae (id INTEGER PRIMARY KEY, setor TEXT, subsetor TEXT, origem TEXT)"
+    )
+    conn.execute("TRUNCATE tmp_setor_cnae")
+    with conn.cursor().copy("COPY tmp_setor_cnae (id, setor, subsetor, origem) FROM STDIN") as cp:
+        for v in valores:
+            cp.write_row(v)
+    conn.commit()
+    ids = sorted(v[0] for v in valores)
+    atualizadas = 0
+    for i in range(0, len(ids), tamanho_lote):
+        lote = ids[i:i + tamanho_lote]
+        cur = conn.execute(
+            "UPDATE operations o SET setor_cnae = t.setor, subsetor_cnae = t.subsetor, setor_cnae_origem = t.origem "
+            "FROM tmp_setor_cnae t WHERE t.id = o.id AND o.id BETWEEN ? AND ? "
+            "AND COALESCE(o.setor_cnae_origem, '') <> 'corrigido_manual' "
+            "AND (o.setor_cnae IS DISTINCT FROM t.setor OR o.subsetor_cnae IS DISTINCT FROM t.subsetor "
+            "     OR o.setor_cnae_origem IS DISTINCT FROM t.origem)",
+            (lote[0], lote[-1]),
+        )
+        atualizadas += cur.rowcount or 0
+        conn.commit()
+    conn.execute("DROP TABLE IF EXISTS tmp_setor_cnae")
+    conn.commit()
+    return {"total": len(valores), "atualizadas": atualizadas}
 
 
 def _add_periodo(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
@@ -227,7 +319,7 @@ def _build_finep_direto_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
         "porte_cliente": df["porte_empresa"],
         "natureza_cliente": df["natureza_juridica"],
         "razao_social_oficial": df["razao_social_oficial"],
-        "produto": "Credito Direto (FINEP)",
+        "produto": df["demanda"].map(produto_finep_direto),
         "instrumento_financeiro": None,
         "modalidade_apoio": "REEMBOLSAVEL",
         "indexador": None,
@@ -273,7 +365,7 @@ def _build_finep_descentralizado_ops(conn, cnae_lookup: pd.DataFrame) -> pd.Data
         "porte_cliente": df["porte_empresa"],
         "natureza_cliente": df["natureza_juridica"],
         "razao_social_oficial": df["razao_social_oficial"],
-        "produto": "Credito Descentralizado (FINEP)",
+        "produto": PRODUTO_FINEP_DESCENTRALIZADO,
         "instrumento_financeiro": None,
         "modalidade_apoio": "REEMBOLSAVEL",
         "indexador": None,
@@ -554,7 +646,12 @@ def reclassificar_pendentes(conn=None) -> list:
     try:
         cnae_lookup = _load_cnae_lookup(conn)
         boilerplate = _descricoes_boilerplate(conn)
-        return _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
+        ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
+        conn.commit()
+        # CNPJs recem-resolvidos tambem mudam o setor padronizado por CNAE.
+        recalcular_setor_cnae(conn)
+        _reaplicar_correcoes_manuais(conn)
+        return ids
     finally:
         if fechar:
             conn.close()
@@ -604,6 +701,9 @@ def build_operations():
 
         reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
         conn.commit()
+
+        setor_cnae_info = recalcular_setor_cnae(conn)
+        print(f"setor_cnae: {setor_cnae_info['atualizadas']} de {setor_cnae_info['total']} operacoes atualizadas.")
 
         n_correcoes = _reaplicar_correcoes_manuais(conn)
 
