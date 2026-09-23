@@ -54,6 +54,82 @@ async function loadTendenciasSetores(filters) {
   return setores;
 }
 
+// Item 3 (pedido 2026-09-23, investigacao real contra producao 2026-09-23): quando o
+// usuario filtra por agencia=FINEP + um setor sem nenhuma operacao FINEP classificada
+// nele, os graficos de subsetor/segmento abaixo ficavam com um <canvas> em branco,
+// sem nenhuma explicacao. Causa raiz confirmada (NAO e CNPJ nao resolvido -- so ~4.6%
+// das operacoes FINEP estao assim, ver setor_origem='pendente'): a FINEP nao tem
+// classificacao nativa de setor (diferente do BNDES, que vem com setor_bndes direto
+// da propria planilha) -- o setor da FINEP e 100% derivado do CNAE da empresa via
+// de_para_cnae (ver src/sector_taxonomy.py::build_divisao_map). de_para_cnae tem uma
+// ambiguidade REAL e ja documentada (ver comentario em src/db.py sobre a tabela): a
+// MESMA divisao CNAE (ex: H49/H50/H51/H52/H53, F41-F43, D35, E36-E39, J61) aparece
+// tanto numa faixa generica "Comercio e Servicos" quanto numa faixa mais especifica
+// de Infraestrutura, e build_divisao_map() resolve por "ultima linha da tabela
+// vence" -- que hoje, pra TODAS essas divisoes, e sempre a linha de "Comercio e
+// Servicos". Resultado confirmado ao vivo: das 11405 operacoes FINEP ja classificadas
+// (enriquecido), 0 caem em INFRAESTRUTURA (100% ficam em INDUSTRIA/COMERCIO-SERVICOS/
+// AGROPECUARIA) -- nao por bug, mas porque a FINEP nao tem nenhuma fonte de dado
+// (nem a propria planilha, nem a Receita Federal) que diga qual das duas leituras
+// (Comercio/Servicos vs Infraestrutura) se aplica a uma empresa especifica -- o
+// proprio BNDES resolve essa ambiguidade com "mais contexto que so CNAE" (ver
+// db.py), contexto que simplesmente nao existe pra FINEP. NAO e viavel fechar esse
+// gap sem inventar dado (regra do CLAUDE.md) -- a acao correta e deixar isso
+// EXPLICITO na UI (ver _avisoClassificacaoVaziaHTML/_aplicarOuLimparAvisoVazio
+// abaixo) em vez de mostrar um grafico vazio sem explicacao.
+function _avisoClassificacaoVaziaHTML(setor, filters) {
+  if (filters && filters.agencia === "FINEP") {
+    return (
+      `Classificação por subsetor/segmento não disponível para operações da FINEP em "${setor}" com os filtros atuais. ` +
+      "A FINEP não informa setor nativamente (diferente do BNDES) -- a classificação vem só do CNAE da empresa, e a " +
+      "metodologia oficial do BNDES não permite separar este recorte usando só CNAE (depende de mais contexto, que não " +
+      "está disponível para operações da FINEP). Sem outra fonte oficial, não classificamos por estimativa."
+    );
+  }
+  return "Sem operações classificadas por subsetor/segmento para este filtro.";
+}
+
+function _aplicarOuLimparAvisoVazio(canvasId, vazio, setor, filters) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const wrap = canvas.closest(".chart-wrap") || canvas.parentElement;
+  let aviso = wrap.querySelector(".aviso-classificacao-vazia");
+  if (!vazio) {
+    canvas.style.display = "";
+    if (aviso) aviso.style.display = "none";
+    return;
+  }
+  canvas.style.display = "none";
+  if (!aviso) {
+    aviso = document.createElement("div");
+    aviso.className = "empty-state aviso-classificacao-vazia";
+    wrap.appendChild(aviso);
+  }
+  aviso.textContent = _avisoClassificacaoVaziaHTML(setor, filters);
+  aviso.style.display = "block";
+}
+
+// Item 1 (pedido 2026-09-23): "AGROPECUARIA"/"COMERCIO/SERVICOS" tem so 1 subsetor no
+// crosswalk oficial do BNDES (de_para_cnae) -- confirmado de novo nesta sessao (2a+3a
+// investigacao independente, ver historico): consultado o conteudo REAL da tabela em
+// producao, todas as linhas de "Comercio e Servicos" (24 faixas de CNAE diferentes) e
+// a unica linha de "Agropecuaria" tem subsetor_bndes IGUAL ao proprio setor -- nao e
+// uma simplificacao nossa, e assim que a planilha oficial do BNDES vem. NAO existe
+// uma versao mais granular dessa classificacao pra abrir mais subsetores sem
+// inventar dado. A granularidade real que EXISTE (e ja esta implementada, ver
+// loadSegmentos abaixo) e o campo `segmento` (subsetor_cnae_nome nativo do BNDES /
+// cnae_descricao real da Receita Federal pra FINEP -- centenas de categorias reais,
+// ex: "CULTIVO DE CANA-DE-ACUCAR", "CRIACAO DE AVES" dentro de Agropecuaria).
+// Mensagem abaixo so aparece quando o subsetor de fato nao discrimina nada (<=1
+// categoria real) -- aponta pra secao de segmento, que ja tem a resposta.
+function _avisoSubsetorUnicoHTML(setor) {
+  return (
+    `A metodologia oficial do BNDES define apenas 1 subsetor para "${setor}" -- não é uma limitação do dashboard, ` +
+    'o crosswalk oficial (de_para_cnae) não abre mais categorias aqui. Veja "Detalhe por segmento (CNAE)" abaixo ' +
+    "para a granularidade real disponível (centenas de categorias por CNAE)."
+  );
+}
+
 async function popularSeletorSubsetor(setoresRanking, filters) {
   const select = document.getElementById("subsetor-setor-select");
   if (!subsetorSelectInicializado) {
@@ -99,6 +175,40 @@ async function loadSubsetores(filters) {
   });
 
   const top = breakdown.filter((b) => b.subsetor && b.subsetor !== "Nao classificado").slice(0, 10);
+
+  if (!top.length) {
+    if (chartSubsetores) { chartSubsetores.destroy(); chartSubsetores = null; }
+    _aplicarOuLimparAvisoVazio("chart-subsetores", true, setor, filters);
+    const avisoUnicoStale = document.getElementById("chart-subsetores").closest(".card-body").querySelector(".aviso-subsetor-unico");
+    if (avisoUnicoStale) avisoUnicoStale.style.display = "none";
+    return;
+  }
+  _aplicarOuLimparAvisoVazio("chart-subsetores", false, setor, filters);
+
+  // Item 1: quando o subsetor nao discrimina nada de verdade (so 1 categoria real,
+  // ex: Agropecuaria/Comercio e Servicos -- ver comentario em
+  // _avisoSubsetorUnicoHTML), avisa e aponta pra secao de segmento em vez de deixar
+  // o usuario olhando pra um grafico de barra unica sem contexto. Anexado no
+  // .card-body INTEIRO (pai do grid de 2 colunas chart+listas), nunca dentro do
+  // .chart-wrap (altura FIXA de 280px pro <canvas>, ver style.css) -- anexar ali
+  // faria o texto transbordar por baixo do wrap e sobrepor visualmente a coluna
+  // "Em alta/Em queda" ao lado (confirmado ao vivo testando este exato cenario).
+  const cardBodySubsetor = document.getElementById("chart-subsetores").closest(".card-body");
+  let avisoUnico = cardBodySubsetor.querySelector(".aviso-subsetor-unico");
+  if (top.length === 1) {
+    if (!avisoUnico) {
+      avisoUnico = document.createElement("div");
+      avisoUnico.className = "empty-state aviso-subsetor-unico";
+      avisoUnico.style.padding = "8px 0 0";
+      avisoUnico.style.textAlign = "left";
+      cardBodySubsetor.appendChild(avisoUnico);
+    }
+    avisoUnico.textContent = _avisoSubsetorUnicoHTML(setor);
+    avisoUnico.style.display = "block";
+  } else if (avisoUnico) {
+    avisoUnico.style.display = "none";
+  }
+
   if (chartSubsetores) chartSubsetores.destroy();
   chartSubsetores = new Chart(document.getElementById("chart-subsetores"), {
     type: "bar",
@@ -162,6 +272,14 @@ async function loadSegmentos(filters) {
   });
 
   const top = breakdown.filter((b) => b.segmento && b.segmento !== "Nao classificado");
+
+  if (!top.length) {
+    if (chartSegmentos) { chartSegmentos.destroy(); chartSegmentos = null; }
+    _aplicarOuLimparAvisoVazio("chart-segmentos", true, setor, filters);
+    return;
+  }
+  _aplicarOuLimparAvisoVazio("chart-segmentos", false, setor, filters);
+
   if (chartSegmentos) chartSegmentos.destroy();
   chartSegmentos = new Chart(document.getElementById("chart-segmentos"), {
     type: "bar",

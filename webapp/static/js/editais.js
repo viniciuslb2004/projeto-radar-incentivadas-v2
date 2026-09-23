@@ -15,7 +15,6 @@ const PUBLICO_LABELS = {
   produtorRural: "Produtor rural",
 };
 
-let chartEditaisTema;
 let editaisAtuais = [];
 
 function fmtDataCurta(iso) {
@@ -42,6 +41,32 @@ function tagListHTML(chaves) {
   return `<div class="tag-list">${chaves.map((c) => `<span class="tag">${PUBLICO_LABELS[c] || c}</span>`).join("")}</div>`;
 }
 
+// Item 8 (pedido 2026-09-23): card e a apresentacao PRINCIPAL de um edital (a maioria
+// dos temas tem so 1 edital aberto por vez -- um grafico de contagem por tema virava
+// uma parede de barras de tamanho 1, pouco informativo, ver loadEditaisDashboard).
+// Enriquecido com instituicao (sempre FINEP -- unica fonte de editais_raw, ver
+// CLAUDE.md/docs/modelo-dados-pipeline.md) + status Aberto/Encerrado explicito (MESMA
+// logica ja usada no modal de detalhe, edital.situacao direto, ver openEditalDetalhe)
+// + datas de abertura/fechamento reais (data_publicacao/prazo_proposto/vigencia_fim,
+// todas ja vem do /api/editais, sem chamada nova). NAO mostra valor: editais_raw nao
+// tem nenhum campo monetario (a FINEP nao publica valor de dotacao por chamada nos
+// metadados que capturamos) -- omitido de proposito em vez de inventado.
+function editalStatusBadgeHTML(edital) {
+  const aberto = edital.situacao === "aberta";
+  return `<span class="badge ${aberto ? "up" : "down"}">${aberto ? "Aberto" : "Encerrado"}</span>`;
+}
+
+function editalDatasHTML(edital) {
+  const abertura = edital.data_publicacao ? `Publicado em ${fmtDataCurta(edital.data_publicacao)}` : null;
+  const fechamento = edital.prazo_proposto
+    ? `Encerra em ${fmtDataCurta(edital.prazo_proposto)}`
+    : edital.vigencia_fim
+    ? `Vigência até ${fmtDataCurta(edital.vigencia_fim)}`
+    : null;
+  const partes = [abertura, fechamento].filter(Boolean);
+  return partes.length ? `<div class="meta" style="margin-top:4px;">${partes.join(" · ")}</div>` : "";
+}
+
 function editalCardHTML(edital) {
   const prazo = prazoInfo(edital);
   return `<div class="edital-card" data-id="${edital.id}">
@@ -49,7 +74,11 @@ function editalCardHTML(edital) {
       <span class="edital-titulo">${edital.titulo || "-"}</span>
       <span class="prazo-badge ${prazo.classe}">${prazo.texto}</span>
     </div>
-    <div class="meta">${edital.tema_principal || "Tema não classificado"}${edital.regiao ? " · " + edital.regiao : ""}${edital.tipo_oportunidade ? " · " + edital.tipo_oportunidade : ""}</div>
+    <div class="meta">
+      <span class="tag" style="margin-right:6px;">FINEP</span>${editalStatusBadgeHTML(edital)}
+      ${edital.tema_principal ? " · " + edital.tema_principal : " · Tema não classificado"}${edital.regiao ? " · " + edital.regiao : ""}${edital.tipo_oportunidade ? " · " + edital.tipo_oportunidade : ""}
+    </div>
+    ${editalDatasHTML(edital)}
     ${tagListHTML(edital.publico_alvo)}
   </div>`;
 }
@@ -107,35 +136,53 @@ async function loadEditaisFiltrosOpcoes() {
   fill("ed-f-tipo", filtros.tipos_oportunidade);
 }
 
+// Item 8: troca o grafico de barras "editais por tema" por uma lista de chips
+// clicaveis (tema + contagem) -- com a maioria dos temas tendo so 1 edital aberto por
+// vez, um bar chart virava uma parede de barras identicas de tamanho 1 (pouco
+// informativo, dificil de escanear); chips com o numero embutido no rotulo
+// aproveitam melhor o espaco pra contagens baixas/quase uniformes. Reaproveita o
+// MESMO <canvas id="chart-editais-tema"> do HTML como ponto de montagem (substituido
+// em runtime, nunca editado no arquivo estatico -- mesmo padrao ja usado por
+// consolidado.js::_garantirDomMapaUF pro mapa de UF) -- so roda de verdade na 1a
+// chamada, depois disso o canvas nao existe mais no DOM.
+let _editaisTemasChipsPreparado = false;
+function _garantirDomTemasEditais() {
+  if (_editaisTemasChipsPreparado) return;
+  const canvas = document.getElementById("chart-editais-tema");
+  if (!canvas) return;
+  const wrap = canvas.closest(".chart-wrap") || canvas.parentElement;
+  // .chart-wrap tem altura fixa (280px, ver style.css) pensada pro <canvas> do
+  // Chart.js -- removida aqui (so via JS, nao mexe no arquivo de estilo) pra uma
+  // lista de chips nao deixar uma caixa vazia gigante embaixo dos chips.
+  wrap.classList.remove("chart-wrap");
+  wrap.style.minHeight = "0";
+  wrap.innerHTML = '<div id="editais-temas-chips" class="tag-list" style="margin-top:2px;"></div>';
+  _editaisTemasChipsPreparado = true;
+}
+
 async function loadEditaisDashboard(filters) {
   const data = await fetchJSON("/api/editais/dashboard?" + qs(filters));
   document.getElementById("editais-kpi-row").innerHTML =
     kpiCard("Editais encontrados", fmtNum(data.n_total)) +
     kpiCard("Fecham em até 30 dias", fmtNum(data.n_fecham_30_dias), data.n_fecham_30_dias ? "atenção ao prazo" : "");
 
-  const temas = data.por_tema.slice(0, 12);
-  if (chartEditaisTema) chartEditaisTema.destroy();
-  chartEditaisTema = new Chart(document.getElementById("chart-editais-tema"), {
-    type: "bar",
-    data: {
-      labels: temas.map((t) => t.tema),
-      datasets: [{ data: temas.map((t) => t.n_editais), backgroundColor: AZUL_TONS[1] }],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      onClick: (evt, els) => {
-        if (!els.length) return;
-        const tema = temas[els[0].index].tema;
-        if (tema === "Não classificado") return;
-        document.getElementById("ed-f-tema").value = tema;
+  _garantirDomTemasEditais();
+  const container = document.getElementById("editais-temas-chips");
+  if (container) {
+    const temas = data.por_tema.filter((t) => t.tema && t.tema !== "Não classificado").slice(0, 20);
+    container.innerHTML = temas.length
+      ? temas
+          .map((t) => `<span class="tag tema-chip" data-tema="${t.tema}" style="cursor:pointer;">${t.tema} (${t.n_editais})</span>`)
+          .join("")
+      : '<span class="empty-state" style="padding:0;">Nenhum tema classificado para este filtro.</span>';
+    container.querySelectorAll(".tema-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        document.getElementById("ed-f-tema").value = chip.dataset.tema;
         _sincronizarFiltrosEditaisNaURL();
         refreshEditais();
-      },
-    },
-  });
+      });
+    });
+  }
 }
 
 async function loadEditaisLista(filters) {

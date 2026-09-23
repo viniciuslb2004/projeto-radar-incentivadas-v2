@@ -16,12 +16,44 @@ async function loadKPIs(filters) {
     kpiCard("Cheque médio", fmtBRL(data.cheque_medio));
 }
 
+// Item 4 (pedido 2026-09-23): o ano corrente (2026) ainda esta em andamento -- a base
+// so tem dado ate o mes mais recente realmente refletido no ultimo refresh, nunca o
+// ano completo. Na granularidade "anual" isso faz o ultimo rotulo ("2026") parecer um
+// total do ano inteiro quando na verdade e parcial -- sem indicacao, um leitor
+// compararia 2026 contra 2025 (ano completo) como se fossem periodos do mesmo
+// tamanho. Descobre o mes/ano mais recente com dado REAL (MAX(data_contratacao) via
+// /api/filtros, ja cacheado por _fetchFiltrosCompartilhado em common.js -- nao bate
+// rede de novo) em vez de hardcodar o ano corrente ou o mes atual do relogio (a base
+// pode estar atrasada em relacao a hoje por dias/semanas ate o proximo refresh
+// semanal rodar).
+let _anoMesMaxCache = null;
+async function _carregarAnoMesMax() {
+  if (_anoMesMaxCache) return _anoMesMaxCache;
+  try {
+    const filtros = await _fetchFiltrosCompartilhado();
+    if (filtros && filtros.data_max) {
+      const dt = new Date(filtros.data_max);
+      if (!isNaN(dt)) _anoMesMaxCache = { ano: dt.getUTCFullYear(), mes: dt.getUTCMonth() + 1 };
+    }
+  } catch (e) {
+    // sem indicacao de YTD se o fetch falhar -- rotulo cai no caso normal (sem sufixo).
+  }
+  return _anoMesMaxCache;
+}
+
 // Rotulo do eixo X por granularidade -- sempre zero-padded pra ordenacao lexica
 // (string sort) bater com a ordenacao cronologica em todos os 4 casos.
-function _rotuloPeriodoSerie(granularidade, ano, periodo) {
+// anoMesMax (opcional): {ano, mes} do dado mais recente da base -- so aplica o
+// sufixo "(YTD)" na granularidade "anual" (rotulo hoje literalmente so "2026", sem
+// nenhum outro sinal de que e parcial -- trimestral/mensal/semestral ja mostram o
+// recorte especifico dentro do ano, nao reivindicam ser o ano inteiro).
+function _rotuloPeriodoSerie(granularidade, ano, periodo, anoMesMax) {
   if (granularidade === "mensal") return `${ano}-${String(periodo).padStart(2, "0")}`;
   if (granularidade === "semestral") return `${ano}-S${periodo}`;
-  if (granularidade === "anual") return `${ano}`;
+  if (granularidade === "anual") {
+    const parcial = anoMesMax && ano === anoMesMax.ano && anoMesMax.mes < 12;
+    return parcial ? `${ano} (YTD até ${MESES[anoMesMax.mes - 1]}/${ano})` : `${ano}`;
+  }
   return `${ano}-T${periodo}`; // trimestral (padrao)
 }
 
@@ -32,7 +64,7 @@ const _PASSOS_POR_ANO = { mensal: 12, trimestral: 4, semestral: 2, anual: 1 };
 // (valor_total, n_operacoes: "zero operacoes" e um fato real, nao um dado inventado),
 // e so preenche o MEIO do intervalo observado (do primeiro ao ultimo periodo com
 // algum dado), nunca estende pra alem do que a base realmente cobre.
-function _sequenciaCompletaPeriodos(granularidade, pares) {
+function _sequenciaCompletaPeriodos(granularidade, pares, anoMesMax) {
   if (!pares.length) return [];
   const passos = _PASSOS_POR_ANO[granularidade] || 4;
   const indice = ({ ano, periodo }) => ano * passos + (periodo - 1);
@@ -42,18 +74,21 @@ function _sequenciaCompletaPeriodos(granularidade, pares) {
   for (let i = min; i <= max; i++) {
     const ano = Math.floor(i / passos);
     const periodo = (i % passos) + 1;
-    seq.push({ ano, periodo, label: _rotuloPeriodoSerie(granularidade, ano, periodo) });
+    seq.push({ ano, periodo, label: _rotuloPeriodoSerie(granularidade, ano, periodo, anoMesMax) });
   }
   return seq;
 }
 
 async function loadSerieTemporal(filters) {
   const granularidade = document.getElementById("serie-granularidade").value;
-  const data = await fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade }));
+  const [data, anoMesMax] = await Promise.all([
+    fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade })),
+    _carregarAnoMesMax(),
+  ]);
   if (!Array.isArray(data)) { if (chartSerie) { chartSerie.destroy(); chartSerie = null; } return; }
   const agrupador = "agencia";
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
-  const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos).map((s) => s.label);
+  const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos, anoMesMax).map((s) => s.label);
   const grupos = [...new Set(data.map((d) => d[agrupador]))];
   const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC" };
 
@@ -61,7 +96,7 @@ async function loadSerieTemporal(filters) {
     label: g,
     backgroundColor: coresIncentivado[g] || "#5878A0",
     data: periodos.map((p) => {
-      const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo) === p && d[agrupador] === g);
+      const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo, anoMesMax) === p && d[agrupador] === g);
       return row ? row.valor_total : 0;
     }),
   }));
