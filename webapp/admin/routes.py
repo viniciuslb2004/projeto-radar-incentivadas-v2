@@ -318,19 +318,28 @@ def editar_usuario_site(usuario_id: int, payload: dict, usuario: dict = Depends(
 # separada -- ver excluir_usuario() abaixo.
 
 
-# ============ Interessados / Leads ("Quero saber mais") ============
+# ============ Interessados / Leads ("Quero Contatar") + Pedidos de relatorio ============
+_EVENTOS_LEAD = {"contato": "interesse_lead", "relatorio": "relatorio_pedido"}
+
+
 @router.get("/api/leads")
-def listar_leads(usuario: dict = Depends(exigir_admin)):
+def listar_leads(tipo: str = "contato", usuario: dict = Depends(exigir_admin)):
     """Quem clicou 'Quero saber mais' (POST /api/interesse, site principal) --
     reaproveita admin_acessos_log (evento='interesse_lead'), sem tabela nova.
     `contatado` (coluna generica em admin_acessos_log, ver seed.py) alimenta o
-    indicador de 'precisa ser abordado' no frontend."""
+    indicador de 'precisa ser abordado' no frontend. `tipo=relatorio` lista os
+    pedidos de relatorio (evento='relatorio_pedido', botao "Quero receber o
+    relatorio") -- secao separada no painel."""
+    evento = _EVENTOS_LEAD.get(tipo)
+    if evento is None:
+        raise HTTPException(status_code=400, detail="Tipo invalido")
     conn = get_connection(pooled=True)
     try:
         rows = conn.execute(
             "SELECT l.id, u.nome, u.email, u.empresa, u.cargo, l.criado_em, l.contatado "
             "FROM admin_acessos_log l JOIN admin_usuarios u ON u.id = l.usuario_id "
-            "WHERE l.evento = 'interesse_lead' ORDER BY l.criado_em DESC LIMIT 300"
+            "WHERE l.evento = ? ORDER BY l.criado_em DESC LIMIT 300",
+            (evento,),
         ).fetchall()
     finally:
         conn.close()
@@ -344,7 +353,8 @@ def marcar_lead_contatado(log_id: int, payload: dict, usuario: dict = Depends(ex
     conn = get_connection(pooled=True)
     try:
         row = conn.execute(
-            "SELECT id FROM admin_acessos_log WHERE id = ? AND evento = 'interesse_lead'", (log_id,)
+            "SELECT id FROM admin_acessos_log WHERE id = ? AND evento IN ('interesse_lead', 'relatorio_pedido')",
+            (log_id,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Lead nao encontrado")

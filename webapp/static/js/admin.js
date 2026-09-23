@@ -27,6 +27,7 @@
   const buscaUsuarioSiteInput = document.getElementById("admin-busca-usuario-site");
   const usuariosSiteTbody = document.getElementById("admin-usuarios-site-tbody");
   const leadsTbody = document.getElementById("admin-leads-tbody");
+  const relatoriosTbody = document.getElementById("admin-relatorios-tbody");
   const acessosTbody = document.getElementById("admin-acessos-tbody");
   const cardsEl = document.getElementById("admin-cards");
   const novoUsuarioBtn = document.getElementById("admin-novo-usuario-btn");
@@ -112,7 +113,7 @@
   function renderCards(dashboard) {
     const itens = [
       { rotulo: "Usuários do site", valor: dashboard.total_usuarios_site },
-      { rotulo: "Leads (Quero saber mais)", valor: dashboard.total_leads },
+      { rotulo: "Leads (Quero Contatar)", valor: dashboard.total_leads },
       { rotulo: "Leads a abordar", valor: dashboard.leads_pendentes },
       { rotulo: "Contas do painel", valor: dashboard.total_usuarios },
       { rotulo: "Operações (BNDES + FINEP)", valor: dashboard.total_operacoes },
@@ -359,16 +360,18 @@
   });
 
   // ============ Interessados / Leads ("Quero saber mais") ============
-  function renderLeads(leads) {
+  function renderLeads(leads, tbody, vazio, textoFeito) {
+    tbody = tbody || leadsTbody;
+    textoFeito = textoFeito || "Contatado";
     if (!leads.length) {
-      leadsTbody.innerHTML = '<tr><td colspan="7">Nenhum lead registrado ainda.</td></tr>';
+      tbody.innerHTML = `<tr><td colspan="7">${vazio || "Nenhum lead registrado ainda."}</td></tr>`;
       return;
     }
-    leadsTbody.innerHTML = leads
+    tbody.innerHTML = leads
       .map(function (l) {
         const pillClasse = l.contatado ? "ativo" : "inativo";
-        const pillTexto = l.contatado ? "Contatado" : "Precisa ser abordado";
-        const acaoTexto = l.contatado ? "Marcar como pendente" : "Marcar como contatado";
+        const pillTexto = l.contatado ? textoFeito : "Pendente";
+        const acaoTexto = l.contatado ? "Marcar como pendente" : `Marcar como ${textoFeito.toLowerCase()}`;
         return `<tr>
           <td>${l.nome || "--"}</td>
           <td>${l.email || "--"}</td>
@@ -387,6 +390,28 @@
     const dado = await resp.json();
     renderLeads(dado.leads);
   }
+
+  async function carregarRelatorios() {
+    const resp = await apiFetch("/leads?tipo=relatorio");
+    const dado = await resp.json();
+    renderLeads(dado.leads, relatoriosTbody, "Nenhum pedido de relatório ainda.", "Enviado");
+  }
+
+  relatoriosTbody.addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".admin-toggle-btn[data-id]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await apiFetch(`/leads/${btn.dataset.id}/contatado`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contatado: btn.dataset.contatado !== "true" }),
+      });
+      await carregarRelatorios();
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   leadsTbody.addEventListener("click", async function (ev) {
     const btn = ev.target.closest(".admin-toggle-btn[data-id]");
@@ -773,6 +798,7 @@
       carregarDashboard(),
       carregarUsuariosSite(""),
       carregarLeads(),
+      carregarRelatorios(),
       carregarUsuarios(""),
       carregarAcessos(),
       carregarCorrecoes(),

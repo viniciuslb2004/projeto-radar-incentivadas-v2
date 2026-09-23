@@ -125,7 +125,7 @@ function obterSessaoAtual() {
 function _atualizarTopbarSessao() {
   obterSessaoAtual().then((sessao) => {
     if (!sessao.staff) {
-      document.getElementById("topbar-interesse-btn").classList.remove("hidden");
+      document.getElementById("topbar-cta-grupo").classList.remove("hidden");
     }
     // "Modo interno" (indicacao visual discreta, pedido explicito do escopo de
     // /interno-artica) + botao de exportar operacoes salvas -- SO' pra sessao de
@@ -319,13 +319,38 @@ async function _cadastrarLead(dados) {
 // aqui, ficaria mostrando "nao identificado" pelo resto da visita) e (3) registrar
 // o "quero saber mais" de verdade (POST /api/interesse, o proprio gatilho do
 // opt-in) -- nunca precisa re-buscar nenhum dado de aba nem recarregar a pagina.
+// Tipo do CTA clicado ("contato" = Quero Contatar | "relatorio" = Quero receber o
+// relatorio) -- mesmo fluxo/modal, so muda o texto e o `tipo` enviado (o backend
+// valida contra whitelist e grava um evento diferente, ver webapp/main.py).
+let _tipoInteresse = "contato";
+const _TEXTOS_INTERESSE = {
+  contato: {
+    titulo: "Obrigado pelo interesse!",
+    texto: "Nosso time entrará em contato com você.",
+    landing: "Quero Contatar",
+  },
+  relatorio: {
+    titulo: "Pedido recebido!",
+    texto: "Você receberá o relatório no seu e-mail.",
+    landing: "Quero receber o relatório",
+  },
+};
+
+function _mostrarAgradecimento() {
+  const t = _TEXTOS_INTERESSE[_tipoInteresse] || _TEXTOS_INTERESSE.contato;
+  document.getElementById("interesse-modal-titulo").textContent = t.titulo;
+  document.getElementById("interesse-modal-texto").textContent = t.texto;
+  document.getElementById("interesse-modal-overlay").classList.remove("hidden");
+  document.getElementById("interesse-modal-fechar").focus();
+}
+
 async function _completarIdentificacaoEregistrarInteresse() {
   _sessaoAtualPromise = null;
   _atualizarTopbarSessao();
   document.getElementById("landing-overlay").classList.add("hidden");
-  document.getElementById("interesse-modal-overlay").classList.remove("hidden");
+  _mostrarAgradecimento();
   try {
-    await postJSON("/api/interesse", {});
+    await postJSON("/api/interesse", { tipo: _tipoInteresse });
   } catch (e) {
     // best-effort -- o modal de agradecimento ja apareceu, uma falha de rede
     // aqui nao deve incomodar quem ja completou o formulario.
@@ -411,14 +436,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   _atualizarTopbarSessao();
 
-  document.getElementById("topbar-interesse-btn").addEventListener("click", async () => {
+  async function _cliqueCta(ev) {
+    _tipoInteresse = ev.currentTarget.dataset.tipo === "relatorio" ? "relatorio" : "contato";
     const sessao = await obterSessaoAtual();
     if (sessao.username && !sessao.staff) {
       // Ja identificado num opt-in anterior -- registra de novo sem pedir os
       // dados de novo (mesmo comportamento de sempre pra quem ja se identificou).
-      document.getElementById("interesse-modal-overlay").classList.remove("hidden");
+      _mostrarAgradecimento();
       try {
-        await postJSON("/api/interesse", {});
+        await postJSON("/api/interesse", { tipo: _tipoInteresse });
       } catch (e) {
         // best-effort -- ver comentario acima.
       }
@@ -427,8 +453,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // Visitante anonimo -- abre o modal de identificacao (reaproveita
     // #landing-overlay); so ao completar o formulario e' que o interesse de fato
     // e' registrado (ver _completarIdentificacaoEregistrarInteresse acima).
+    document.getElementById("landing-acesso-titulo").textContent =
+      (_TEXTOS_INTERESSE[_tipoInteresse] || _TEXTOS_INTERESSE.contato).landing;
     _mostrarLanding();
-  });
+  }
+  document.getElementById("topbar-interesse-btn").addEventListener("click", _cliqueCta);
+  document.getElementById("topbar-relatorio-btn").addEventListener("click", _cliqueCta);
   document.getElementById("interesse-modal-fechar").addEventListener("click", () => {
     document.getElementById("interesse-modal-overlay").classList.add("hidden");
   });

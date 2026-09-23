@@ -430,6 +430,17 @@ body {
 }
 .topbar-interesse-btn.hidden { display: none; }
 .topbar-interesse-btn:hover { background: var(--steel-2); }
+.topbar-interesse-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* "Quero receber o relatorio" -- variante secundaria (outline) ao lado de
+   "Quero Contatar", mesmo tamanho/tipografia. */
+.topbar-interesse-btn--outline { background: transparent; border-color: rgba(255,255,255,.7); }
+.topbar-interesse-btn--outline:hover { background: rgba(255,255,255,.12); }
+.topbar-cta-grupo { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+.topbar-cta-grupo.hidden { display: none; }
+@media (max-width: 480px) {
+  .topbar-cta-grupo { width: 100%; flex-wrap: nowrap; }
+  .topbar-cta-grupo .topbar-interesse-btn { flex: 1 1 0; min-width: 0; padding: 7px 8px; white-space: normal; line-height: 1.2; }
+}
 
 /* "Modo interno" -- indicacao visual discreta na topbar (ver CLAUDE.md,
    /interno-artica) de que a sessao atual e' de STAFF (nunca aparece pra lead

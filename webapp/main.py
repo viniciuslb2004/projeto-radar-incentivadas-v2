@@ -437,8 +437,15 @@ def interno_login(payload: dict, request: Request, response: Response):
     return {"ok": True, "username": username}
 
 
+# Tipo de interesse (payload {"tipo": ...}) -> evento gravado em admin_acessos_log.
+# Whitelist fechada: qualquer outro valor e' 400. Sem "tipo" = 'contato' (compat.
+# com o frontend antigo). 'relatorio' = botao "Quero receber o relatorio" (2026-09-23),
+# listado numa secao propria do /admin (GET /admin/api/leads?tipo=relatorio).
+_TIPOS_INTERESSE = {"contato": "interesse_lead", "relatorio": "relatorio_pedido"}
+
+
 @app.post("/api/interesse")
-def site_interesse(request: Request):
+def site_interesse(request: Request, payload: dict = None):
     """'Quero saber mais' -- o proprio gatilho do opt-in (ver secao "Acesso" no topo
     do arquivo): o frontend chama isto logo apos o modal de identificacao
     (POST /api/identificar/POST /api/cadastrar, aberto pelo clique no CTA) criar
@@ -448,12 +455,16 @@ def site_interesse(request: Request):
     protegida (em _ROTAS_QUE_EXIGEM_SESSAO, entao _verificar_acesso/
     verificar_acesso_principal ja garante sessao valida e recem-criada antes de
     chegar aqui)."""
+    tipo = (payload or {}).get("tipo") or "contato"
+    evento = _TIPOS_INTERESSE.get(tipo) if isinstance(tipo, str) else None
+    if evento is None:
+        raise HTTPException(status_code=400, detail="Tipo de interesse inválido")
     usuario = _usuario_atual(request)
     if usuario is None:
         raise HTTPException(status_code=401, detail="Sessão inválida")
     conn = get_connection(pooled=True)
     try:
-        registrar_acesso(conn, usuario["id"], usuario["username"], "site", "interesse_lead", _ip_do_request(request))
+        registrar_acesso(conn, usuario["id"], usuario["username"], "site", evento, _ip_do_request(request))
     finally:
         conn.close()
     return {"ok": True}

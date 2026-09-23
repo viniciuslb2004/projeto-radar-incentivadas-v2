@@ -63,7 +63,7 @@
 
     <div class="landing-acesso">
       <div class="landing-acesso-card">
-        <h2>Quero saber mais</h2>
+        <h2 id="landing-acesso-titulo">Quero Contatar</h2>
         <p class="landing-acesso-sub">Informe seu e-mail corporativo para continuar. Sem senha.</p>
 
         <form id="identificar-form">
@@ -132,9 +132,9 @@
 
 <!-- "Obrigado pelo interesse" (ver botao "Quero saber mais" na topbar) -->
 <div id="interesse-modal-overlay" class="interesse-modal-overlay hidden">
-  <div class="interesse-modal">
-    <div class="interesse-modal-titulo">Obrigado pelo interesse!</div>
-    <p class="interesse-modal-texto">Nosso time entrará em contato com você.</p>
+  <div class="interesse-modal" role="dialog" aria-modal="true" aria-labelledby="interesse-modal-titulo" aria-live="polite">
+    <div class="interesse-modal-titulo" id="interesse-modal-titulo">Obrigado pelo interesse!</div>
+    <p class="interesse-modal-texto" id="interesse-modal-texto">Nosso time entrará em contato com você.</p>
     <button type="button" id="interesse-modal-fechar" class="login-link-btn">Fechar</button>
   </div>
 </div>
@@ -154,7 +154,10 @@
       <button class="tab-btn" data-view="potenciais">Potenciais Linhas</button>
     </div>
   </div>
-  <button id="topbar-interesse-btn" class="topbar-interesse-btn hidden">Quero saber mais</button>
+  <div id="topbar-cta-grupo" class="topbar-cta-grupo hidden" role="group" aria-label="Fale com a Ártica">
+    <button type="button" id="topbar-interesse-btn" class="topbar-interesse-btn" data-tipo="contato">Quero Contatar</button>
+    <button type="button" id="topbar-relatorio-btn" class="topbar-interesse-btn topbar-interesse-btn--outline" data-tipo="relatorio">Quero receber o relatório</button>
+  </div>
   <!-- Area interna (/interno-artica) -- so aparecem quando /api/me devolve
        staff=true (ver common.js). "Modo interno": indicacao visual discreta
        pedida no escopo. "Exportar salvos": Exportar Excel (item 3 do pedido) das
