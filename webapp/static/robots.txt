@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /interno-artica
+Disallow: /api/
+
+Sitemap: https://projeto-radar-incentivadas.vercel.app/sitemap.xml

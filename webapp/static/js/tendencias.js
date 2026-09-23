@@ -19,14 +19,24 @@ function trendListItem(row, sinal, dataAttr) {
   const badgeClass = sinal === "up" ? "up" : "down";
   const seta = sinal === "up" ? "↑" : "↓";
   const label = row.setor || row.subsetor || row.segmento;
-  return `<li data-${dataAttr}="${label}">
-    <span>${label}</span>
-    <span class="badge ${badgeClass}">${seta} ${Math.abs(row.variacao_pp).toFixed(1)} p.p.</span>
+  return `<li data-${dataAttr}="${esc(label)}">
+    <span>${esc(label)}</span>
+    <span class="badge ${badgeClass}">${seta} ${Math.abs(Number(row.variacao_pp) || 0).toFixed(1)} p.p.</span>
   </li>`;
 }
 
-async function loadTendenciasSetores(filters) {
-  const data = await fetchJSON("/api/tendencias/setores?" + qs(filters));
+async function loadTendenciasSetores(filters, token) {
+  let data;
+  try {
+    data = await fetchJSON("/api/tendencias/setores?" + qs(filters));
+  } catch (e) {
+    if (token !== undefined && token !== _tendToken) return [];
+    const erroLi = `<li class="empty-state">${esc(MSG_ERRO_CARGA)}</li>`;
+    document.getElementById("lista-alta").innerHTML = erroLi;
+    document.getElementById("lista-queda").innerHTML = erroLi;
+    return [];
+  }
+  if (token !== undefined && token !== _tendToken) return null;
   const periodoTxt = data.comparavel
     ? `${fmtPeriodo(data.periodo_atual)} vs. ${fmtPeriodo(data.periodo_anterior)}`
     : `${fmtPeriodo(data.periodo_atual)} · Não é possível informar as porcentagens devido a limitação de períodos da base`;
@@ -36,7 +46,7 @@ async function loadTendenciasSetores(filters) {
   document.getElementById("tend-header-alta").insertAdjacentHTML("beforeend", `<span class="hint">${periodoTxt}</span>`);
   document.getElementById("tend-header-queda").insertAdjacentHTML("beforeend", `<span class="hint">${periodoTxt}</span>`);
 
-  const setores = data.setores.filter((s) => s.setor && s.setor !== "Nao classificado");
+  const setores = (data.setores || []).filter((s) => s.setor && s.setor !== "Nao classificado");
   const alta = setores.filter((s) => s.variacao_pp > 0).slice(0, 8);
   const queda = setores.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 8);
 
@@ -130,12 +140,35 @@ function _avisoSubsetorUnicoHTML(setor) {
   );
 }
 
+// ============ Filtros na URL (ver secao "Filtros na URL" em common.js) ============
+// Os filtros do #filterbar ja vao pra URL via _sincronizarFiltrosCompartilhadosNaURL
+// (common.js). Aqui entram so os 2 seletores PROPRIOS de Tendencias (setor do
+// drill-down de subsetores / de segmentos CNAE) -- common.js chama
+// filtrosExtrasTendenciasURL() quando a aba ativa e Tendencias. So restaura se a
+// opcao existir (link antigo com setor que sumiu do ranking cai no padrao).
+window.filtrosExtrasTendenciasURL = function () {
+  const sub = document.getElementById("subsetor-setor-select");
+  const seg = document.getElementById("segmento-setor-select");
+  return {
+    setor_subsetores: subsetorSelectInicializado && sub ? sub.value : "",
+    setor_segmentos: segmentoSelectInicializado && seg ? seg.value : "",
+  };
+};
+
+function _restaurarSelectTendenciasDaURL(select, chave) {
+  if (_viewInicialDaURL() !== "tendencias") return;
+  const v = paramsDaURL().get(chave);
+  if (v && [...select.options].some((o) => o.value === v)) select.value = v;
+}
+
 async function popularSeletorSubsetor(setoresRanking, filters) {
   const select = document.getElementById("subsetor-setor-select");
   if (!subsetorSelectInicializado) {
     const setoresOrdenados = [...setoresRanking].sort((a, b) => b.valor_atual - a.valor_atual);
-    select.innerHTML = setoresOrdenados.map((s) => `<option value="${s.setor}">${s.setor}</option>`).join("");
-    select.addEventListener("change", () => loadSubsetores(currentFilters()));
+    if (!setoresOrdenados.length) return; // tenta de novo no proximo refresh
+    select.innerHTML = setoresOrdenados.map((s) => `<option value="${esc(s.setor)}">${esc(s.setor)}</option>`).join("");
+    _restaurarSelectTendenciasDaURL(select, "setor_subsetores");
+    select.addEventListener("change", () => { loadSubsetores(currentFilters()); _sincronizarFiltrosCompartilhadosNaURL(); });
     subsetorSelectInicializado = true;
   }
 }
@@ -146,12 +179,25 @@ async function loadSubsetores(filters) {
   if (!setor) return;
 
   const params = Object.assign({}, filters, { setor });
-  const [ranking, breakdown] = await Promise.all([
-    fetchJSON("/api/tendencias/subsetores?" + qs(params)),
-    fetchJSON("/api/subsetores?" + qs(params)),
-  ]);
+  const reqId = (loadSubsetores._id = (loadSubsetores._id || 0) + 1);
+  let ranking, breakdown;
+  try {
+    [ranking, breakdown] = await Promise.all([
+      fetchJSON("/api/tendencias/subsetores?" + qs(params)),
+      fetchJSON("/api/subsetores?" + qs(params)),
+    ]);
+  } catch (e) {
+    if (reqId !== loadSubsetores._id) return;
+    const erroLi = `<li class="empty-state">${esc(MSG_ERRO_CARGA)}</li>`;
+    document.getElementById("lista-subsetor-alta").innerHTML = erroLi;
+    document.getElementById("lista-subsetor-queda").innerHTML = erroLi;
+    return;
+  }
+  if (reqId !== loadSubsetores._id) return; // resposta antiga
+  ranking = ranking || {};
+  breakdown = Array.isArray(breakdown) ? breakdown : [];
 
-  const subsetoresValidos = ranking.subsetores.filter((s) => s.subsetor && s.subsetor !== "Nao classificado");
+  const subsetoresValidos = (ranking.subsetores || []).filter((s) => s.subsetor && s.subsetor !== "Nao classificado");
   const alta = subsetoresValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = subsetoresValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
@@ -235,8 +281,10 @@ async function popularSeletorSegmento(setoresRanking) {
   const select = document.getElementById("segmento-setor-select");
   if (!segmentoSelectInicializado) {
     const setoresOrdenados = [...setoresRanking].sort((a, b) => b.valor_atual - a.valor_atual);
-    select.innerHTML = setoresOrdenados.map((s) => `<option value="${s.setor}">${s.setor}</option>`).join("");
-    select.addEventListener("change", () => loadSegmentos(currentFilters()));
+    if (!setoresOrdenados.length) return;
+    select.innerHTML = setoresOrdenados.map((s) => `<option value="${esc(s.setor)}">${esc(s.setor)}</option>`).join("");
+    _restaurarSelectTendenciasDaURL(select, "setor_segmentos");
+    select.addEventListener("change", () => { loadSegmentos(currentFilters()); _sincronizarFiltrosCompartilhadosNaURL(); });
     segmentoSelectInicializado = true;
   }
 }
@@ -247,12 +295,25 @@ async function loadSegmentos(filters) {
   if (!setor) return;
 
   const params = Object.assign({}, filters, { setor, limit: 15 });
-  const [ranking, breakdown] = await Promise.all([
-    fetchJSON("/api/tendencias/segmentos?" + qs(params)),
-    fetchJSON("/api/segmentos?" + qs(params)),
-  ]);
+  const reqId = (loadSegmentos._id = (loadSegmentos._id || 0) + 1);
+  let ranking, breakdown;
+  try {
+    [ranking, breakdown] = await Promise.all([
+      fetchJSON("/api/tendencias/segmentos?" + qs(params)),
+      fetchJSON("/api/segmentos?" + qs(params)),
+    ]);
+  } catch (e) {
+    if (reqId !== loadSegmentos._id) return;
+    const erroLi = `<li class="empty-state">${esc(MSG_ERRO_CARGA)}</li>`;
+    document.getElementById("lista-segmento-alta").innerHTML = erroLi;
+    document.getElementById("lista-segmento-queda").innerHTML = erroLi;
+    return;
+  }
+  if (reqId !== loadSegmentos._id) return;
+  ranking = ranking || {};
+  breakdown = Array.isArray(breakdown) ? breakdown : [];
 
-  const segmentosValidos = ranking.segmentos.filter((s) => s.segmento && s.segmento !== "Nao classificado");
+  const segmentosValidos = (ranking.segmentos || []).filter((s) => s.segmento && s.segmento !== "Nao classificado");
   const alta = segmentosValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = segmentosValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
@@ -361,21 +422,29 @@ let _ultimasMaioresOperacoes = [];
 
 async function loadMaioresOperacoes(filters) {
   const [order_by, order_dir] = document.getElementById("maiores-ordenar").value.split("-");
+  const reqId = (loadMaioresOperacoes._id = (loadMaioresOperacoes._id || 0) + 1);
+  const tbody = document.querySelector("#tabela-maiores tbody");
   let ops;
+  let falhou = false;
   try {
-    ops = await fetchJSON("/api/operacoes?" + qs(filters) + `&order_by=${order_by}&order_dir=${order_dir}&limit=15`);
+    ops = await fetchJSON("/api/operacoes?" + qs(Object.assign({}, filters, { order_by, order_dir, limit: 15 })));
   } catch (e) {
     ops = [];
+    falhou = true;
   }
+  if (reqId !== loadMaioresOperacoes._id) return;
   if (!Array.isArray(ops)) ops = [];
   _ultimasMaioresOperacoes = ops;
-  const tbody = document.querySelector("#tabela-maiores tbody");
+  if (!ops.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${falhou ? esc(MSG_ERRO_CARGA) : "Nenhuma operação encontrada para esse filtro."}</td></tr>`;
+    return;
+  }
   tbody.innerHTML = ops
-    .map((op) => `<tr data-id="${op.id}">
-        <td>${op.cliente || "-"}</td>
-        <td>${op.agencia || "-"}</td>
-        <td>${op.setor_bndes || "Não classificado"}</td>
-        <td>${op.data_contratacao || "-"}</td>
+    .map((op) => `<tr data-id="${esc(op.id)}">
+        <td>${esc(op.cliente || "-")}</td>
+        <td>${esc(op.agencia || "-")}</td>
+        <td>${esc(op.setor_bndes || "Não classificado")}</td>
+        <td>${esc(op.data_contratacao || "-")}</td>
         <td>${fmtBRLFull(op.valor_contratado)}</td>
       </tr>`)
     .join("");
@@ -384,13 +453,16 @@ async function loadMaioresOperacoes(filters) {
   });
 }
 
+let _tendToken = 0;
 async function refreshTendencias(filters) {
   filters = filters || currentFilters();
+  const token = ++_tendToken;
   const [setoresRanking] = await Promise.all([
-    loadTendenciasSetores(filters),
+    loadTendenciasSetores(filters, token),
     loadProdutos(filters),
     loadMaioresOperacoes(filters),
   ]);
+  if (token !== _tendToken || !setoresRanking) return; // filtro mudou no meio
   await popularSeletorSubsetor(setoresRanking, filters);
   await popularSeletorSegmento(setoresRanking);
   await Promise.all([loadSubsetores(filters), loadSegmentos(filters)]);

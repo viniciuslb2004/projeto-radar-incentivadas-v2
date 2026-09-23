@@ -2,6 +2,30 @@
 
 const AZUL_TONS = ["#223850", "#2E4A68", "#36587E", "#5878A0", "#7C93AC", "#A9BAC9", "#D3DCE3"];
 
+// Escapa texto vindo da API antes de interpolar em innerHTML/template (texto E
+// atributos). null/undefined -> "".
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// URL externa segura pra href: so http(s)://, ja escapada; senao "#".
+function escUrl(u) {
+  const s = String(u || "").trim();
+  return /^https?:\/\//i.test(s) ? esc(s) : "#";
+}
+
+// Mensagem padrao de erro amigavel (sem detalhe tecnico).
+const MSG_ERRO_CARGA = "Não foi possível carregar os dados agora. Tente novamente em instantes.";
+function htmlErroCarga(msg) {
+  return `<p class="empty-state">${esc(msg || MSG_ERRO_CARGA)}</p>`;
+}
+
 function fmtBRL(v) {
   if (v === null || v === undefined || isNaN(v)) return "-";
   if (Math.abs(v) >= 1e9) return "R$ " + (v / 1e9).toFixed(1).replace(".", ",") + " bi";
@@ -468,12 +492,18 @@ document.addEventListener("DOMContentLoaded", () => {
 // (busca.js) -- os dois so' existem pra sessao de staff (gate real e' o backend,
 // Depends(exigir_staff); aqui e' so' a mecanica de baixar o blob).
 async function _baixarArquivoPost(url, body, nomeArquivoFallback) {
-  const r = await fetch(_urlCompleta(url), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-    credentials: "include",
-  });
+  let r;
+  try {
+    r = await fetch(_urlCompleta(url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      credentials: "include",
+    });
+  } catch (e) {
+    alert("Não foi possível gerar o arquivo. Verifique sua conexão e tente novamente.");
+    return;
+  }
   if (!r.ok) {
     alert("Não foi possível gerar o arquivo. Tente novamente.");
     return;
@@ -1057,6 +1087,10 @@ function _sincronizarFiltrosCompartilhadosNaURL() {
     mes_fim: document.getElementById("f-mes-fim").value,
     ano_fim: document.getElementById("f-ano-fim").value,
   };
+  // Seletores proprios de Tendencias (drill-down por setor) -- ver tendencias.js.
+  if (_viewAtivaAgora === "tendencias" && typeof window.filtrosExtrasTendenciasURL === "function") {
+    Object.assign(params, window.filtrosExtrasTendenciasURL());
+  }
   sincronizarFiltrosNaURL(params);
 }
 
@@ -1079,6 +1113,13 @@ document.addEventListener("DOMContentLoaded", () => {
   modalOverlay().addEventListener("click", (e) => {
     if (e.target === modalOverlay()) closeModal();
   });
+  // Esc fecha o modal aberto (interesse tem prioridade, fica por cima).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const interesse = document.getElementById("interesse-modal-overlay");
+    if (interesse && !interesse.classList.contains("hidden")) interesse.classList.add("hidden");
+    else if (modalOverlay().classList.contains("open")) closeModal();
+  });
   document.getElementById("modal-ordenar").addEventListener("change", () => {
     openOperacoesModal(document.getElementById("modal-title").textContent, modalExtraFilters, true);
   });
@@ -1098,7 +1139,15 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
 
   const [order_by, order_dir] = ordenarSelect.value.split("-");
   const params = Object.assign(currentFilters(), modalExtraFilters, { order_by, order_dir });
-  const ops = await fetchJSON("/api/operacoes" + "?" + qs(params) + "&limit=300");
+  const token = (openOperacoesModal._token = (openOperacoesModal._token || 0) + 1);
+  let ops;
+  try {
+    ops = await fetchJSON("/api/operacoes" + "?" + qs(params) + "&limit=300");
+  } catch (e) {
+    if (token === openOperacoesModal._token) body.innerHTML = htmlErroCarga();
+    return;
+  }
+  if (token !== openOperacoesModal._token) return;
 
   if (!Array.isArray(ops) || !ops.length) {
     body.innerHTML = '<p class="empty-state">Nenhuma operação encontrada para esse filtro.</p>';
@@ -1136,12 +1185,12 @@ function _renderTabelaOperacoesAgrupada(ops) {
     }
   });
 
-  const linhaOperacao = (op, atributosExtra) => `<tr data-id="${op.id}" ${atributosExtra || ""}>
-      <td>${op.cliente || "-"}</td>
-      <td>${op.agencia || "-"}</td>
-      <td>${op.uf || "-"}</td>
-      <td>${op.setor_bndes || "Não classificado"}</td>
-      <td>${op.data_contratacao || "-"}</td>
+  const linhaOperacao = (op, atributosExtra) => `<tr data-id="${esc(op.id)}" ${atributosExtra || ""}>
+      <td>${esc(op.cliente || "-")}</td>
+      <td>${esc(op.agencia || "-")}</td>
+      <td>${esc(op.uf || "-")}</td>
+      <td>${esc(op.setor_bndes || "Não classificado")}</td>
+      <td>${esc(op.data_contratacao || "-")}</td>
       <td>${fmtBRLFull(op.valor_contratado)}</td>
     </tr>`;
 
@@ -1155,7 +1204,7 @@ function _renderTabelaOperacoesAgrupada(ops) {
     }
     const valorTotal = g.ops.reduce((acc, op) => acc + (op.valor_contratado || 0), 0);
     html += `<tr class="ops-grupo-header" data-grupo="${i}">
-        <td colspan="6"><span class="ops-grupo-seta">▸</span> ${g.cliente || "-"}
+        <td colspan="6"><span class="ops-grupo-seta">▸</span> ${esc(g.cliente || "-")}
           <span class="ops-grupo-resumo">${g.ops.length} operações · ${fmtBRLFull(valorTotal)}</span></td>
       </tr>`;
     g.ops.forEach((op) => {
@@ -1317,14 +1366,22 @@ async function openOperacaoDetalhe(id) {
   _definirOperacaoNaURL(id);
   _configurarBotaoCopiarLink(id);
 
-  const data = await fetchJSON(`/api/operacoes/${id}`);
-  if (!data.secoes || !data.secoes.length) {
+  const token = (openOperacaoDetalhe._token = (openOperacaoDetalhe._token || 0) + 1);
+  let data;
+  try {
+    data = await fetchJSON(`/api/operacoes/${encodeURIComponent(id)}`);
+  } catch (e) {
+    if (token === openOperacaoDetalhe._token) body.innerHTML = htmlErroCarga();
+    return;
+  }
+  if (token !== openOperacaoDetalhe._token) return;
+  if (!data || !data.secoes || !data.secoes.length) {
     body.innerHTML = '<p class="empty-state">Detalhe não encontrado.</p>';
     return;
   }
   _configurarSalvarNotaInterna(id, data);
 
-  const badge = `<span class="badge" style="background:var(--blue-lightest); color:var(--navy); margin-left:8px;">${data.agencia || data.instrumento || ""}${data.instrumento && data.agencia ? " · " + data.instrumento : ""}</span>`;
+  const badge = `<span class="badge" style="background:var(--blue-lightest); color:var(--navy); margin-left:8px;">${esc(data.agencia || data.instrumento || "")}${data.instrumento && data.agencia ? " · " + esc(data.instrumento) : ""}</span>`;
   document.getElementById("modal-title").innerHTML = `Detalhe da operação ${badge}`;
 
   let html = '<div class="detalhe-secoes">';
@@ -1333,20 +1390,20 @@ async function openOperacaoDetalhe(id) {
     const camposCurtos = secao.campos.filter((c) => c.tipo !== "texto_longo");
 
     html += `<div class="detalhe-secao">
-      <div class="detalhe-secao-titulo">${secao.titulo}</div>`;
+      <div class="detalhe-secao-titulo">${esc(secao.titulo)}</div>`;
 
     if (camposCurtos.length) {
       html += '<div class="detalhe-grid">';
       camposCurtos.forEach((c) => {
         html += `<div class="detalhe-campo">
-          <div class="detalhe-label">${c.label}</div>
-          <div class="detalhe-valor">${fmtCampoDetalhe(c)}</div>
+          <div class="detalhe-label">${esc(c.label)}</div>
+          <div class="detalhe-valor">${esc(fmtCampoDetalhe(c))}</div>
         </div>`;
       });
       html += "</div>";
     }
     if (textoLongo) {
-      html += `<div class="detalhe-texto-longo">${fmtCampoDetalhe(textoLongo)}</div>`;
+      html += `<div class="detalhe-texto-longo">${esc(fmtCampoDetalhe(textoLongo))}</div>`;
     }
     html += "</div>";
   });
@@ -1364,7 +1421,7 @@ async function openOperacaoDetalhe(id) {
         div.className = "detalhe-secao";
         div.innerHTML = `<div class="detalhe-secao-titulo">Linhas incentivadas potencialmente compatíveis <span class="hint">mesmo setor -- não é confirmação de elegibilidade</span></div>` +
           '<ul class="clickable-list">' +
-          linhas.resultados.map((l) => `<li data-linha-id="${l.id}"><span>${l.nome_simplificado || l.nome_oficial}</span><span class="badge neutro">${l.instituicao}</span></li>`).join("") +
+          linhas.resultados.map((l) => `<li data-linha-id="${esc(l.id)}"><span>${esc(l.nome_simplificado || l.nome_oficial)}</span><span class="badge neutro">${esc(l.instituicao)}</span></li>`).join("") +
           "</ul>";
         body.appendChild(div);
         div.querySelectorAll("li[data-linha-id]").forEach((li) => {
@@ -1388,7 +1445,7 @@ async function openOperacaoDetalhe(id) {
       div.className = "detalhe-secao";
       div.innerHTML = `<div class="detalhe-secao-titulo">Outras operações do mesmo grupo econômico (${grupo.resultados.length}) <span class="hint">mesma raiz de CNPJ</span></div>` +
         '<ul class="clickable-list">' +
-        grupo.resultados.map((o) => `<li data-op-id="${o.id}"><span>${o.cliente || "-"}</span><span class="badge neutro">${o.agencia || ""} · ${fmtBRL(o.valor_contratado)}</span></li>`).join("") +
+        grupo.resultados.map((o) => `<li data-op-id="${esc(o.id)}"><span>${esc(o.cliente || "-")}</span><span class="badge neutro">${esc(o.agencia || "")} ·${fmtBRL(o.valor_contratado)}</span></li>`).join("") +
         "</ul>";
       body.appendChild(div);
       div.querySelectorAll("li[data-op-id]").forEach((li) => {

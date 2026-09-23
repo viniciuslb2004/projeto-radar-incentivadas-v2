@@ -21,8 +21,8 @@ function _garantirCampoUf() {
   if (!filterbar) return;
   const wrapper = document.createElement("div");
   wrapper.innerHTML =
-    '<label>UF da empresa <span class="hint">(opcional, prioriza/filtra linhas regionais como BASA, BNB e Desenvolve SP)</span></label>' +
-    '<select id="pt-f-uf"><option value="">Todo o Brasil</option></select>';
+    '<label for="pt-f-uf">UF da empresa <span class="hint">(opcional, prioriza/filtra linhas regionais como BASA, BNB e Desenvolve SP)</span></label>' +
+    '<select id="pt-f-uf" aria-label="UF da empresa"><option value="">Todo o Brasil</option></select>';
   filterbar.appendChild(wrapper);
 }
 
@@ -38,7 +38,7 @@ async function _initPotenciaisOpcoes() {
   const fill = (id, values, manterPrimeira) => {
     const sel = document.getElementById(id);
     if (!sel) return;
-    values.forEach((v) => {
+    (values || []).forEach((v) => {
       const opt = document.createElement("option");
       opt.value = v;
       opt.textContent = v;
@@ -51,6 +51,22 @@ async function _initPotenciaisOpcoes() {
   fill("pt-f-uso", opcoes.usos || []);
   fill("pt-f-uf", opcoes.ufs || []);
   potenciaisOpcoesCarregadas = true;
+  _aplicarFiltrosPotenciaisDaURL();
+}
+
+// Restaura o formulario a partir da URL (F5/link compartilhado) DEPOIS que as
+// opcoes dos selects existem, e ja dispara a busca se houver algum criterio --
+// nenhum request extra alem do que o proprio clique em "Buscar" faria.
+const _CAMPOS_POTENCIAIS_URL = { setor: "pt-f-setor", subsetor: "pt-f-subsetor", porte: "pt-f-porte", volume: "pt-f-volume", uso: "pt-f-uso", uf: "pt-f-uf" };
+function _aplicarFiltrosPotenciaisDaURL() {
+  if (_viewInicialDaURL() !== "potenciais") return;
+  const params = paramsDaURL();
+  let algum = false;
+  Object.entries(_CAMPOS_POTENCIAIS_URL).forEach(([chave, id]) => {
+    const el = document.getElementById(id);
+    if (el && params.has(chave)) { el.value = params.get(chave); algum = algum || !!el.value; }
+  });
+  if (algum) _buscarPotenciais();
 }
 
 function _potenciaisFormAtual() {
@@ -132,10 +148,10 @@ async function _renderTransacoesSemelhantes(containerId, filtrosForm) {
   let html = '<p class="meta" style="margin-bottom:8px;">Referências históricas da base deste app -- não é garantia de aprovação nem das mesmas condições no futuro.</p>';
   html += '<table class="ops-table"><thead><tr><th>Cliente</th><th>Agência</th><th>Setor</th><th>Valor contratado</th></tr></thead><tbody>';
   ops.forEach((op) => {
-    html += `<tr data-id="${op.id}" style="cursor:pointer;">
-      <td>${op.cliente || "-"}</td>
-      <td>${op.agencia || "-"}</td>
-      <td>${op.setor_bndes || "Não classificado"}</td>
+    html += `<tr data-id="${esc(op.id)}" style="cursor:pointer;">
+      <td>${esc(op.cliente || "-")}</td>
+      <td>${esc(op.agencia || "-")}</td>
+      <td>${esc(op.setor_bndes || "Não classificado")}</td>
       <td>${fmtBRLFull(op.valor_contratado)}</td>
     </tr>`;
   });
@@ -148,27 +164,28 @@ async function _renderTransacoesSemelhantes(containerId, filtrosForm) {
 
 function _potenciaisCard(linha, formAtual) {
   const badgeClasse = _rotuloParaClasseBadge(linha.score_rotulo);
-  const motivosHtml = (linha.motivos || []).map((m) => `<li>${m}</li>`).join("");
-  const transacoesId = `pt-transacoes-${linha.id}`;
-  return `<div class="result-card" data-id="${linha.id}" style="cursor:default;">
+  const motivosHtml = (linha.motivos || []).map((m) => `<li>${esc(m)}</li>`).join("");
+  const transacoesId = `pt-transacoes-${esc(linha.id)}`;
+  const naoInf = (v) => esc(v && v !== "Não informado pela fonte" ? v : "Não informado");
+  return `<div class="result-card" data-id="${esc(linha.id)}" style="cursor:default;">
     <div class="top-row">
-      <span class="cliente">${linha.nome}</span>
+      <span class="cliente">${esc(linha.nome)}</span>
       <span>
-        <span class="badge neutro">${linha.instituicao}</span>
-        <span class="badge ${badgeClasse}">Potencial aderência: ${linha.score_rotulo} (${linha.score_pct}%)</span>
+        <span class="badge neutro">${esc(linha.instituicao)}</span>
+        <span class="badge ${badgeClasse}">Potencial aderência: ${esc(linha.score_rotulo)} (${esc(linha.score_pct)}%)</span>
       </span>
     </div>
     <div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); margin:10px 0;">
-      <div class="kpi-card"><div class="label">Taxa</div><div class="value" style="font-size:15px;">${linha.taxa_completa && linha.taxa_completa !== "Não informado pela fonte" ? linha.taxa_completa : "Não informado"}</div></div>
-      <div class="kpi-card"><div class="label">Prazo</div><div class="value" style="font-size:15px;">${linha.prazo_total && linha.prazo_total !== "Não informado pela fonte" ? linha.prazo_total : "Não informado"}</div></div>
-      <div class="kpi-card"><div class="label">Carência</div><div class="value" style="font-size:15px;">${linha.carencia && linha.carencia !== "Não informado pela fonte" ? linha.carencia : "Não informado"}</div></div>
-      <div class="kpi-card"><div class="label">Limite de participação</div><div class="value" style="font-size:15px;">${linha.percentual_financiavel && linha.percentual_financiavel !== "Não informado pela fonte" ? linha.percentual_financiavel : "Não informado"}</div></div>
+      <div class="kpi-card"><div class="label">Taxa</div><div class="value" style="font-size:15px;">${naoInf(linha.taxa_completa)}</div></div>
+      <div class="kpi-card"><div class="label">Prazo</div><div class="value" style="font-size:15px;">${naoInf(linha.prazo_total)}</div></div>
+      <div class="kpi-card"><div class="label">Carência</div><div class="value" style="font-size:15px;">${naoInf(linha.carencia)}</div></div>
+      <div class="kpi-card"><div class="label">Limite de participação</div><div class="value" style="font-size:15px;">${naoInf(linha.percentual_financiavel)}</div></div>
     </div>
     <div class="meta"><strong>Por que faz sentido:</strong></div>
     <ul class="meta" style="margin:4px 0 8px 18px;">${motivosHtml || "<li>Nenhum critério em comum informado.</li>"}</ul>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-      <button class="acao-btn" id="pt-ver-linha-${linha.id}">Ver detalhe completo da linha</button>
-      <button class="acao-btn" id="pt-ver-transacoes-${linha.id}">Ver transações semelhantes</button>
+      <button class="acao-btn" id="pt-ver-linha-${esc(linha.id)}">Ver detalhe completo da linha</button>
+      <button class="acao-btn" id="pt-ver-transacoes-${esc(linha.id)}">Ver transações semelhantes</button>
     </div>
     <div id="${transacoesId}" style="display:none; margin-top:10px;"></div>
   </div>`;
@@ -178,6 +195,9 @@ async function _buscarPotenciais() {
   const erroEl = document.getElementById("pt-erro");
   erroEl.style.display = "none";
   const form = _potenciaisFormAtual();
+  // URL reflete o formulario da busca efetivamente disparada (volume ainda em
+  // R$ MM, como digitado) -- ver secao "Filtros na URL" em common.js.
+  sincronizarFiltrosNaURL(form);
 
   if (!form.setor && !form.porte && !form.volume && !form.uso) {
     erroEl.textContent = "Informe ao menos um critério (setor, porte, volume ou uso dos recursos).";
@@ -216,15 +236,23 @@ async function _buscarPotenciais() {
   // sem contar pro "informe ao menos um critério" do backend.
   if (form.subsetor) params.subsetor = form.subsetor;
 
+  const token = (_buscarPotenciais._token = (_buscarPotenciais._token || 0) + 1);
+  const btnBuscar = document.getElementById("pt-buscar-btn");
   let data;
   try {
+    if (btnBuscar) btnBuscar.disabled = true;
     data = await fetchJSON("/api/potenciais/buscar?" + qs(params));
   } catch (e) {
+    if (token !== _buscarPotenciais._token) return;
     lista.innerHTML = '<p class="empty-state">Erro ao buscar linhas potenciais. Tente novamente.</p>';
     return;
+  } finally {
+    if (btnBuscar && token === _buscarPotenciais._token) btnBuscar.disabled = false;
   }
+  if (token !== _buscarPotenciais._token) return; // busca mais nova ja disparada
 
-  if (data.erro) {
+  if (!data || data.erro) {
+    if (!data) { lista.innerHTML = '<p class="empty-state">Erro ao buscar linhas potenciais. Tente novamente.</p>'; return; }
     erroEl.textContent = data.erro;
     erroEl.style.display = "block";
     lista.innerHTML = "";
@@ -236,7 +264,7 @@ async function _buscarPotenciais() {
     return;
   }
 
-  contagem.textContent = `${data.resultados.length} linha(s) potencial(is) encontrada(s) (de ${data.total_candidatos} candidatas avaliadas)`;
+  contagem.textContent = `${data.resultados.length} linha(s) potencial(is) encontrada(s) (de ${fmtNum(data.total_candidatos || 0)} candidatas avaliadas)`;
   lista.innerHTML = data.resultados.map((l) => _potenciaisCard(l, form)).join("");
 
   data.resultados.forEach((l) => {

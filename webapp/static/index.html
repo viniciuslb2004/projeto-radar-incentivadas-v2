@@ -2,9 +2,24 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Radar de Crédito Incentivado</title>
-<link rel="icon" type="image/png" href="/img/favicon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radar de Crédito Incentivado | Ártica</title>
+<meta name="description" content="Plataforma pública de inteligência de mercado sobre crédito incentivado no Brasil, da Ártica: operações do BNDES e da FINEP desde 2002, tendências por setor e UF, editais e catálogo de linhas de fomento.">
+<meta name="theme-color" content="#223850">
+<link rel="canonical" href="https://projeto-radar-incentivadas.vercel.app/">
+<meta property="og:url" content="https://projeto-radar-incentivadas.vercel.app/">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="pt_BR">
+<meta property="og:site_name" content="Ártica">
+<meta property="og:title" content="Radar de Crédito Incentivado | Ártica">
+<meta property="og:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES e da FINEP, tendências setoriais e catálogo de linhas de fomento.">
+<meta property="og:image" content="https://projeto-radar-incentivadas.vercel.app/img/logo-artica.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Radar de Crédito Incentivado | Ártica">
+<meta name="twitter:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES e da FINEP, tendências setoriais e catálogo de linhas de fomento.">
+<meta name="twitter:image" content="https://projeto-radar-incentivadas.vercel.app/img/logo-artica.png">
+<link rel="icon" type="image/png" href="/img/favicon.png">
+<link rel="apple-touch-icon" href="/img/favicon.png">
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -28,8 +43,7 @@
      Fechavel (botao "x" abaixo) sem nenhum efeito colateral -- a pessoa so volta
      pra tela/filtro onde estava, exatamente como um visitante que nunca clicou. -->
 <div id="landing-overlay" class="hidden">
-  <button type="button" id="landing-fechar-btn" aria-label="Fechar" title="Fechar"
-    style="position:fixed; top:16px; right:20px; z-index:1; background:none; border:none; color:#fff; font-size:28px; line-height:1; cursor:pointer; opacity:0.8;">&times;</button>
+  <button type="button" id="landing-fechar-btn" aria-label="Fechar" title="Fechar" class="landing-fechar-btn">&times;</button>
   <div class="landing-content">
     <div class="landing-hero">
       <img src="/img/logo-artica.png" alt="Ártica" class="landing-logo">
@@ -151,38 +165,38 @@
 
 <div class="filterbar" id="filterbar">
   <div>
-    <label id="f-agencia-label">Agência</label>
+    <label id="f-agencia-label" for="f-agencia">Agência</label>
     <select id="f-agencia"><option value="Todas">Todas</option></select>
   </div>
   <div>
-    <label>Setor</label>
+    <label for="f-setor">Setor</label>
     <select id="f-setor"><option value="Todos">Todos</option></select>
   </div>
   <div>
-    <label>Subsetor</label>
+    <label for="f-subsetor">Subsetor</label>
     <select id="f-subsetor"><option value="Todos">Todos</option></select>
   </div>
   <div>
-    <label>UF</label>
+    <label for="f-uf">UF</label>
     <select id="f-uf"><option value="Todas">Todas</option></select>
   </div>
   <div>
-    <label>De (mês/ano)</label>
-    <div style="display:flex; gap:4px;">
-      <select id="f-mes-ini"></select>
-      <select id="f-ano-ini"></select>
+    <label for="f-mes-ini">De (mês/ano)</label>
+    <div class="filtro-mesano">
+      <select id="f-mes-ini" aria-label="Mês inicial"></select>
+      <select id="f-ano-ini" aria-label="Ano inicial"></select>
     </div>
   </div>
   <div>
-    <label>Até (mês/ano)</label>
-    <div style="display:flex; gap:4px;">
-      <select id="f-mes-fim"></select>
-      <select id="f-ano-fim"></select>
+    <label for="f-mes-fim">Até (mês/ano)</label>
+    <div class="filtro-mesano">
+      <select id="f-mes-fim" aria-label="Mês final"></select>
+      <select id="f-ano-fim" aria-label="Ano final"></select>
     </div>
   </div>
-  <div class="status-pill" id="status-pill">carregando...</div>
+  <div class="status-pill" id="status-pill" role="status" aria-live="polite">Carregando...</div>
 </div>
-<div id="filtro-data-aviso" class="confianca-baixa-aviso" style="display:none; margin:0 16px 12px;">⚠ A data "De" não pode ser depois da data "Até" -- ajustamos automaticamente.</div>
+<div id="filtro-data-aviso" class="confianca-baixa-aviso" style="display:none;">⚠ A data "De" não pode ser depois da data "Até" — ajustamos automaticamente.</div>
 
 <main>
 
@@ -194,7 +208,7 @@
       <div class="card">
         <div class="card-header">
           <span><span id="chart-serie-titulo">Evolução temporal de emissões</span> <span class="hint" id="chart-serie-hint">R$ contratado por período</span></span>
-          <select id="serie-granularidade" class="header-select">
+          <select id="serie-granularidade" aria-label="Granularidade da série" class="header-select">
             <option value="mensal">Mensal</option>
             <option value="trimestral" selected>Trimestral</option>
             <option value="semestral">Semestral</option>
@@ -237,15 +251,15 @@
     <div class="card">
       <div class="card-header">
         <span>Detalhe por subsetor <span class="hint">clique para detalhar operações</span></span>
-        <select id="subsetor-setor-select" class="header-select"></select>
+        <select id="subsetor-setor-select" aria-label="Setor" class="header-select"></select>
       </div>
       <div class="card-body">
-        <div class="grid-2" style="margin-bottom:0;">
+        <div class="grid-2 mb-0">
           <div class="chart-wrap"><canvas id="chart-subsetores"></canvas></div>
           <div>
             <div class="subsetor-col-title">Em alta</div>
             <ul class="clickable-list" id="lista-subsetor-alta"></ul>
-            <div class="subsetor-col-title" style="margin-top:14px;">Em queda</div>
+            <div class="subsetor-col-title mt-14">Em queda</div>
             <ul class="clickable-list" id="lista-subsetor-queda"></ul>
           </div>
         </div>
@@ -255,15 +269,15 @@
     <div class="card">
       <div class="card-header">
         <span>Detalhe por segmento (CNAE) <span class="hint">granularidade fina · dentro de</span></span>
-        <select id="segmento-setor-select" class="header-select"></select>
+        <select id="segmento-setor-select" aria-label="Setor" class="header-select"></select>
       </div>
       <div class="card-body">
-        <div class="grid-2" style="margin-bottom:0;">
+        <div class="grid-2 mb-0">
           <div class="chart-wrap tall"><canvas id="chart-segmentos"></canvas></div>
           <div>
             <div class="subsetor-col-title">Em alta</div>
             <ul class="clickable-list" id="lista-segmento-alta"></ul>
-            <div class="subsetor-col-title" style="margin-top:14px;">Em queda</div>
+            <div class="subsetor-col-title mt-14">Em queda</div>
             <ul class="clickable-list" id="lista-segmento-queda"></ul>
           </div>
         </div>
@@ -274,7 +288,7 @@
       <div class="card">
         <div class="card-header"><span id="chart-produtos-titulo">Destinação de recursos</span> <span class="hint" id="chart-produtos-hint">produto / instrumento</span></div>
         <div class="card-body">
-          <div id="chart-produtos-aviso" class="confianca-baixa-aviso" style="display:none; margin-bottom:10px;"></div>
+          <div id="chart-produtos-aviso" class="confianca-baixa-aviso" style="display:none;"></div>
           <div id="chart-produtos-vazio" class="empty-state" style="display:none;">Dado ainda não disponível para este filtro.</div>
           <div class="chart-wrap"><canvas id="chart-produtos"></canvas></div>
         </div>
@@ -282,8 +296,8 @@
       <div class="card">
         <div class="card-header">
           <span>Operações do período <span class="hint">clique para ver detalhe</span></span>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <select id="maiores-ordenar" class="header-select">
+          <div class="inline-controles">
+            <select id="maiores-ordenar" aria-label="Ordenar maiores operações" class="header-select">
               <option value="valor-desc">Maior valor</option>
               <option value="valor-asc">Menor valor</option>
               <option value="data-desc">Mais recente</option>
@@ -292,7 +306,7 @@
             </select>
           </div>
         </div>
-        <div class="card-body" style="max-height:340px; overflow-y:auto;">
+        <div class="card-body card-body-rolavel">
           <table class="ops-table" id="tabela-maiores">
             <thead><tr><th id="tabela-maiores-th-cliente">Cliente</th><th id="tabela-maiores-th-agencia">Agência</th><th>Setor</th><th>Data</th><th>Valor</th></tr></thead>
             <tbody></tbody>
@@ -305,25 +319,25 @@
   <!-- ===================== BUSCA ===================== -->
   <section id="view-busca" class="view">
     <div class="search-box">
-      <input type="text" id="busca-input" placeholder="Descreva uma empresa ou setor. Ex: fintech de crédito para pequenas empresas do agro no Nordeste">
+      <input type="text" id="busca-input" aria-label="Buscar empresas ou setores" placeholder="Descreva uma empresa ou setor. Ex: fintech de crédito para pequenas empresas do agro no Nordeste">
       <button id="busca-btn">Buscar</button>
     </div>
     <div class="example-chips" id="busca-historico" style="display:none;"></div>
-    <div class="filterbar" id="busca-filterbar" style="margin: 18px 0 0; border: 1px solid var(--border); border-radius: var(--radius);">
+    <div class="filterbar filterbar-card filterbar-busca" id="busca-filterbar">
       <div>
-        <label id="bu-label-agencia">Entidade</label>
+        <label id="bu-label-agencia" for="bu-f-agencia">Entidade</label>
         <select id="bu-f-agencia"><option value="">Todas</option></select>
       </div>
       <div>
-        <label>Valor mínimo (R$ milhões)</label>
+        <label for="bu-f-valor-minimo">Valor mínimo (R$ milhões)</label>
         <input type="number" id="bu-f-valor-minimo" placeholder="Ex: 15" min="0" step="1">
       </div>
       <div>
-        <label>Valor máximo (R$ milhões)</label>
+        <label for="bu-f-valor-maximo">Valor máximo (R$ milhões)</label>
         <input type="number" id="bu-f-valor-maximo" placeholder="Ex: 50" min="0" step="1">
       </div>
       <div>
-        <label>Região</label>
+        <label for="bu-f-regiao">Região</label>
         <select id="bu-f-regiao">
           <option value="">Todas</option>
           <option value="Norte">Norte</option>
@@ -334,19 +348,19 @@
         </select>
       </div>
       <div>
-        <label id="bu-label-produto">Tipo de linha</label>
+        <label id="bu-label-produto" for="bu-f-produto">Tipo de linha</label>
         <select id="bu-f-produto"><option value="">Todas</option></select>
       </div>
       <div>
-        <label>Porte</label>
+        <label for="bu-f-porte">Porte</label>
         <select id="bu-f-porte"><option value="">Todos</option></select>
       </div>
       <div>
-        <label>Setor</label>
+        <label for="bu-f-setor">Setor</label>
         <select id="bu-f-setor"><option value="">Todos</option></select>
       </div>
       <div>
-        <label>UF</label>
+        <label for="bu-f-uf">UF</label>
         <select id="bu-f-uf"><option value="">Todas</option></select>
       </div>
     </div>
@@ -355,9 +369,9 @@
 
   <!-- ===================== EDITAIS (FINEP Oportunidades) ===================== -->
   <section id="view-editais" class="view">
-    <div class="filterbar" id="editais-filterbar" style="margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius);">
+    <div class="filterbar filterbar-card" id="editais-filterbar">
       <div>
-        <label>Situação</label>
+        <label for="ed-f-situacao">Situação</label>
         <select id="ed-f-situacao">
           <option value="aberta" selected>Só abertos</option>
           <option value="">Todos</option>
@@ -365,42 +379,42 @@
         </select>
       </div>
       <div>
-        <label>Só para empresas</label>
+        <label for="ed-f-empresa">Só para empresas</label>
         <select id="ed-f-empresa">
           <option value="1" selected>Sim</option>
           <option value="">Todos</option>
         </select>
       </div>
       <div>
-        <label>Tema</label>
+        <label for="ed-f-tema">Tema</label>
         <select id="ed-f-tema"><option value="">Todos</option></select>
       </div>
       <div>
-        <label>Região</label>
+        <label for="ed-f-regiao">Região</label>
         <select id="ed-f-regiao"><option value="">Todas</option></select>
       </div>
       <div>
-        <label>Tipo de oportunidade</label>
+        <label for="ed-f-tipo">Tipo de oportunidade</label>
         <select id="ed-f-tipo"><option value="">Todos</option></select>
       </div>
       <div>
-        <label>Buscar no título</label>
+        <label for="ed-f-texto">Buscar no título</label>
         <input type="text" id="ed-f-texto" placeholder="ex: startup, saúde...">
       </div>
     </div>
 
     <div class="kpi-row" id="editais-kpi-row"></div>
 
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card mb-16">
       <div class="card-header">Editais por tema <span class="hint">clique para filtrar</span></div>
       <div class="card-body"><div class="chart-wrap"><canvas id="chart-editais-tema"></canvas></div></div>
     </div>
 
-    <div class="card" style="margin-bottom:24px;">
+    <div class="card mb-24">
       <div class="card-header">
         <span id="editais-lista-titulo">Editais</span>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <select id="ed-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+        <div class="inline-controles">
+          <select id="ed-ordenar" aria-label="Ordenar editais" class="header-select header-select-light">
             <option value="prazo-asc">Prazo mais próximo</option>
             <option value="prazo-desc">Prazo mais distante</option>
             <option value="publicacao-desc">Publicado recentemente</option>
@@ -415,7 +429,7 @@
       <div class="card-header">Encontre o edital certo para o seu projeto <span class="hint">busca por similaridade</span></div>
       <div class="card-body">
         <div class="search-box">
-          <input type="text" id="ed-endgame-input" placeholder="Descreva sua empresa/projeto. Ex: startup de biotecnologia desenvolvendo diagnóstico rápido para doenças tropicais">
+          <input type="text" id="ed-endgame-input" aria-label="Descreva sua empresa ou projeto" placeholder="Descreva sua empresa/projeto. Ex: startup de biotecnologia desenvolvendo diagnóstico rápido para doenças tropicais">
           <button id="ed-endgame-btn">Buscar editais</button>
         </div>
         <div id="editais-endgame-resultado"></div>
@@ -425,37 +439,37 @@
 
   <!-- ===================== LINHAS INCENTIVADAS ===================== -->
   <section id="view-linhas" class="view">
-    <div class="filterbar" id="linhas-filterbar" style="margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius);">
+    <div class="filterbar filterbar-card" id="linhas-filterbar">
       <div>
-        <label>Instituição</label>
+        <label for="ln-f-instituicao">Instituição</label>
         <select id="ln-f-instituicao"><option value="Todas">Todas</option></select>
       </div>
       <div>
-        <label>Setor</label>
+        <label for="ln-f-setor">Setor</label>
         <select id="ln-f-setor"><option value="Todos">Todos</option></select>
       </div>
       <div>
-        <label>Porte</label>
+        <label for="ln-f-porte">Porte</label>
         <select id="ln-f-porte"><option value="Todos">Todos</option></select>
       </div>
       <div>
-        <label>Região</label>
+        <label for="ln-f-regiao">Região</label>
         <select id="ln-f-regiao"><option value="Todas">Todas</option></select>
       </div>
       <div>
-        <label>Fluxo</label>
+        <label for="ln-f-fluxo">Fluxo</label>
         <select id="ln-f-fluxo"><option value="Todos">Todos</option></select>
       </div>
     </div>
 
     <div class="search-box">
-      <input type="text" id="linhas-busca-input" placeholder="Busque por nome, setor, destinação... Ex: energia solar, inovação, microcrédito">
+      <input type="text" id="linhas-busca-input" aria-label="Buscar linhas de crédito" placeholder="Busque por nome, setor, destinação... Ex: energia solar, inovação, microcrédito">
       <button id="linhas-busca-btn">Buscar</button>
     </div>
 
-    <div style="display:flex; justify-content:space-between; align-items:center; margin:14px 0 10px;">
+    <div class="linhas-toolbar">
       <span class="progress-label" id="linhas-contagem"></span>
-      <select id="linhas-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+      <select id="linhas-ordenar" aria-label="Ordenar linhas" class="header-select header-select-light">
         <option value="data_atualizacao-desc">Atualizado recentemente</option>
         <option value="nome_oficial-asc">Nome (A-Z)</option>
         <option value="valor_maximo-desc">Maior valor máximo</option>
@@ -463,7 +477,7 @@
     </div>
 
     <div id="linhas-lista"></div>
-    <div id="linhas-paginacao" style="display:flex; justify-content:center; gap:8px; margin-top:16px;"></div>
+    <div id="linhas-paginacao" class="linhas-paginacao"></div>
   </section>
 
   <!-- "Potenciais Linhas" (item 3 do pedido): usuario informa caracteristicas do
@@ -473,33 +487,33 @@
        diferentes: volume/porte/uso do PROJETO do usuario, nao filtro de uma
        listagem existente). -->
   <section id="view-potenciais" class="view">
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card mb-16">
       <div class="card-header">Conte sobre o seu projeto</div>
       <div class="card-body">
-        <div class="filterbar" style="margin:0; border:none; padding:0;">
+        <div class="filterbar filterbar-embutida">
           <div>
-            <label>Setor</label>
+            <label for="pt-f-setor">Setor</label>
             <select id="pt-f-setor"><option value="">Selecione...</option></select>
           </div>
           <div>
-            <label>Subsetor <span class="hint">(opcional, só refina as transações semelhantes)</span></label>
+            <label for="pt-f-subsetor">Subsetor <span class="hint">(opcional, só refina as transações semelhantes)</span></label>
             <select id="pt-f-subsetor"><option value="">Todos</option></select>
           </div>
           <div>
-            <label>Porte da empresa</label>
+            <label for="pt-f-porte">Porte da empresa</label>
             <select id="pt-f-porte"><option value="">Selecione...</option></select>
           </div>
           <div>
-            <label>Valor desejado (R$ MM)</label>
+            <label for="pt-f-volume">Valor desejado (R$ MM)</label>
             <input type="number" id="pt-f-volume" placeholder="Ex: 15" min="0" step="0.1">
           </div>
           <div>
-            <label>Uso dos recursos</label>
+            <label for="pt-f-uso">Uso dos recursos</label>
             <select id="pt-f-uso"><option value="">Selecione...</option></select>
           </div>
         </div>
-        <button class="acao-btn" id="pt-buscar-btn" style="margin-top:14px;">Ver linhas potenciais</button>
-        <p class="meta" id="pt-erro" style="display:none; color:var(--red, #b3261e); margin-top:8px;"></p>
+        <button type="button" class="acao-btn mt-14" id="pt-buscar-btn">Ver linhas potenciais</button>
+        <p class="meta" id="pt-erro" style="display:none;"></p>
       </div>
     </div>
 
@@ -513,7 +527,7 @@
   <div class="modal">
     <div class="modal-header">
       <span id="modal-title">Operações</span>
-      <select id="modal-ordenar" class="header-select" style="display:none;">
+      <select id="modal-ordenar" aria-label="Ordenar operações" class="header-select" style="display:none;">
         <option value="valor-desc">Maior valor</option>
         <option value="valor-asc">Menor valor</option>
         <option value="data-desc">Mais recente</option>
@@ -528,7 +542,7 @@
            staff -- ver webapp/main.py::operacao_detalhe). -->
       <button class="fav-btn hidden" id="modal-favoritar-btn" title="Salvar operação (Equipe Ártica)">☆ Salvar</button>
       <button class="fav-btn" id="modal-copiar-link-btn" style="display:none;" title="Copiar link direto para esta operação">🔗 Copiar link</button>
-      <button class="close-btn" id="modal-close">&times;</button>
+      <button type="button" class="close-btn" id="modal-close" aria-label="Fechar" title="Fechar">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <!-- Notas (area interna) -- FORA de #modal-body de proposito: aberto/fechado
@@ -537,7 +551,7 @@
          reescrito por INTEIRO a cada abertura de modal, ver openOperacoesModal/
          openOperacaoDetalhe), diferente de um elemento criado DENTRO dele. So
          aparece quando a operacao esta salva por esta conta de staff. -->
-    <div id="modal-nota-container" class="hidden" style="padding: 0 20px 16px;">
+    <div id="modal-nota-container" class="modal-nota-container hidden">
       <label class="salvos-nota-label" for="modal-nota-texto">Nota interna (Equipe Ártica)</label>
       <textarea id="modal-nota-texto" class="salvos-nota" placeholder="Observações internas sobre esta operação..."></textarea>
       <div class="salvos-nota-status" id="modal-nota-status"></div>
