@@ -975,7 +975,7 @@ table.ops-table tr.ops-grupo-item td:first-child { padding-left: 24px; }
 .uf-map-svg svg { width: 100%; height: 100%; display: block; }
 .uf-path {
   stroke: #fff;
-  stroke-width: 700; /* unidade do viewBox de origem (0 0 220000 194010), nao px */
+  stroke-width: 70; /* unidade do viewBox (0 0 22000 19401, coords reduzidas 10x na otimizacao), nao px */
   cursor: pointer;
   transition: opacity 0.15s ease, filter 0.15s ease;
 }
@@ -983,7 +983,7 @@ table.ops-table tr.ops-grupo-item td:first-child { padding-left: 24px; }
   opacity: 0.85;
   filter: drop-shadow(0 0 0 rgba(0,0,0,0));
   stroke: var(--navy-900);
-  stroke-width: 1400;
+  stroke-width: 140;
 }
 
 .uf-map-tooltip {
@@ -1044,3 +1044,61 @@ table.ops-table tr.ops-grupo-item td:first-child { padding-left: 24px; }
   flex-shrink: 0;
 }
 .acao-btn:hover { background: var(--steel-2); }
+
+/* ============ Utilitarios (estilos antes inline no index.html) ============ */
+.landing-fechar-btn {
+  position: fixed; top: 16px; right: 20px; z-index: 1;
+  background: none; border: none; color: #fff;
+  font-size: 28px; line-height: 1; cursor: pointer; opacity: 0.85;
+  padding: 4px 8px; border-radius: 6px;
+}
+.landing-fechar-btn:hover { opacity: 1; }
+.filtro-mesano { display: flex; gap: 4px; }
+.mb-0 { margin-bottom: 0; }
+.mb-16 { margin-bottom: 16px; }
+.mb-24 { margin-bottom: 24px; }
+.mt-14 { margin-top: 14px; }
+.inline-controles { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card-body-rolavel { max-height: 340px; overflow-y: auto; }
+.filterbar-card { margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+.filterbar-busca { margin: 18px 0 0; }
+.filterbar-embutida { margin: 0; border: none; padding: 0; }
+.header-select-light { color: var(--navy); border-color: var(--border); background: #fff; }
+.linhas-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 10px; }
+.linhas-paginacao { display: flex; justify-content: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.modal-nota-container { padding: 0 20px 16px; }
+#filtro-data-aviso { margin: 0 16px 12px; }
+#chart-produtos-aviso { margin-bottom: 10px; }
+#pt-erro { color: var(--negative); margin-top: 8px; }
+
+/* ============ Foco visivel (teclado) consistente ============ */
+:focus-visible {
+  outline: 2px solid var(--blue-mid);
+  outline-offset: 2px;
+}
+.topbar :focus-visible, .card-header :focus-visible, .modal-header :focus-visible,
+#landing-overlay :focus-visible, #landing-interno-overlay :focus-visible {
+  outline-color: #fff;
+}
+button:focus:not(:focus-visible), select:focus:not(:focus-visible) { outline: none; }
+
+/* ============ Responsivo (celular ~375px) ============ */
+html, body { max-width: 100%; overflow-x: hidden; }
+img, svg, canvas { max-width: 100%; }
+.modal-body { overflow-x: auto; }
+@media (max-width: 620px) {
+  .topbar { padding: 10px 16px; }
+  .filterbar { padding-left: 16px; padding-right: 16px; }
+  .filterbar > div { min-width: 0; flex: 1 1 140px; }
+  .filterbar select, .filterbar input { max-width: 100%; box-sizing: border-box; }
+  main { padding-left: 16px; padding-right: 16px; }
+  table.ops-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+  .card-header { flex-wrap: wrap; gap: 8px; }
+  .modal-overlay { padding: 12px 8px; }
+  .modal { max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
+  .modal-header { flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
+  .modal-body { padding: 12px 14px; }
+  .interesse-modal { padding: 22px 18px; margin: 0 12px; }
+  .landing-fechar-btn { top: 8px; right: 8px; }
+}
+.filterbar.filterbar-embutida { padding: 0; }

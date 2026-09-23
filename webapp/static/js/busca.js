@@ -84,7 +84,7 @@ async function renderHistoricoBusca() {
 
   container.style.display = "flex";
   container.innerHTML =
-    historico.map((q) => `<span class="chip" data-q="${q.replace(/"/g, "&quot;")}">${q}</span>`).join("") +
+    historico.map((q) => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join("") +
     '<span class="chip chip-limpar" id="busca-historico-limpar">Limpar histórico</span>';
 
   container.querySelectorAll(".chip[data-q]").forEach((chip) => {
@@ -147,14 +147,14 @@ function renderListaResultados() {
   const lista = listaCompleta.slice(inicio, inicio + BUSCA_RESULTADOS_POR_PAGINA);
 
   container.innerHTML = lista
-    .map((r) => `<div class="result-card" data-id="${r.id}">
+    .map((r) => `<div class="result-card" data-id="${esc(r.id)}">
         <div class="top-row">
-          <span class="cliente">${r.cliente || "-"}</span>
+          <span class="cliente">${esc(r.cliente || "-")}</span>
           <span class="valor">${fmtBRLFull(r.valor_contratado)}</span>
         </div>
-        <div class="meta">${r.agencia || "-"} · ${r.setor_bndes || "Não classificado"}${r.subsetor_bndes ? " · " + r.subsetor_bndes : ""}${r.segmento ? " · " + r.segmento : ""} · ${r.uf || "-"} · ${r.data_contratacao || "-"}</div>
-        <div class="meta">${r.descricao_projeto ? r.descricao_projeto.slice(0, 160) : ""}</div>
-        <div class="score">${typeof r.score === "number" ? `similaridade: ${(r.score * 100).toFixed(0)}%` : r.motivo || ""}</div>
+        <div class="meta">${esc(r.agencia || "-")} · ${esc(r.setor_bndes || "Não classificado")}${r.subsetor_bndes ? " · " + esc(r.subsetor_bndes) : ""}${r.segmento ? " · " + esc(r.segmento) : ""} · ${esc(r.uf || "-")} · ${esc(r.data_contratacao || "-")}</div>
+        <div class="meta">${r.descricao_projeto ? esc(String(r.descricao_projeto).slice(0, 160)) : ""}</div>
+        <div class="score">${typeof r.score === "number" ? `similaridade: ${(r.score * 100).toFixed(0)}%` : esc(r.motivo || "")}</div>
       </div>`)
     .join("");
 
@@ -224,17 +224,17 @@ function renderResultados(data) {
   let html = "";
 
   if (data.confianca_baixa) {
-    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${data.query}" na base do BNDES/FINEP. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round(data.melhor_score * 100)}%).</div>`;
+    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${esc(data.query)}" na base do BNDES/FINEP. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round((data.melhor_score || 0) * 100)}%).</div>`;
   }
   if (data.enriquecido_via_web) {
-    html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${data.query_original || data.query}" na web, para tentar entender melhor do que se trata.</div>`;
+    html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${esc(data.query_original || data.query)}" na web, para tentar entender melhor do que se trata.</div>`;
   }
 
   const prob = data.probabilidade_aprovacao;
   if (prob) {
     if (prob.disponivel) {
       html += `<div class="aprovacao-box aprovacao-disponivel">
-        <div class="aprovacao-taxa">${prob.taxa_pct.toFixed(1).replace(".", ",")}%</div>
+        <div class="aprovacao-taxa">${Number(prob.taxa_pct || 0).toFixed(1).replace(".", ",")}%</div>
         <div>
           <div class="aprovacao-titulo">Taxa histórica de aprovação · Crédito Direto (FINEP)</div>
           <div class="aprovacao-detalhe">Baseado em ${fmtNum(prob.aprovados)} projetos aprovados e ${fmtNum(prob.recusados)} não aprovados no histórico público da FINEP.</div>
@@ -243,7 +243,7 @@ function renderResultados(data) {
     } else if (prob.motivo) {
       html += `<div class="aprovacao-box aprovacao-indisponivel">
         <div class="aprovacao-titulo">Taxa de aprovação: não disponível</div>
-        <div class="aprovacao-detalhe">${prob.motivo}</div>
+        <div class="aprovacao-detalhe">${esc(prob.motivo)}</div>
       </div>`;
     }
   }
@@ -251,7 +251,7 @@ function renderResultados(data) {
   html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px;">
     <span class="progress-label" id="busca-contagem">${fmtNum(ultimosResultados.length)} operações parecidas encontradas</span>
     <div style="display:flex; gap:8px; align-items:center;">
-      <select id="busca-ordenar" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+      <select id="busca-ordenar" aria-label="Ordenar resultados da busca" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
         <option value="relevancia">Mais relevante</option>
         <option value="data-desc">Mais recente</option>
         <option value="data-asc">Mais antiga</option>
@@ -413,7 +413,7 @@ async function runBusca(q) {
       const prep = await fetchJSON("/api/busca/preparar?" + qs({ q }));
       if (meuReqId !== _buscaReqId) return; // uma busca mais nova ja foi disparada, descarta esta resposta
       if (prep.erro) {
-        container.innerHTML = `<p class="empty-state">${prep.erro}</p>`;
+        container.innerHTML = `<p class="empty-state">${esc(prep.erro)}</p>`;
         return;
       }
       const vetor = await embutirQuery(prep.query_expandida, (info) => {
@@ -464,8 +464,9 @@ async function runBusca(q) {
 
   if (meuReqId !== _buscaReqId) return; // resposta de uma busca desatualizada -- quem chegou por ultimo na rede nao pode vencer quem foi disparado por ultimo
 
-  if (data.erro) {
-    container.innerHTML = `<p class="empty-state">${data.erro}</p>`;
+  if (!data || data.erro) {
+    if (!data) { container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>'; return; }
+    container.innerHTML = `<p class="empty-state">${esc(data.erro)}</p>`;
     return;
   }
 

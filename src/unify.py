@@ -575,6 +575,12 @@ def build_operations():
         ]
         parts = [p for p in parts if p is not None and not p.empty]
         novas = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        if not novas.empty:
+            # 'IE' e' o sentinela que BNDES/FINEP usam pra abrangencia nacional/interestadual
+            # (nao e' um estado real) -- normalizado pro rotulo exibido no frontend antes de
+            # gravar, senao a proxima operacao nacional que entrar via refresh volta a
+            # aparecer como 'IE' misturada com as linhas ja renomeadas em producao.
+            novas["uf"] = novas["uf"].replace({"IE": "Nacional"})
 
         boilerplate = _descricoes_boilerplate(conn)
 

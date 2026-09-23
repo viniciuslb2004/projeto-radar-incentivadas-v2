@@ -3,12 +3,21 @@
 let chartSerie, chartSetores, chartPorte;
 
 function kpiCard(label, value, sub) {
-  return `<div class="kpi-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  // Tudo aqui e texto puro (rotulos + valores formatados) -- escapado por seguranca.
+  return `<div class="kpi-card"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
 }
 
-async function loadKPIs(filters) {
-  const data = await fetchJSON("/api/kpis?" + qs(filters));
-  const porAgencia = data.por_agencia.map((a) => `${a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
+async function loadKPIs(filters, token) {
+  let data;
+  try {
+    data = await fetchJSON("/api/kpis?" + qs(filters));
+  } catch (e) {
+    if (token !== undefined && token !== _consolidadoToken) return;
+    document.getElementById("kpi-row").innerHTML = htmlErroCarga();
+    return;
+  }
+  if (token !== undefined && token !== _consolidadoToken) return;
+  const porAgencia = (data.por_agencia || []).map((a) => `${a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
   document.getElementById("kpi-row").innerHTML =
     kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
     kpiCard("Volume contratado", fmtBRL(data.valor_contratado_total), porAgencia) +
@@ -81,10 +90,17 @@ function _sequenciaCompletaPeriodos(granularidade, pares, anoMesMax) {
 
 async function loadSerieTemporal(filters) {
   const granularidade = document.getElementById("serie-granularidade").value;
-  const [data, anoMesMax] = await Promise.all([
-    fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade })),
-    _carregarAnoMesMax(),
-  ]);
+  const reqId = (loadSerieTemporal._id = (loadSerieTemporal._id || 0) + 1);
+  let data, anoMesMax;
+  try {
+    [data, anoMesMax] = await Promise.all([
+      fetchJSON("/api/serie_temporal?" + qs({ ...filters, granularidade })),
+      _carregarAnoMesMax(),
+    ]);
+  } catch (e) {
+    data = null;
+  }
+  if (reqId !== loadSerieTemporal._id) return; // resposta antiga (filtro/granularidade mudou)
   if (!Array.isArray(data)) { if (chartSerie) { chartSerie.destroy(); chartSerie = null; } return; }
   const agrupador = "agencia";
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
@@ -118,7 +134,8 @@ async function loadSerieTemporal(filters) {
 async function loadSetores(filters) {
   let data;
   try {
-    data = (await fetchJSON("/api/setores?" + qs(filters))).slice(0, 10);
+    data = await fetchJSON("/api/setores?" + qs(filters));
+    data = Array.isArray(data) ? data.slice(0, 10) : [];
   } catch (e) {
     data = [];
   }
@@ -202,7 +219,7 @@ function _ligarEventosMapaUF(container) {
     if (!uf) { tooltip.hidden = true; return; }
     const row = _ufMapDadosAtual.find((d) => d.uf === uf);
     const valorHtml = row ? fmtBRLFull(row.valor_total) : "Sem operações no filtro atual";
-    tooltip.innerHTML = `<strong>${NOME_UF[uf] || uf}</strong><br><span class="valor">${valorHtml}</span>`;
+    tooltip.innerHTML = `<strong>${esc(NOME_UF[uf] || uf)}</strong><br><span class="valor">${esc(valorHtml)}</span>`;
     const rect = wrap.getBoundingClientRect();
     tooltip.style.left = `${evt.clientX - rect.left}px`;
     tooltip.style.top = `${evt.clientY - rect.top}px`;
@@ -244,12 +261,21 @@ function _garantirSvgMapaUF() {
   if (!container) return Promise.resolve();
   if (container.dataset.carregado) return Promise.resolve();
   if (_ufMapSvgPromise) return _ufMapSvgPromise;
-  _ufMapSvgPromise = fetch("/img/brasil-uf.svg")
-    .then((r) => r.text())
+  // ?v=2: viewBox reduzido 10x (stroke-width do style.css acompanha) -- bust do
+  // cache de 1 dia de /img/* (vercel.json) pra nao misturar SVG velho + CSS novo.
+  _ufMapSvgPromise = fetch("/img/brasil-uf.svg?v=2")
+    .then((r) => {
+      if (!r.ok) throw new Error("svg indisponivel");
+      return r.text();
+    })
     .then((svgText) => {
-      container.innerHTML = svgText;
+      container.innerHTML = svgText; // asset estatico proprio, nao dado da API
       container.dataset.carregado = "1";
       _ligarEventosMapaUF(container);
+    })
+    .catch(() => {
+      _ufMapSvgPromise = null; // tenta de novo no proximo refresh
+      container.innerHTML = htmlErroCarga("Não foi possível carregar o mapa agora.");
     });
   return _ufMapSvgPromise;
 }
@@ -315,8 +341,8 @@ async function loadUF(filters) {
   const foraEl = document.getElementById("uf-map-fora");
   if (foraEl) {
     if (foraDoMapa.length) {
-      const somaValor = foraDoMapa.reduce((acc, d) => acc + d.valor_total, 0);
-      const somaOps = foraDoMapa.reduce((acc, d) => acc + d.n_operacoes, 0);
+      const somaValor = foraDoMapa.reduce((acc, d) => acc + (d.valor_total || 0), 0);
+      const somaOps = foraDoMapa.reduce((acc, d) => acc + (d.n_operacoes || 0), 0);
       foraEl.textContent =
         `+ ${fmtBRL(somaValor)} (${fmtNum(somaOps)} operações) de abrangência nacional/interestadual ` +
         "ou sem UF informada.";
@@ -402,10 +428,12 @@ async function _repopularSubsetorCascata(preservarValorAtual) {
 
 window.aoMudarSetorFiltro = () => _repopularSubsetorCascata(false);
 
+let _consolidadoToken = 0;
 async function refreshConsolidado(filters) {
   filters = filters || currentFilters();
+  const token = ++_consolidadoToken;
   await Promise.all([
-    loadKPIs(filters),
+    loadKPIs(filters, token),
     loadSerieTemporal(filters),
     loadSetores(filters),
     loadUF(filters),

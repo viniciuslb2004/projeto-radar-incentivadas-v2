@@ -38,7 +38,7 @@ function prazoInfo(edital) {
 
 function tagListHTML(chaves) {
   if (!chaves || !chaves.length) return "";
-  return `<div class="tag-list">${chaves.map((c) => `<span class="tag">${PUBLICO_LABELS[c] || c}</span>`).join("")}</div>`;
+  return `<div class="tag-list">${chaves.map((c) => `<span class="tag">${esc(PUBLICO_LABELS[c] || c)}</span>`).join("")}</div>`;
 }
 
 // Item 8 (pedido 2026-09-23): card e a apresentacao PRINCIPAL de um edital (a maioria
@@ -69,14 +69,14 @@ function editalDatasHTML(edital) {
 
 function editalCardHTML(edital) {
   const prazo = prazoInfo(edital);
-  return `<div class="edital-card" data-id="${edital.id}">
+  return `<div class="edital-card" data-id="${esc(edital.id)}">
     <div class="top-row">
-      <span class="edital-titulo">${edital.titulo || "-"}</span>
+      <span class="edital-titulo">${esc(edital.titulo || "-")}</span>
       <span class="prazo-badge ${prazo.classe}">${prazo.texto}</span>
     </div>
     <div class="meta">
       <span class="tag" style="margin-right:6px;">FINEP</span>${editalStatusBadgeHTML(edital)}
-      ${edital.tema_principal ? " · " + edital.tema_principal : " · Tema não classificado"}${edital.regiao ? " · " + edital.regiao : ""}${edital.tipo_oportunidade ? " · " + edital.tipo_oportunidade : ""}
+      ${edital.tema_principal ? " · " + esc(edital.tema_principal) : " · Tema não classificado"}${edital.regiao ? " · " + esc(edital.regiao) : ""}${edital.tipo_oportunidade ? " · " + esc(edital.tipo_oportunidade) : ""}
     </div>
     ${editalDatasHTML(edital)}
     ${tagListHTML(edital.publico_alvo)}
@@ -126,10 +126,15 @@ function _aplicarFiltrosEditaisDaURL() {
 }
 
 async function loadEditaisFiltrosOpcoes() {
-  const filtros = await fetchJSON("/api/editais/filtros");
+  let filtros;
+  try {
+    filtros = await fetchJSON("/api/editais/filtros");
+  } catch (e) {
+    return; // selects ficam so com "Todos" -- a aba continua usavel
+  }
   const fill = (id, values) => {
     const sel = document.getElementById(id);
-    values.forEach((v) => sel.appendChild(new Option(v, v)));
+    (values || []).forEach((v) => sel.appendChild(new Option(v, v)));
   };
   fill("ed-f-tema", filtros.temas);
   fill("ed-f-regiao", filtros.regioes);
@@ -160,8 +165,16 @@ function _garantirDomTemasEditais() {
   _editaisTemasChipsPreparado = true;
 }
 
-async function loadEditaisDashboard(filters) {
-  const data = await fetchJSON("/api/editais/dashboard?" + qs(filters));
+async function loadEditaisDashboard(filters, token) {
+  let data;
+  try {
+    data = await fetchJSON("/api/editais/dashboard?" + qs(filters));
+  } catch (e) {
+    if (token !== _editaisToken) return;
+    document.getElementById("editais-kpi-row").innerHTML = "";
+    return;
+  }
+  if (token !== _editaisToken) return;
   document.getElementById("editais-kpi-row").innerHTML =
     kpiCard("Editais encontrados", fmtNum(data.n_total)) +
     kpiCard("Fecham em até 30 dias", fmtNum(data.n_fecham_30_dias), data.n_fecham_30_dias ? "atenção ao prazo" : "");
@@ -169,10 +182,10 @@ async function loadEditaisDashboard(filters) {
   _garantirDomTemasEditais();
   const container = document.getElementById("editais-temas-chips");
   if (container) {
-    const temas = data.por_tema.filter((t) => t.tema && t.tema !== "Não classificado").slice(0, 20);
+    const temas = (data.por_tema || []).filter((t) => t.tema && t.tema !== "Não classificado").slice(0, 20);
     container.innerHTML = temas.length
       ? temas
-          .map((t) => `<span class="tag tema-chip" data-tema="${t.tema}" style="cursor:pointer;">${t.tema} (${t.n_editais})</span>`)
+          .map((t) => `<span class="tag tema-chip" data-tema="${esc(t.tema)}" style="cursor:pointer;">${esc(t.tema)} (${esc(t.n_editais)})</span>`)
           .join("")
       : '<span class="empty-state" style="padding:0;">Nenhum tema classificado para este filtro.</span>';
     container.querySelectorAll(".tema-chip").forEach((chip) => {
@@ -185,16 +198,29 @@ async function loadEditaisDashboard(filters) {
   }
 }
 
-async function loadEditaisLista(filters) {
+async function loadEditaisLista(filters, token) {
   const [order_by, order_dir] = document.getElementById("ed-ordenar").value.split("-");
-  const data = await fetchJSON("/api/editais?" + qs(Object.assign({}, filters, { order_by, order_dir })));
-  editaisAtuais = data;
-  renderEditaisLista(data);
+  const container = document.getElementById("editais-lista");
+  container.innerHTML = '<p class="empty-state">Carregando...</p>';
+  let data;
+  try {
+    data = await fetchJSON("/api/editais?" + qs(Object.assign({}, filters, { order_by, order_dir })));
+  } catch (e) {
+    if (token !== _editaisToken) return;
+    container.innerHTML = htmlErroCarga("Não foi possível carregar os editais agora. Tente novamente em instantes.");
+    return;
+  }
+  if (token !== _editaisToken) return; // resposta de um filtro antigo
+  editaisAtuais = Array.isArray(data) ? data : [];
+  renderEditaisLista(editaisAtuais);
 }
 
+// Descarta respostas de chamadas antigas (troca rapida de filtro).
+let _editaisToken = 0;
 async function refreshEditais() {
   const filters = currentEditaisFilters();
-  await Promise.all([loadEditaisDashboard(filters), loadEditaisLista(filters)]);
+  const token = ++_editaisToken;
+  await Promise.all([loadEditaisDashboard(filters, token), loadEditaisLista(filters, token)]);
 }
 
 // ============ Detalhe do edital (reaproveita o modal global) ============
@@ -204,7 +230,7 @@ function documentosHTML(documentos) {
     return '<p class="empty-state" style="padding:12px 0;">Nenhum documento identificado automaticamente -- confira o edital completo no link acima.</p>';
   }
   return `<ul class="detalhe-doc-list">${documentos
-    .map((d) => `<li><a href="${d.url}" target="_blank" rel="noopener">${d.label}</a></li>`)
+    .map((d) => `<li><a href="${escUrl(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.label || d.url)}</a></li>`)
     .join("")}</ul>`;
 }
 
@@ -218,15 +244,21 @@ async function openEditalDetalhe(id) {
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
-  const edital = await fetchJSON(`/api/editais/${id}`);
-  if (edital.erro) {
-    body.innerHTML = `<p class="empty-state">${edital.erro}</p>`;
+  let edital;
+  try {
+    edital = await fetchJSON(`/api/editais/${encodeURIComponent(id)}`);
+  } catch (e) {
+    body.innerHTML = htmlErroCarga("Não foi possível carregar este edital agora. Tente novamente em instantes.");
+    return;
+  }
+  if (!edital || edital.erro) {
+    body.innerHTML = `<p class="empty-state">${esc((edital && edital.erro) || "Edital não encontrado.")}</p>`;
     return;
   }
 
   const prazo = prazoInfo(edital);
   const badgeSituacao = `<span class="badge ${edital.situacao === "aberta" ? "up" : "down"}" style="margin-left:8px;">${edital.situacao === "aberta" ? "Aberto" : "Encerrado"}</span>`;
-  document.getElementById("modal-title").innerHTML = `${edital.titulo} ${badgeSituacao}`;
+  document.getElementById("modal-title").innerHTML = `${esc(edital.titulo || "Edital")} ${badgeSituacao}`;
 
   const corPrazo = prazo.classe === "urgente" ? "aprovacao-indisponivel" : prazo.classe === "sem-prazo" ? "aprovacao-indisponivel" : "aprovacao-disponivel";
 
@@ -244,18 +276,18 @@ async function openEditalDetalhe(id) {
   html += `<div class="detalhe-secao">
     <div class="detalhe-secao-titulo">Informações gerais</div>
     <div class="detalhe-grid">
-      <div class="detalhe-campo"><div class="detalhe-label">Tema</div><div class="detalhe-valor">${edital.tema_principal || "-"}</div></div>
-      <div class="detalhe-campo"><div class="detalhe-label">Tipo de oportunidade</div><div class="detalhe-valor">${edital.tipo_oportunidade || "-"}</div></div>
-      <div class="detalhe-campo"><div class="detalhe-label">Tipo de cooperação</div><div class="detalhe-valor">${edital.tipo_cooperacao || "-"}</div></div>
-      <div class="detalhe-campo"><div class="detalhe-label">Contrapartida</div><div class="detalhe-valor">${edital.contrapartida || "-"}</div></div>
-      <div class="detalhe-campo"><div class="detalhe-label">Região</div><div class="detalhe-valor">${edital.regiao || "-"}</div></div>
+      <div class="detalhe-campo"><div class="detalhe-label">Tema</div><div class="detalhe-valor">${esc(edital.tema_principal || "-")}</div></div>
+      <div class="detalhe-campo"><div class="detalhe-label">Tipo de oportunidade</div><div class="detalhe-valor">${esc(edital.tipo_oportunidade || "-")}</div></div>
+      <div class="detalhe-campo"><div class="detalhe-label">Tipo de cooperação</div><div class="detalhe-valor">${esc(edital.tipo_cooperacao || "-")}</div></div>
+      <div class="detalhe-campo"><div class="detalhe-label">Contrapartida</div><div class="detalhe-valor">${esc(edital.contrapartida || "-")}</div></div>
+      <div class="detalhe-campo"><div class="detalhe-label">Região</div><div class="detalhe-valor">${esc(edital.regiao || "-")}</div></div>
       <div class="detalhe-campo"><div class="detalhe-label">Publicado em</div><div class="detalhe-valor">${fmtDataCurta(edital.data_publicacao)}</div></div>
     </div>
   </div>`;
 
   html += `<div class="detalhe-secao">
     <div class="detalhe-secao-titulo">Descrição completa</div>
-    <div class="detalhe-texto-longo">${(edital.descricao_texto || "Sem descrição disponível.").trim()}</div>
+    <div class="detalhe-texto-longo">${esc(String(edital.descricao_texto || "Sem descrição disponível.").trim())}</div>
   </div>`;
 
   html += `<div class="detalhe-secao">
@@ -295,8 +327,8 @@ async function runEditaisEndgame(q) {
     container.innerHTML = '<p class="empty-state">Erro ao buscar. Tente novamente.</p>';
     return;
   }
-  if (buscaResp.erro) {
-    container.innerHTML = `<p class="empty-state">${buscaResp.erro}</p>`;
+  if (!buscaResp || buscaResp.erro) {
+    container.innerHTML = `<p class="empty-state">${esc((buscaResp && buscaResp.erro) || "Erro ao buscar. Tente novamente.")}</p>`;
     return;
   }
 
@@ -336,7 +368,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("ed-f-texto").addEventListener(
     "input",
-    debounce(_sincronizarFiltrosEditaisNaURL, 400)
+    debounce(() => {
+      _sincronizarFiltrosEditaisNaURL();
+      refreshEditais();
+    }, 300)
   );
   document.getElementById("ed-f-texto").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {

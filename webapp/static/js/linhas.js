@@ -46,10 +46,15 @@ function _aplicarFiltrosLinhasDaURL() {
 
 async function initLinhasFiltros() {
   if (linhasFiltrosInicializados) return;
-  const filtros = await fetchJSON("/api/linhas/filtros");
+  let filtros;
+  try {
+    filtros = await fetchJSON("/api/linhas/filtros");
+  } catch (e) {
+    return; // selects ficam so com "Todas" -- a lista continua carregando
+  }
   const fill = (id, values) => {
     const sel = document.getElementById(id);
-    values.forEach((v) => {
+    (values || []).forEach((v) => {
       const opt = document.createElement("option");
       opt.value = v;
       opt.textContent = v;
@@ -74,18 +79,19 @@ function fmtValorLinha(min, max) {
 function linhaCard(l) {
   const valor = fmtValorLinha(l.valor_minimo, l.valor_maximo);
   const atualizado = l.data_atualizacao ? new Date(l.data_atualizacao).toLocaleDateString("pt-BR") : "-";
-  return `<div class="result-card" data-id="${l.id}">
+  return `<div class="result-card" data-id="${esc(l.id)}">
     <div class="top-row">
-      <span class="cliente">${l.nome_simplificado || l.nome_oficial}</span>
-      <span class="badge neutro">${l.instituicao}</span>
+      <span class="cliente">${esc(l.nome_simplificado || l.nome_oficial)}</span>
+      <span class="badge neutro">${esc(l.instituicao)}</span>
     </div>
-    <div class="meta">${l.setor_padronizado || "Setor não classificado"}${l.porte_padronizado ? " · " + l.porte_padronizado : ""}${l.regiao_elegivel ? " · " + l.regiao_elegivel : ""} · ${l.status || "Não informado pela fonte"}</div>
-    <div class="meta">${l.descricao_resumida ? l.descricao_resumida.slice(0, 180) : ""}</div>
-    <div class="meta">${valor ? valor + " · " : ""}${l.taxa_completa && l.taxa_completa !== "Não informado pela fonte" ? l.taxa_completa : ""}</div>
-    <div class="score">Atualizado em ${atualizado} · <a href="${l.url_oficial}" target="_blank" rel="noopener" onclick="event.stopPropagation()">fonte oficial ↗</a></div>
+    <div class="meta">${esc(l.setor_padronizado || "Setor não classificado")}${l.porte_padronizado ? " · " + esc(l.porte_padronizado) : ""}${l.regiao_elegivel ? " · " + esc(l.regiao_elegivel) : ""} · ${esc(l.status || "Não informado pela fonte")}</div>
+    <div class="meta">${l.descricao_resumida ? esc(String(l.descricao_resumida).slice(0, 180)) : ""}</div>
+    <div class="meta">${valor ? esc(valor) + " · " : ""}${l.taxa_completa && l.taxa_completa !== "Não informado pela fonte" ? esc(l.taxa_completa) : ""}</div>
+    <div class="score">Atualizado em ${esc(atualizado)}${l.url_oficial ? ` · <a href="${escUrl(l.url_oficial)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">fonte oficial ↗</a>` : ""}</div>
   </div>`;
 }
 
+let _linhasToken = 0;
 async function loadLinhas(pagina) {
   linhasPaginaAtual = pagina || 0;
   const container = document.getElementById("linhas-lista");
@@ -95,17 +101,22 @@ async function loadLinhas(pagina) {
   const [order_by, order_dir] = document.getElementById("linhas-ordenar").value.split("-");
   const offset = linhasPaginaAtual * LINHAS_PAGE_SIZE;
 
+  const token = ++_linhasToken;
   let data;
   try {
     data = await fetchJSON("/api/linhas?" + qs({ ...filters, order_by, order_dir, limit: LINHAS_PAGE_SIZE, offset }));
   } catch (e) {
+    if (token !== _linhasToken) return;
     container.innerHTML = '<p class="empty-state">Erro ao carregar linhas incentivadas. Tente novamente.</p>';
     document.getElementById("linhas-contagem").textContent = "";
     document.getElementById("linhas-paginacao").innerHTML = "";
     return;
   }
+  if (token !== _linhasToken) return; // resposta de um filtro/pagina antigo
+  data = data || {};
+  data.resultados = Array.isArray(data.resultados) ? data.resultados : [];
 
-  document.getElementById("linhas-contagem").textContent = `${fmtNum(data.total)} linha(s) incentivada(s) encontrada(s)`;
+  document.getElementById("linhas-contagem").textContent = `${fmtNum(data.total || 0)} linha(s) incentivada(s) encontrada(s)`;
 
   if (!data.resultados.length) {
     container.innerHTML = '<p class="empty-state">Nenhuma linha incentivada encontrada para esses filtros.</p>';
@@ -118,7 +129,7 @@ async function loadLinhas(pagina) {
     card.addEventListener("click", () => openLinhaDetalhe(card.dataset.id));
   });
 
-  const totalPaginas = Math.max(1, Math.ceil(data.total / LINHAS_PAGE_SIZE));
+  const totalPaginas = Math.max(1, Math.ceil((data.total || 0) / LINHAS_PAGE_SIZE));
   const pagContainer = document.getElementById("linhas-paginacao");
   if (totalPaginas <= 1) {
     pagContainer.innerHTML = "";
@@ -137,7 +148,7 @@ async function loadLinhas(pagina) {
 
 function _campoDetalhe(rotulo, valor) {
   if (valor === null || valor === undefined || valor === "") return "";
-  return `<div class="meta" style="margin-top:6px;"><strong>${rotulo}:</strong> ${valor}</div>`;
+  return `<div class="meta" style="margin-top:6px;"><strong>${esc(rotulo)}:</strong> ${esc(valor)}</div>`;
 }
 
 // Card mini de "resumo executivo" -- mesma classe .kpi-card ja usada no
@@ -148,9 +159,9 @@ function _kpiMiniDetalhe(rotulo, valor, sub) {
   const texto = (valor === null || valor === undefined || valor === "" || valor === "Não informado pela fonte")
     ? "Não informado" : valor;
   return `<div class="kpi-card">
-    <div class="label">${rotulo}</div>
-    <div class="value" style="font-size:16px;">${texto}</div>
-    ${sub ? `<div class="sub">${sub}</div>` : ""}
+    <div class="label">${esc(rotulo)}</div>
+    <div class="value" style="font-size:16px;">${esc(texto)}</div>
+    ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
   </div>`;
 }
 
@@ -165,8 +176,8 @@ function _campoDetalheExpansivel(rotulo, valor) {
   if (valor === null || valor === undefined || valor === "") return "";
   return `<div class="meta" style="margin-top:6px;">
     <details>
-      <summary style="cursor:pointer;"><strong>${rotulo}</strong> <span class="hint">(ver texto completo)</span></summary>
-      <div style="margin-top:6px;">${valor}</div>
+      <summary style="cursor:pointer;"><strong>${esc(rotulo)}</strong> <span class="hint">(ver texto completo)</span></summary>
+      <div style="margin-top:6px;">${esc(valor)}</div>
     </details>
   </div>`;
 }
@@ -194,12 +205,18 @@ async function openLinhaDetalhe(id) {
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
 
-  const l = await fetchJSON(`/api/linhas/${id}`);
-  if (l.erro) {
-    body.innerHTML = `<p class="empty-state">${l.erro}</p>`;
+  let l;
+  try {
+    l = await fetchJSON(`/api/linhas/${encodeURIComponent(id)}`);
+  } catch (e) {
+    body.innerHTML = htmlErroCarga("Não foi possível carregar esta linha agora. Tente novamente em instantes.");
     return;
   }
-  document.getElementById("modal-title").textContent = l.nome_oficial;
+  if (!l || l.erro) {
+    body.innerHTML = `<p class="empty-state">${esc((l && l.erro) || "Linha não encontrada.")}</p>`;
+    return;
+  }
+  document.getElementById("modal-title").textContent = l.nome_oficial || "Linha incentivada";
 
   // Reorganizacao (item 2 do pedido, revisada no gap-fix de 2026-09-22 item 1):
   // "resumo executivo" no topo, pensado pra responder rapido "essa linha serve
@@ -225,7 +242,7 @@ async function openLinhaDetalhe(id) {
   `;
 
   body.innerHTML = `
-    <div class="meta"><span class="badge neutro">${l.instituicao}</span> · ${l.status || "Não informado pela fonte"} · ${l.fluxo === "edital" ? "Edital/chamada pública" : "Fluxo contínuo"}</div>
+    <div class="meta"><span class="badge neutro">${esc(l.instituicao)}</span> · ${esc(l.status || "Não informado pela fonte")} · ${l.fluxo === "edital" ? "Edital/chamada pública" : "Fluxo contínuo"}</div>
     ${resumo}
     ${_secaoDetalhe("Descrição", [
       _campoDetalhe("Descrição completa", l.descricao_completa),
@@ -260,7 +277,7 @@ async function openLinhaDetalhe(id) {
       _campoDetalhe("Origem do dado", l.origem_dado === "curadoria_manual_verificada" ? "Curadoria manual verificada" : "Coleta automática (fonte oficial)"),
       _campoDetalhe("Trecho da fonte", l.trecho_fonte),
     ])}
-    <div class="meta" style="margin-top:10px;"><a href="${l.url_oficial}" target="_blank" rel="noopener">Ver na fonte oficial ↗</a></div>
+    ${l.url_oficial ? `<div class="meta" style="margin-top:10px;"><a href="${escUrl(l.url_oficial)}" target="_blank" rel="noopener noreferrer">Ver na fonte oficial ↗</a></div>` : ""}
   `;
 
   // Integracao transacoes <-> linhas incentivadas (item 8): so mostra quando o setor
@@ -281,7 +298,7 @@ async function openLinhaDetalhe(id) {
       contagemDiv.innerHTML = `
         <div class="card-header">Transações potencialmente relacionadas <span class="hint">mesmo setor -- não é confirmação de elegibilidade</span></div>
         <div class="card-body">
-          <p class="meta">Já existem operações de crédito classificadas no setor <strong>${l.setor_padronizado}</strong> na base deste app.</p>
+          <p class="meta">Já existem operações de crédito classificadas no setor <strong>${esc(l.setor_padronizado)}</strong> na base deste app.</p>
           <button class="acao-btn" id="ln-ver-operacoes-relacionadas">Ver operações deste setor</button>
         </div>
       `;
@@ -317,7 +334,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   // usuario para de digitar (debounce), sem forcar uma nova busca a cada tecla.
   document.getElementById("linhas-busca-input").addEventListener(
     "input",
-    debounce(_sincronizarFiltrosLinhasNaURL, 400)
+    debounce(() => {
+      _sincronizarFiltrosLinhasNaURL();
+      loadLinhas(0);
+    }, 300)
   );
 
   // Antes so carregava filtros/lista no CLICK da aba "Linhas Incentivadas" -- com as

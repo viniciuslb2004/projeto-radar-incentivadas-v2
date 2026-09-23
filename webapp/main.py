@@ -85,7 +85,15 @@ def _verificar_acesso(request: Request):
         verificar_acesso_principal(request)
 
 
-app = FastAPI(title="Radar de Credito Incentivado", dependencies=[Depends(_verificar_acesso)])
+# docs/redoc/openapi desabilitados (hardening 2026-09-23): nao expor o mapa
+# completo de rotas (incl. staff/admin) publicamente.
+app = FastAPI(
+    title="Radar de Credito Incentivado",
+    dependencies=[Depends(_verificar_acesso)],
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 # ============ CORS (so importa quando frontend e backend estao em dominios
 # diferentes -- ex: frontend na Vercel, backend no Render) ============
@@ -94,9 +102,74 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _allowed_origins.split(",") if o.strip()] or ["http://localhost:8001", "http://127.0.0.1:8001"],
     allow_credentials=True,
-    allow_methods=["*"],
+    # PATCH continua necessario (PATCH /api/salvos/operacoes/{id} -- nota interna).
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# ============ Cache-Control (CDN da Vercel) ============
+# So GETs de dado PUBLICO que NAO dependem de cookie/sessao recebem cache publico
+# na CDN (s-maxage) -- a CDN nao separa cache por cookie, entao qualquer rota cuja
+# resposta varie com a sessao (ex: /api/operacoes/{id}, que inclui "salva"/"nota"
+# pra staff; /api/me; /api/salvos*) NUNCA pode entrar nesta lista. Tudo o mais em
+# /api/* e /admin/* recebe no-store por padrao (default seguro).
+_CACHE_PUBLICO_RE = re.compile(
+    r"^/api/("
+    r"status|filtros|kpis|serie_temporal|setores|subsetores|segmentos|produtos|uf|porte"
+    r"|tendencias/[a-z_]+"
+    r"|operacoes|operacoes/\d+/grupo-economico"
+    r"|busca|busca/preparar|busca/preparar_enriquecido"
+    r"|editais|editais/filtros|editais/dashboard|editais/buscar|editais/\d+"
+    r"|linhas|linhas/filtros|linhas/\d+"
+    r"|potenciais/opcoes|potenciais/buscar"
+    r")$"
+)
+_CACHE_PUBLICO_VALOR = "public, s-maxage=3600, stale-while-revalidate=86400"
+
+
+@app.middleware("http")
+async def _cache_control(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if not (path.startswith("/api/") or path.startswith("/admin")):
+        return response
+    publico = (
+        request.method == "GET"
+        and response.status_code == 200
+        and _CACHE_PUBLICO_RE.match(path) is not None
+        and "set-cookie" not in response.headers
+    )
+    if publico:
+        response.headers["Cache-Control"] = _CACHE_PUBLICO_VALOR
+    else:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+# ============ Rate limit simples em memoria (best-effort) ============
+# Serverless (Vercel): cada instancia quente tem seu proprio dicionario, entao isto
+# so segura abuso grosseiro de um mesmo IP/e-mail numa mesma instancia -- nao e'
+# garantia forte. Sem schema change (pedido explicito), sem dependencia externa.
+import threading  # noqa: E402
+import time  # noqa: E402
+from collections import deque  # noqa: E402
+
+_RL_LOCK = threading.Lock()
+_RL_BUCKETS: dict = {}
+_RL_MAX_CHAVES = 10_000
+
+
+def _rate_limit(chave: str, limite: int, janela_s: int) -> None:
+    agora = time.monotonic()
+    with _RL_LOCK:
+        if len(_RL_BUCKETS) > _RL_MAX_CHAVES:
+            _RL_BUCKETS.clear()
+        fila = _RL_BUCKETS.setdefault(chave, deque())
+        while fila and agora - fila[0] > janela_s:
+            fila.popleft()
+        if len(fila) >= limite:
+            raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
+        fila.append(agora)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -116,6 +189,12 @@ app.include_router(potenciais_router, prefix="/api/potenciais")
 
 def _ip_do_request(request: Request) -> str:
     return request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+
+
+def _ip_cliente(request: Request) -> str:
+    """Primeiro IP do x-forwarded-for (cliente original, na Vercel) -- chave do rate limit."""
+    ip = _ip_do_request(request) or "desconhecido"
+    return ip.split(",")[0].strip()
 
 
 def _usuario_logado(request: Request):
@@ -147,6 +226,9 @@ def _usuario_atual(request: Request):
         conn.close()
 
 
+_ABA_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
 @app.post("/api/eventos/navegacao")
 def registrar_navegacao(payload: dict, request: Request):
     """V2 do log de acessos (pedido explicito do usuario, ver CLAUDE.md secao
@@ -158,8 +240,8 @@ def registrar_navegacao(payload: dict, request: Request):
     usuario = _usuario_atual(request)
     if usuario is None:
         return {"ok": True}
-    aba = (payload.get("aba") or "").strip()
-    if not aba:
+    aba = str(payload.get("aba") or "").strip()[:64]
+    if not aba or not _ABA_RE.match(aba):
         return {"ok": True}
     conn = get_connection(pooled=True)
     try:
@@ -193,24 +275,33 @@ def site_identificar(payload: dict, request: Request, response: Response):
     evento 'login' novo) sem pedir mais nada; senao (e-mail novo OU ultimo acesso
     mais antigo que a janela), devolve precisa_dados=True pro frontend mostrar o
     formulario completo (POST /api/cadastrar abaixo)."""
-    email = (payload.get("email") or "").strip().lower()
+    _rate_limit(f"ident:ip:{_ip_cliente(request)}", 10, 60)
+    email = str(payload.get("email") or "").strip().lower()[:254]
     if not _email_valido(email):
         raise HTTPException(status_code=400, detail="Informe um e-mail válido.")
+    _rate_limit(f"ident:email:{email}", 5, 300)
     conn = get_connection(pooled=True)
     try:
         row = conn.execute(
-            "SELECT id, ativo FROM admin_usuarios WHERE lower(email) = ?", (email,)
+            "SELECT id, ativo, password_hash, role FROM admin_usuarios WHERE lower(email) = ?", (email,)
         ).fetchone()
         if row is None:
             return {"ok": True, "precisa_dados": True}
-        usuario_id, ativo = row
-        if not ativo:
-            raise HTTPException(status_code=403, detail="Este acesso foi desativado. Entre em contato com a Ártica.")
+        usuario_id, ativo, password_hash, role = row
+        # Hardening (2026-09-23): conta desativada, de STAFF (password_hash != '')
+        # ou role admin NUNCA ganha sessao por fluxo sem senha -- e recebe a MESMA
+        # resposta de um e-mail desconhecido (nao revela existencia/estado). Staff
+        # entra por /interno-artica (usuario+senha).
+        if not ativo or password_hash or role == "admin":
+            return {"ok": True, "precisa_dados": True}
         limite = (
             datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=JANELA_RENOVACAO_DIAS)
         ).isoformat()
+        # So conta login feito pelo SITE PUBLICO (origem='site'), nunca login do
+        # painel /admin nem da area interna.
         ultimo_login = conn.execute(
-            "SELECT MAX(criado_em) FROM admin_acessos_log WHERE usuario_id = ? AND evento = 'login'",
+            "SELECT MAX(criado_em) FROM admin_acessos_log "
+            "WHERE usuario_id = ? AND evento = 'login' AND origem = 'site'",
             (usuario_id,),
         ).fetchone()[0]
         if ultimo_login is None or ultimo_login < limite:
@@ -235,24 +326,29 @@ def site_cadastrar(payload: dict, request: Request, response: Response):
     com string vazia (sentinela; verificar_senha() sempre devolve False pra esse
     formato, entao essa conta nunca autentica por senha por engano em nenhum outro
     fluxo, ex: /admin/api/login)."""
-    email = (payload.get("email") or "").strip().lower()
-    nome = (payload.get("nome") or "").strip()
-    empresa = (payload.get("empresa") or "").strip()
-    cargo = (payload.get("cargo") or "").strip()
+    _rate_limit(f"cad:ip:{_ip_cliente(request)}", 10, 60)
+    email = str(payload.get("email") or "").strip().lower()[:254]
+    nome = str(payload.get("nome") or "").strip()[:200]
+    empresa = str(payload.get("empresa") or "").strip()[:200]
+    cargo = str(payload.get("cargo") or "").strip()[:200]
     if not _email_valido(email):
         raise HTTPException(status_code=400, detail="Informe um e-mail válido.")
     if not nome or not empresa or not cargo:
         raise HTTPException(status_code=400, detail="Nome, empresa e cargo são obrigatórios.")
+    _rate_limit(f"cad:email:{email}", 5, 300)
 
     conn = get_connection(pooled=True)
     try:
         existente = conn.execute(
-            "SELECT id, ativo FROM admin_usuarios WHERE lower(email) = ?", (email,)
+            "SELECT id, ativo, password_hash, role FROM admin_usuarios WHERE lower(email) = ?", (email,)
         ).fetchone()
         if existente:
-            usuario_id, ativo = existente
-            if not ativo:
-                raise HTTPException(status_code=403, detail="Este acesso foi desativado. Entre em contato com a Ártica.")
+            usuario_id, ativo, password_hash, role = existente
+            # Hardening (2026-09-23): conta desativada/staff/admin -- nao cria
+            # sessao, nao sobrescreve nada, e devolve a MESMA resposta de sucesso
+            # de um cadastro normal (nao revela existencia/estado da conta).
+            if not ativo or password_hash or role == "admin":
+                return {"ok": True}
             conn.execute(
                 "UPDATE admin_usuarios SET nome = ?, empresa = ?, cargo = ? WHERE id = ?",
                 (nome, empresa, cargo, usuario_id),
@@ -295,8 +391,10 @@ def interno_login(payload: dict, request: Request, response: Response):
     senha correta ja e' garantia estrutural de ser conta de staff -- a autorizacao
     de verdade das rotas extras (Salvar/Notas/Exportar) continua sendo
     `Depends(exigir_staff)` em cada uma, nunca so este login."""
-    username = (payload.get("username") or "").strip()
-    senha = payload.get("password") or ""
+    _rate_limit(f"interno:ip:{_ip_cliente(request)}", 10, 300)
+    username = str(payload.get("username") or "").strip()[:254]
+    senha = str(payload.get("password") or "")
+    _rate_limit(f"interno:user:{username.lower()}", 5, 300)
     conn = get_connection(pooled=True)
     try:
         usuario = autenticar_credenciais(conn, username, senha)
@@ -505,23 +603,25 @@ def _periodo_anterior(data_inicio: str, data_fim: str, conn):
     return data_inicio, data_fim, anterior_inicio.isoformat(), anterior_fim.isoformat()
 
 
+_STATUS_CACHE = {"em": 0.0, "valor": None}
+_STATUS_TTL_S = 300
+
+
 @app.get("/api/status")
 def status():
+    # Hardening 2026-09-23: so os campos que o frontend usa (common.js le
+    # n_operacoes/hospedado/busca_ia_ativa) -- setores_pendentes/ultimo_refresh
+    # eram internos (continuam no painel /admin e em /api/enriquecimento/*, staff).
+    # Cache em memoria por instancia (+ Cache-Control publico via middleware).
+    agora = time.monotonic()
+    if _STATUS_CACHE["valor"] is not None and agora - _STATUS_CACHE["em"] < _STATUS_TTL_S:
+        return _STATUS_CACHE["valor"]
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
         n_ops = cur.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
-        n_pendente = cur.execute("SELECT COUNT(*) FROM operations WHERE setor_origem = 'pendente'").fetchone()[0]
-        min_max = cur.execute("SELECT MIN(data_contratacao), MAX(data_contratacao) FROM operations").fetchone()
-        last = cur.execute(
-            "SELECT started_at, finished_at, status FROM refresh_log ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return {
+        valor = {
             "n_operacoes": n_ops,
-            "setores_pendentes": n_pendente,
-            "data_min": min_max[0],
-            "data_max": min_max[1],
-            "ultimo_refresh": {"started_at": last[0], "finished_at": last[1], "status": last[2]} if last else None,
             # Sempre True: o app so tem um modo agora (banco Postgres compartilhado,
             # sem SQLite local). Mantido por compatibilidade com o frontend (ver
             # webapp/static/js/common.js), que ainda le este campo para decidir se
@@ -535,6 +635,9 @@ def status():
         }
     finally:
         conn.close()
+    _STATUS_CACHE["valor"] = valor
+    _STATUS_CACHE["em"] = agora
+    return valor
 
 
 @app.get("/api/filtros")
@@ -1240,7 +1343,7 @@ if not MOTOR_BUSCA_IA:
             return resultado
         except Exception as e:
             logger.exception("motor de busca indisponivel")
-            return {"erro": f"motor de busca indisponivel no momento: {e}"}
+            return {"erro": "motor de busca indisponivel no momento"}
 
     # Rotas do modo por IA (preparar/preparar_enriquecido/termo) nao se aplicam nesse
     # modo -- devolvem um erro claro em vez de 404 caso algum cliente antigo (JS em
@@ -1282,7 +1385,7 @@ else:
                 return buscar_rapido(q)
             except Exception as e:
                 logger.exception("motor de busca indisponivel")
-                return {"erro": f"motor de busca indisponivel no momento: {e}"}
+                return {"erro": "motor de busca indisponivel no momento"}
 
         # ============ Rota usada pelo navegador: calcula o embedding no NAVEGADOR
         # (transformers.js, ver embeddings-client.js) e manda o vetor pronto -- o servidor
@@ -1309,7 +1412,7 @@ else:
                 return preparar_texto_enriquecido(q)
             except Exception as e:
                 logger.exception("enriquecimento indisponivel")
-                return {"erro": f"enriquecimento indisponivel no momento: {e}"}
+                return {"erro": "enriquecimento indisponivel no momento"}
 
         @app.post("/api/busca")
         def busca_com_vetor(body: dict):
@@ -1324,7 +1427,7 @@ else:
                 return buscar_rapido_com_vetor(q, vetor)
             except Exception as e:
                 logger.exception("motor de busca indisponivel")
-                return {"erro": f"motor de busca indisponivel no momento: {e}"}
+                return {"erro": "motor de busca indisponivel no momento"}
 
         @app.post("/api/busca/termo")
         def busca_termo_com_vetor(body: dict):
@@ -1340,28 +1443,28 @@ else:
                 return {"resultados": achados}
             except Exception as e:
                 logger.exception("busca por termo indisponivel")
-                return {"erro": f"busca por termo indisponivel no momento: {e}"}
+                return {"erro": "busca por termo indisponivel no momento"}
 
     except ImportError as e:
         @app.get("/api/busca")
         def busca_indisponivel(q: str = ""):
-            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+            return {"erro": "motor de busca ainda nao configurado"}
 
         @app.post("/api/busca")
         def busca_indisponivel_post(body: dict = None):
-            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+            return {"erro": "motor de busca ainda nao configurado"}
 
         @app.get("/api/busca/preparar")
         def busca_preparar_indisponivel(q: str = ""):
-            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+            return {"erro": "motor de busca ainda nao configurado"}
 
         @app.get("/api/busca/preparar_enriquecido")
         def busca_preparar_enriquecido_indisponivel(q: str = ""):
-            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+            return {"erro": "motor de busca ainda nao configurado"}
 
         @app.post("/api/busca/termo")
         def busca_termo_indisponivel(body: dict = None):
-            return {"erro": f"motor de busca ainda nao configurado: {e}"}
+            return {"erro": "motor de busca ainda nao configurado"}
 
 
 EDITAIS_COLS = [
@@ -1530,7 +1633,7 @@ try:
             return buscar_editais_por_projeto(q)
         except Exception as e:
             logger.exception("busca de editais indisponivel")
-            return {"erro": f"busca de editais indisponivel no momento: {e}"}
+            return {"erro": "busca de editais indisponivel no momento"}
 
     @app.post("/api/editais/buscar")
     def editais_buscar_com_vetor(body: dict):
@@ -1545,16 +1648,16 @@ try:
             return buscar_editais_por_projeto_com_vetor(q, vetor)
         except Exception as e:
             logger.exception("busca de editais indisponivel")
-            return {"erro": f"busca de editais indisponivel no momento: {e}"}
+            return {"erro": "busca de editais indisponivel no momento"}
 
 except ImportError as e:
     @app.get("/api/editais/buscar")
     def editais_buscar_indisponivel(q: str = ""):
-        return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
+        return {"erro": "motor de busca de editais ainda nao configurado"}
 
     @app.post("/api/editais/buscar")
     def editais_buscar_indisponivel_post(body: dict = None):
-        return {"erro": f"motor de busca de editais ainda nao configurado: {e}"}
+        return {"erro": "motor de busca de editais ainda nao configurado"}
 
 
 @app.get("/api/editais/{edital_id}")
@@ -1813,11 +1916,12 @@ def enriquecimento_corrigir(body: dict, request: Request, usuario_staff: dict = 
     try:
         registrar_correcao_manual(conn, int(operation_id), campo, valor_novo, usuario)
         return {"ok": True}
-    except ValueError as e:
-        return {"erro": str(e)}
-    except Exception as e:
+    except ValueError:
+        logger.warning("correcao manual rejeitada (op=%s, campo=%s)", operation_id, campo, exc_info=True)
+        return {"erro": "correcao invalida: campo nao corrigivel ou operacao inexistente"}
+    except Exception:
         logger.exception("correcao manual falhou")
-        return {"erro": f"nao foi possivel salvar a correcao agora ({e})"}
+        return {"erro": "nao foi possivel salvar a correcao agora"}
     finally:
         conn.close()
 
@@ -1850,6 +1954,8 @@ async def spa_pagina(pagina: str):
     # hospedado, o rewrite em vercel.json resolve "/admin" direto na CDN.
     if pagina in ("admin", "admin.html"):
         return FileResponse(STATIC_DIR / "admin.html")
+    if pagina == "robots.txt":
+        return FileResponse(STATIC_DIR / "robots.txt")
     if pagina not in _SPA_PAGINAS:
         raise HTTPException(status_code=404)
     return FileResponse(STATIC_DIR / "index.html")
