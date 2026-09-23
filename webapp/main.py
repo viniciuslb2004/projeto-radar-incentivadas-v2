@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from db import get_connection
 from search_fts import PORTE_NORMALIZADO_SQL
@@ -127,23 +127,49 @@ _CACHE_PUBLICO_RE = re.compile(
 _CACHE_PUBLICO_VALOR = "public, s-maxage=3600, stale-while-revalidate=86400"
 
 
+def _deve_cachear_publico(method: str, path: str, status_code: int, headers, body: bytes) -> bool:
+    """Regra do cache publico da CDN (testada em tests/test_cache_control.py).
+    NUNCA cacheia: nao-GET, nao-200, rota fora da whitelist, resposta com Set-Cookie,
+    ou corpo de erro ({"erro": ...} devolvido com 200 -- ex: busca durante
+    esgotamento de conexoes do Aiven). Incidente 2026-09-23: respostas
+    {"erro":"motor de busca indisponivel"} ficavam 1h (+24h SWR) na CDN."""
+    if method != "GET" or status_code != 200:
+        return False
+    if _CACHE_PUBLICO_RE.match(path) is None or "set-cookie" in headers:
+        return False
+    if body is None:
+        return False
+    cabeca = body[:200].lstrip()
+    if cabeca.startswith(b"{") and b'"erro"' in cabeca:
+        return False
+    if not cabeca:
+        return False
+    return True
+
+
 @app.middleware("http")
 async def _cache_control(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     if not (path.startswith("/api/") or path.startswith("/admin")):
         return response
-    publico = (
+    candidato = (
         request.method == "GET"
         and response.status_code == 200
         and _CACHE_PUBLICO_RE.match(path) is not None
         and "set-cookie" not in response.headers
     )
-    if publico:
-        response.headers["Cache-Control"] = _CACHE_PUBLICO_VALOR
-    else:
+    if not candidato:
         response.headers["Cache-Control"] = "no-store"
-    return response
+        return response
+    # Candidato a cache publico: bufferiza o corpo (JSON pequeno) pra checar erro.
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    publico = _deve_cachear_publico(request.method, path, response.status_code, response.headers, body)
+    headers["Cache-Control"] = _CACHE_PUBLICO_VALOR if publico else "no-store"
+    return Response(content=body, status_code=response.status_code, headers=headers,
+                    media_type=response.media_type)
 
 
 # ============ Rate limit simples em memoria (best-effort) ============
@@ -1343,7 +1369,8 @@ if not MOTOR_BUSCA_IA:
             return resultado
         except Exception as e:
             logger.exception("motor de busca indisponivel")
-            return {"erro": "motor de busca indisponivel no momento"}
+            # 503 (nao 200): nunca pode ser cacheado na CDN; o front trata !ok.
+            return JSONResponse({"erro": "motor de busca indisponivel no momento"}, status_code=503)
 
     # Rotas do modo por IA (preparar/preparar_enriquecido/termo) nao se aplicam nesse
     # modo -- devolvem um erro claro em vez de 404 caso algum cliente antigo (JS em
