@@ -48,29 +48,41 @@ logger = logging.getLogger("radar")
 # navegador via embeddings-client.js) sem precisar mudar nenhuma linha de codigo.
 MOTOR_BUSCA_IA = os.environ.get("MOTOR_BUSCA_IA", "0") == "1"
 
-# ============ Acesso (so ativo quando ha pelo menos uma conta cadastrada) ============
+# ============ Acesso (site publico/lead-gen, sem barreira de entrada) ============
 # HISTORICO: HTTP Basic (SITE_PASSWORD) -> contas individuais com login+senha
-# (`admin_usuarios`) -> (2026-09-22) IDENTIFICACAO PASSWORDLESS por e-mail, unica
-# forma de acesso ao site principal hoje (reposicionamento pra plataforma publica
-# de geracao de leads -- ver CLAUDE.md/docs/painel-admin.md). O painel `/admin`
-# (uso interno da Artica) CONTINUA exigindo usuario+senha normalmente -- essa
-# mudanca e' so pro site principal (ver webapp/admin/auth.py, inalterado).
-# Sessao por cookie opaco (`admin_session`, COMPARTILHADO com o painel /admin --
-# mesma tabela de contas/mesmo mecanismo de sessao, so sem verificar senha pro
-# site). O app local sem nenhuma conta cadastrada (banco novo, seed.py nunca
-# rodado) continua rodando sem exigir identificacao, mesmo espirito de antes sem
-# SITE_PASSWORD. O HTML/CSS/JS estatico e publico de proposito -- so as rotas
-# /api/* exigem; a propria pagina carrega uma landing/tela de identificacao
-# customizada (ver #landing-overlay em index.html, common.js) que faz POST
-# /api/identificar (e, se precisar de mais dados, POST /api/cadastrar) -- cookie
-# de sessao devolvido nos dois casos, NUNCA senha em nenhum ponto deste fluxo.
-_ROTAS_PUBLICAS_API = {"/api/identificar", "/api/cadastrar", "/api/logout", "/api/interno/login"}
+# (`admin_usuarios`) -> (2026-09-22) IDENTIFICACAO PASSWORDLESS obrigatoria antes de
+# qualquer dado (landing bloqueando a tela toda) -> (2026-09-23, REVERSAO
+# deliberada e confirmada pelo usuario da mudanca anterior) barreira de entrada
+# REMOVIDA: qualquer visitante usa Consolidado/Insights/Linhas Incentivadas/
+# Busca/Potenciais Linhas/Editais livremente, SEM se identificar. A
+# identificacao (POST /api/identificar, e se precisar de mais dados POST
+# /api/cadastrar -- mesmos forms de sempre, so que agora abertos num modal a
+# partir do clique em "Quero saber mais" em vez de bloquear a entrada, ver
+# common.js/index.html) so acontece quando a pessoa demonstra interesse
+# comercial de verdade -- e' o proprio gatilho do opt-in registrado em
+# POST /api/interesse. So essa rota continua exigindo sessao valida (recem-
+# criada pelo modal). CONSEQUENCIA aceita explicitamente pelo usuario: sem
+# identificacao na entrada, `registrar_acesso`/eventos de navegacao gerais
+# (pagina vista, busca feita, filtro aplicado -- ver registrar_navegacao
+# abaixo) na maior parte do tempo nao tem usuario pra vincular (perde a
+# atribuicao ampla que a versao anterior tinha); NAO inventar rastreio
+# anonimo pra compensar isso, e' escolha deliberada de simplicidade/menos
+# fricao. O painel `/admin` (uso interno da Artica, prefixo "/admin" -- nunca
+# cai neste gate, ver abaixo) e a area interna /interno-artica (rotas
+# /api/salvos*, /api/busca/exportar -- ja gated individualmente por
+# Depends(exigir_staff)/exigir_admin em cada rota, INDEPENDENTE deste gate
+# global) CONTINUAM exigindo login usuario+senha normalmente -- essa mudanca e'
+# so pro fluxo do lead publico passwordless.
+_ROTAS_QUE_EXIGEM_SESSAO = {"/api/interesse"}
 
 
 def _verificar_acesso(request: Request):
-    if not request.url.path.startswith("/api/") or request.url.path in _ROTAS_PUBLICAS_API:
-        return
-    verificar_acesso_principal(request)
+    # So bloqueia o que estiver EXPLICITAMENTE listado acima -- tudo mais em
+    # /api/* (dado publico de leitura, e qualquer rota ja staff-gated por seu
+    # proprio Depends) passa direto por aqui. Rotas fora de /api/* (estatico,
+    # /admin/*, catch-all da SPA) nunca passaram por este gate.
+    if request.url.path in _ROTAS_QUE_EXIGEM_SESSAO:
+        verificar_acesso_principal(request)
 
 
 app = FastAPI(title="Radar de Credito Incentivado", dependencies=[Depends(_verificar_acesso)])
@@ -303,12 +315,15 @@ def interno_login(payload: dict, request: Request, response: Response):
 
 @app.post("/api/interesse")
 def site_interesse(request: Request):
-    """'Quero saber mais' (substitui usuario logado+Sair na topbar, ver CLAUDE.md) --
-    registra um lead IMEDIATAMENTE (evento='interesse_lead' em admin_acessos_log,
-    mesmo padrao ja usado por 'view_aba') usando os dados que a pessoa ja informou
-    na identificacao -- sem formulario adicional. Rota protegida (fora de
-    _ROTAS_PUBLICAS_API, entao _verificar_acesso/verificar_acesso_principal ja
-    garante sessao valida antes de chegar aqui)."""
+    """'Quero saber mais' -- o proprio gatilho do opt-in (ver secao "Acesso" no topo
+    do arquivo): o frontend chama isto logo apos o modal de identificacao
+    (POST /api/identificar/POST /api/cadastrar, aberto pelo clique no CTA) criar
+    sessao com sucesso, registrando o lead IMEDIATAMENTE (evento='interesse_lead'
+    em admin_acessos_log, mesmo padrao ja usado por 'view_aba') usando os dados
+    que a pessoa acabou de informar -- sem formulario adicional aqui. Rota
+    protegida (em _ROTAS_QUE_EXIGEM_SESSAO, entao _verificar_acesso/
+    verificar_acesso_principal ja garante sessao valida e recem-criada antes de
+    chegar aqui)."""
     usuario = _usuario_atual(request)
     if usuario is None:
         raise HTTPException(status_code=401, detail="Sessão inválida")
@@ -1695,6 +1710,14 @@ def linha_detalhe(linha_id: int):
 
 
 # ============ Enriquecimento (item 3 do pedido de melhorias) ============
+# Ferramenta interna (nenhum link/botao do site publico chama isto -- so quem ja
+# conhece a rota) que expõe historico de importacao e permite corrigir dado
+# manualmente. Ate a reversao da barreira de entrada (2026-09-23) essas rotas
+# ficavam protegidas de tabela por so exigirem QUALQUER sessao valida (gate
+# global antigo); agora que a navegacao publica nao passa mais por sessao,
+# `Depends(exigir_staff)` explicito abaixo e' o UNICO gate delas -- sem isso,
+# ficariam completamente abertas (inclusive a escrita em
+# /api/enriquecimento/corrigir).
 # So cobre as transacoes ja importadas (bndes_raw/finep_*_raw -> operations, ver
 # unify.py) -- NAO tem upload de planilha nesta versao: os dados vem sempre de
 # download automatico das planilhas oficiais do BNDES/FINEP (ver refresh.py), nunca
@@ -1705,7 +1728,7 @@ def linha_detalhe(linha_id: int):
 # prevalecer sobre reclassificacoes automaticas futuras (ver unify.py).
 
 @app.get("/api/enriquecimento/importacoes")
-def enriquecimento_importacoes(limit: int = 20):
+def enriquecimento_importacoes(limit: int = 20, usuario: dict = Depends(exigir_staff)):
     limit = max(1, min(limit, 200))
     conn = get_connection(pooled=True)
     try:
@@ -1732,7 +1755,7 @@ def enriquecimento_importacoes(limit: int = 20):
 
 
 @app.get("/api/enriquecimento/pendentes")
-def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
+def enriquecimento_pendentes(limit: int = 20, offset: int = 0, usuario: dict = Depends(exigir_staff)):
     """Fila de revisao manual: operacoes que a classificacao automatica NAO conseguiu
     resolver (ver setor_origem='pendente' em unify.py) -- tipicamente FINEP sem CNPJ
     informado na planilha de origem, caso em que nenhum enriquecimento automatico
@@ -1758,7 +1781,7 @@ def enriquecimento_pendentes(limit: int = 20, offset: int = 0):
 
 
 @app.get("/api/enriquecimento/correcoes")
-def enriquecimento_correcoes(limit: int = 50):
+def enriquecimento_correcoes(limit: int = 50, usuario: dict = Depends(exigir_staff)):
     limit = max(1, min(limit, 500))
     conn = get_connection(pooled=True)
     try:
@@ -1775,7 +1798,7 @@ def enriquecimento_correcoes(limit: int = 50):
 
 
 @app.post("/api/enriquecimento/corrigir")
-def enriquecimento_corrigir(body: dict, request: Request):
+def enriquecimento_corrigir(body: dict, request: Request, usuario_staff: dict = Depends(exigir_staff)):
     operation_id = (body or {}).get("operation_id")
     campo = (body or {}).get("campo")
     valor_novo = (body or {}).get("valor_novo")

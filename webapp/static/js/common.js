@@ -65,13 +65,14 @@ function _fetchFiltrosCompartilhado() {
 const TIMEOUT_PADRAO_MS = 45000;
 
 // Area interna da Equipe Artica (/interno-artica, ver CLAUDE.md) -- MESMA SPA do
-// site publico, so troca qual overlay de login aparece quando nao ha sessao (ver
-// _mostrarLanding abaixo) e liga/desliga o botao "Quero saber mais" (so publico).
-// As 3 funcionalidades extras (Salvar/Notas/Exportar Excel) sao controladas pelo
-// flag `staff` de /api/me (obterSessaoAtual abaixo), NAO por este path -- uma
-// conta de staff continua "staff" mesmo navegando pelas URLs publicas
-// (/consolidado etc, mesma sessao/cookie compartilhado), entao os botoes internos
-// aparecem em qualquer aba pra quem logou como staff, nao so' em /interno-artica.
+// site publico, so troca qual overlay de login aparece (ver _mostrarLanding
+// abaixo, e a checagem proativa de staff em initFiltersAndTabs) e liga/desliga o
+// botao "Quero saber mais" (so publico). As 3 funcionalidades extras (Salvar/
+// Notas/Exportar Excel) sao controladas pelo flag `staff` de /api/me
+// (obterSessaoAtual abaixo), NAO por este path -- uma conta de staff continua
+// "staff" mesmo navegando pelas URLs publicas (/consolidado etc, mesma sessao/
+// cookie compartilhado), entao os botoes internos aparecem em qualquer aba pra
+// quem logou como staff, nao so' em /interno-artica.
 const MODO_INTERNO = window.location.pathname.startsWith("/interno-artica");
 
 // Sessao atual completa ({username, nome, staff}, de /api/me) -- cacheada numa
@@ -88,19 +89,18 @@ function obterSessaoAtual() {
   return _sessaoAtualPromise;
 }
 
-// "Quero saber mais" (substitui usuario logado + Sair na topbar, ver CLAUDE.md) --
-// so aparece pra LEAD PUBLICO ja identificado (staff=false), nunca pra sessao de
-// staff (area interna tem seu proprio indicativo, "Modo interno" + botoes de
-// Salvar/Notas/Exportar). Sem ninguem identificado (ou identificacao ainda nao
-// configurada, dev local sem nenhuma conta), a rota devolve username=null e o
-// botao fica escondido. Extraida pra funcao propria (era so um `.then` inline no
-// DOMContentLoaded) pra poder ser chamada de novo depois de
-// _entrarNaPlataformaSemReload -- sem isso, a topbar ficaria com a leitura
-// ANTIGA de /api/me (sem sessao) pelo resto da visita, ja que _sessaoAtualPromise
-// so busca uma vez (ver invalidacao em _entrarNaPlataformaSemReload).
+// "Quero saber mais" -- SEMPRE visivel pra quem nao e' staff (identificado ou
+// nao: e' o proprio CTA que abre o modal de identificacao pra quem ainda nao se
+// identificou, ver _completarIdentificacaoEregistrarInteresse mais abaixo), nunca
+// pra sessao de staff (area interna tem seu proprio indicativo, "Modo interno" +
+// botoes de Salvar/Notas/Exportar). Extraida pra funcao propria (era so um
+// `.then` inline no DOMContentLoaded) pra poder ser chamada de novo depois de um
+// opt-in bem-sucedido -- sem isso, a topbar (badge "Modo interno") ficaria com a
+// leitura ANTIGA de /api/me pelo resto da visita, ja que _sessaoAtualPromise so
+// busca uma vez (ver invalidacao em _completarIdentificacaoEregistrarInteresse).
 function _atualizarTopbarSessao() {
   obterSessaoAtual().then((sessao) => {
-    if (sessao.username && !sessao.staff) {
+    if (!sessao.staff) {
       document.getElementById("topbar-interesse-btn").classList.remove("hidden");
     }
     // "Modo interno" (indicacao visual discreta, pedido explicito do escopo de
@@ -121,30 +121,37 @@ function obterUsuarioAtual() {
   return obterSessaoAtual().then((sessao) => sessao.username || null);
 }
 
-// ============ Landing / identificacao passwordless (ver #landing-overlay em
-// index.html) ============
-// Ate 2026-09-22: login por usuario+senha (contas individuais, `admin_usuarios`).
-// Substituido por identificacao passwordless por e-mail (reposicionamento pra
-// plataforma publica de lead-gen -- ver CLAUDE.md/docs/painel-admin.md e
-// docs/archive/removed-features.md secao 4 pro fluxo antigo). O cookie de sessao
-// e httponly (JS nunca le/escreve ele diretamente) e enviado automaticamente pelo
-// navegador via `credentials: "include"`.
+// ============ Identificacao passwordless (ver #landing-overlay em index.html)
+// ============
+// Ate 2026-09-22: login por usuario+senha (contas individuais, `admin_usuarios`),
+// depois identificacao passwordless por e-mail OBRIGATORIA (barreira de entrada,
+// nada carregava sem sessao). Revertido em 2026-09-23 (pedido explicito do
+// usuario, ver CLAUDE.md): a navegacao publica NAO exige mais identificacao --
+// #landing-overlay virou um modal sob demanda (ver _mostrarLanding abaixo),
+// aberto so pelo clique em "Quero saber mais". O cookie de sessao e httponly (JS
+// nunca le/escreve ele diretamente) e enviado automaticamente pelo navegador via
+// `credentials: "include"`.
 class ErroAutenticacao extends Error {}
 
-// Mostra a landing em QUALQUER 401 de rota protegida -- sessao expirada, cookie
-// ausente, usuario removido/inativo, sessao invalida (todas essas caem em 401 no
-// backend, ver webapp/admin/auth.py::verificar_acesso_principal). Chamado direto
-// de dentro de fetchJSON/postJSON (abaixo), nao so no carregamento inicial da
-// pagina -- antes disso, um 401 no MEIO do uso (sessao expirando) so era tratado
-// no primeiro fetch de /api/status; qualquer outro fetch que caisse num catch
-// generico (varios arquivos fazem `catch (e) { data = []; }`) deixava a tela
-// vazia sem nunca voltar pra landing (bug real relatado pelo usuario: "o site
-// quebra, fica em branco"). Idempotente -- seguro chamar varias vezes.
+// Mostra o overlay de identificacao/login apropriado -- SO chamada hoje em dois
+// casos (ver _falhaComoErro mais abaixo, unica chamadora vinda de fetchJSON/
+// postJSON): (1) MODO_INTERNO sem sessao de staff (gate real de /interno-artica,
+// ver tambem a checagem proativa em initFiltersAndTabs) e (2) POST /api/interesse
+// devolvendo 401 (sessao expirou entre o clique em "Quero saber mais" e o envio
+// do formulario -- caso raro, mas cobre o usuario ficando preso num formulario
+// que nunca vai completar o opt-in). NUNCA mais chamada so por causa de uma rota
+// de LEITURA de dado publico falhar (essas nao dependem mais de sessao nenhuma --
+// ver secao "Acesso" em webapp/main.py) -- um erro nelas vira uma falha comum
+// (`Error`, nao `ErroAutenticacao`), tratada pelo catch de cada chamador (a
+// maioria ja deixa a secao vazia/mostra "não foi possível conectar", nunca deveria
+// forcar quem so estava navegando anonimamente a se identificar por causa de um
+// bug ou instabilidade passageira do backend). Idempotente -- seguro chamar
+// varias vezes.
 function _mostrarLanding(mensagemErro) {
-  // /interno-artica mostra o login de STAFF (usuario+senha) -- NUNCA a landing/
-  // identificacao passwordless publica (essa e' so pro site principal). Os dois
-  // overlays sao mutuamente exclusivos (nunca os dois "hidden"=false ao mesmo
-  // tempo) -- ver #landing-overlay/#landing-interno-overlay em index.html.
+  // /interno-artica mostra o login de STAFF (usuario+senha) -- NUNCA o modal de
+  // identificacao publica (essa e' so pro site principal). Os dois overlays sao
+  // mutuamente exclusivos (nunca os dois "hidden"=false ao mesmo tempo) -- ver
+  // #landing-overlay/#landing-interno-overlay em index.html.
   if (MODO_INTERNO) {
     document.getElementById("landing-interno-overlay").classList.remove("hidden");
     const erro = document.getElementById("interno-login-erro");
@@ -172,22 +179,30 @@ function _mostrarLanding(mensagemErro) {
   if (emailInput) emailInput.focus();
 }
 
+// Decide o que fazer com uma resposta HTTP nao-ok de fetchJSON/postJSON: so os
+// dois casos documentados em _mostrarLanding acima (MODO_INTERNO sem sessao de
+// staff, ou 401 especificamente em POST /api/interesse) mostram um overlay e
+// viram ErroAutenticacao -- QUALQUER outra falha (rota publica com 500/502,
+// timeout, erro de rede) vira um `Error` comum, deixado pro catch de cada
+// chamador tratar como sempre tratou uma falha de rede (a maioria ja tem
+// `catch (e) { data = []; }`/estado vazio, ver ex. em consolidado.js/editais.js --
+// nunca deveria forcar quem so estava navegando anonimamente a se identificar por
+// causa de uma instabilidade passageira do backend).
+function _falhaComoErro(r, url) {
+  if (r.status === 401 && (MODO_INTERNO || url === "/api/interesse")) {
+    _mostrarLanding(url === "/api/interesse" ? "Sua sessão expirou. Identifique-se novamente para continuar." : undefined);
+    return new ErroAutenticacao("nao autenticado");
+  }
+  return new Error(`Falha ao acessar ${url} (HTTP ${r.status})`);
+}
+
 async function fetchJSON(url, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_PADRAO_MS);
   try {
     const r = await fetch(fullUrl, { signal: controller.signal, credentials: "include" });
-    if (!r.ok) {
-      // Nao so 401: qualquer erro numa rota protegida (500, 502, timeout do
-      // backend etc) tem que voltar pra tela de identificacao em vez de deixar a
-      // tela num estado inconsistente -- 401 e a UNICA saida de erro esperada
-      // dessas rotas (ver verificar_acesso_principal em webapp/admin/auth.py, que
-      // agora nunca deixa uma falha de checagem de acesso vazar como 500), mas
-      // blindamos aqui tambem contra qualquer outra falha de rede/servidor.
-      _mostrarLanding();
-      throw new ErroAutenticacao("nao autenticado");
-    }
+    if (!r.ok) throw _falhaComoErro(r, url);
     return await r.json();
   } finally {
     clearTimeout(timer);
@@ -195,7 +210,8 @@ async function fetchJSON(url, timeoutMs) {
 }
 
 // POST generico (usado, por exemplo, para mandar ao servidor o vetor de embedding
-// ja calculado no navegador, no modo hospedado -- ver embeddings-client.js).
+// ja calculado no navegador, no modo hospedado -- ver embeddings-client.js -- e
+// para POST /api/interesse, ver mais abaixo).
 async function postJSON(url, body, timeoutMs) {
   const fullUrl = _urlCompleta(url);
   const controller = new AbortController();
@@ -208,12 +224,7 @@ async function postJSON(url, body, timeoutMs) {
       credentials: "include",
       signal: controller.signal,
     });
-    if (!r.ok) {
-      // Mesmo raciocinio de fetchJSON acima: qualquer erro (nao so 401) numa
-      // rota protegida forca a volta pra tela de identificacao.
-      _mostrarLanding();
-      throw new ErroAutenticacao("nao autenticado");
-    }
+    if (!r.ok) throw _falhaComoErro(r, url);
     return await r.json();
   } finally {
     clearTimeout(timer);
@@ -221,14 +232,12 @@ async function postJSON(url, body, timeoutMs) {
 }
 
 // Backstop: qualquer ErroAutenticacao que escape sem handler nenhum (ex: um
-// `await fetchJSON(...)` novo que alguem esqueca de proteger no futuro) tambem
-// mostra a landing, em vez de virar um erro silencioso no console com a tela
-// parada atras dela. fetchJSON/postJSON acima ja cobrem o caso comum (chamador
-// que faz `catch` e ignora); isso cobre o caso sem catch nenhum.
+// `await fetchJSON(...)` novo que alguem esqueca de proteger no futuro) so evita
+// o erro barulhento (nao tratado) no console -- o overlay certo ja foi mostrado
+// em _falhaComoErro, no momento em que o erro foi lancado.
 window.addEventListener("unhandledrejection", (ev) => {
   if (ev.reason instanceof ErroAutenticacao) {
     ev.preventDefault();
-    _mostrarLanding();
   }
 });
 
@@ -273,104 +282,40 @@ async function _cadastrarLead(dados) {
   }
 }
 
-// ============ Entrada sem reload completo (pos-identificacao/cadastro) ============
-// Ate 2026-09-22, sucesso em /api/identificar ou /api/cadastrar disparava
-// location.reload() -- reload da pagina INTEIRA, jogando fora todo o trabalho ja
-// feito (scripts ja carregados, tab-btns ja ligados) e forcando o browser a
-// refazer em SERIE tudo que initFiltersAndTabs() + cada aba ja tinham TENTADO (e
-// falhado com 401, sem sessao) na carga original: /api/status, /api/filtros,
-// primeiro fetch de cada aba. O cookie de sessao (Set-Cookie da resposta) ja esta
-// salvo pelo navegador no momento em que _identificarEmail/_cadastrarLead
-// retornam `ok: true` (r.json() so resolve depois do corpo inteiro, entao os
-// headers/cookie ja foram aplicados) -- ou seja, a MESMA pagina, sem reload
-// nenhum, ja pode repetir essas chamadas com sessao valida.
-//
-// NAO da pra chamar de novo o wrapper initFiltersAndTabs(): ele chama
-// _ligarBotoesDeAba(), que NAO e idempotente (religaria um 2o listener de click
-// em cada tab-btn, disparando _ativarView em duplicidade a cada clique dali em
-// diante). Por isso chama _initFiltersAndTabsImpl() direto, e refaz manualmente o
-// que cada aba faz no proprio DOMContentLoaded (consolidado.js/tendencias.js/
-// editais.js/linhas.js) -- via funcoes ja globais (top-level `function`/`async
-// function` em scripts SEM `type="module"` viram propriedade de `window`
-// automaticamente), guardadas com typeof por seguranca. Busca/Potenciais Linhas
-// ficam de fora de proposito: so buscam sob clique explicito do usuario, nunca
-// no DOMContentLoaded, entao nao ha fetch inicial nenhum pra refazer.
-
-// Aba padrao (Consolidado) -- essa e a UNICA parte que atrasa a decisao de
-// mostrar/esconder o loading-overlay (ver _entrarNaPlataformaSemReload abaixo).
-async function _carregarAbaPadraoPosLogin() {
-  await _initFiltersAndTabsImpl();
-  if (typeof window._repopularSubsetorCascata === "function") {
-    await window._repopularSubsetorCascata(true);
-  }
-  if (typeof window.refreshConsolidado === "function") {
-    await window.refreshConsolidado();
-  }
-}
-
-// Demais abas que tambem carregam incondicional no proprio DOMContentLoaded --
-// fire-and-forget DE PROPOSITO (nao atrasa a aba padrao aparecer): se o usuario
-// trocar de aba antes disso terminar, na pior das hipoteses ve por um instante o
-// mesmo estado vazio que a tentativa sem sessao (antes do login) ja tinha
-// deixado, ate estas chamadas terminarem -- nunca dado desatualizado exibido
-// como se fosse novo, so um estado "ainda carregando" um pouco mais longo.
-function _atualizarOutrasAbasPosLogin() {
-  if (typeof window.refreshTendencias === "function") {
-    window.refreshTendencias(currentFilters());
-  }
-  if (typeof window.loadEditaisFiltrosOpcoes === "function") {
-    window.loadEditaisFiltrosOpcoes().then(() => {
-      if (typeof window.refreshEditais === "function") window.refreshEditais();
-    });
-  } else if (typeof window.refreshEditais === "function") {
-    window.refreshEditais();
-  }
-  if (typeof window.initLinhasFiltros === "function") {
-    window.initLinhasFiltros().then(() => {
-      if (typeof window.loadLinhas === "function") window.loadLinhas(0);
-    });
-  } else if (typeof window.loadLinhas === "function") {
-    window.loadLinhas(0);
-  }
-}
-
-// Janela de tolerancia: se a rede responder dentro desse tempo, o usuario nunca
-// chega a ver o loading-overlay (entra direto com dado real, sem loading nenhum
-// -- pedido explicito); se demorar mais, mostra o overlay so pelo tempo que FALTA
-// (nunca o ciclo inteiro que um location.reload() exigiria).
-const JANELA_SEM_LOADING_MS = 200;
-
-async function _entrarNaPlataformaSemReload() {
-  // /api/me so e buscado uma vez por carregamento de pagina (ver
-  // obterSessaoAtual acima) -- a 1a chamada, ainda pre-login, ficou cacheada como
-  // "ninguem logado" pro resto da visita. Sem invalidar aqui, a topbar (botao
-  // "Quero saber mais"/badge "Modo interno") e o log de navegacao (obterUsuarioAtual,
-  // usado em _ativarView) ficariam permanentemente errados depois do login, ja
-  // que nunca mais reconsultariam /api/me sem um reload completo.
+// ============ Opt-in pos-identificacao ("Quero saber mais") ============
+// Ate 2026-09-22, sucesso em /api/identificar ou /api/cadastrar precisava recarregar
+// a plataforma inteira (location.reload() ou, na versao seguinte, um "entrar sem
+// reload" que refazia manualmente o fetch de cada aba) porque a pagina nao tinha
+// NENHUM dado carregado ate a identificacao acontecer (barreira de entrada). Isso
+// nao existe mais: Consolidado/Insights/Linhas Incentivadas/Busca/Potenciais
+// Linhas/Editais ja carregaram seus dados (publicos, sem sessao nenhuma) muito
+// antes de alguem clicar em "Quero saber mais" -- entao completar a identificacao
+// aqui so precisa (1) fechar o modal, (2) atualizar a topbar (ela cacheia /api/me
+// numa Promise unica, ver obterSessaoAtual/_sessaoAtualPromise -- sem invalidar
+// aqui, ficaria mostrando "nao identificado" pelo resto da visita) e (3) registrar
+// o "quero saber mais" de verdade (POST /api/interesse, o proprio gatilho do
+// opt-in) -- nunca precisa re-buscar nenhum dado de aba nem recarregar a pagina.
+async function _completarIdentificacaoEregistrarInteresse() {
   _sessaoAtualPromise = null;
   _atualizarTopbarSessao();
-
   document.getElementById("landing-overlay").classList.add("hidden");
-  const overlay = document.getElementById("loading-overlay");
-  const pronto = _carregarAbaPadraoPosLogin()
-    .then(() => _atualizarOutrasAbasPosLogin())
-    .catch((e) => {
-      // fetchJSON/postJSON ja mostram a landing de novo em caso de 401 (sessao
-      // criada mas por algum motivo invalida) -- aqui so evita um erro nao
-      // tratado no console em qualquer outra falha inesperada.
-      console.error("Falha ao carregar a plataforma apos login:", e);
-    });
-  let terminou = false;
-  pronto.then(() => { terminou = true; });
-  await Promise.race([pronto, new Promise((resolve) => setTimeout(resolve, JANELA_SEM_LOADING_MS))]);
-  if (!terminou) {
-    overlay.classList.remove("hidden");
-    await pronto;
-    overlay.classList.add("hidden");
+  document.getElementById("interesse-modal-overlay").classList.remove("hidden");
+  try {
+    await postJSON("/api/interesse", {});
+  } catch (e) {
+    // best-effort -- o modal de agradecimento ja apareceu, uma falha de rede
+    // aqui nao deve incomodar quem ja completou o formulario.
   }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("landing-fechar-btn").addEventListener("click", () => {
+    // Fecha sem nenhum efeito colateral -- a pessoa so volta pra tela/filtro onde
+    // estava, exatamente como quem nunca clicou em "Quero saber mais" (o dado ja
+    // estava carregado por baixo do modal o tempo todo).
+    document.getElementById("landing-overlay").classList.add("hidden");
+  });
+
   document.getElementById("identificar-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = document.getElementById("identificar-btn");
@@ -394,9 +339,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (!resultado.precisaDados) {
       // E-mail ja conhecido e usado recentemente -- acesso concedido, sessao ja
-      // criada pelo backend. Sem reload da pagina inteira -- ver
-      // _entrarNaPlataformaSemReload acima.
-      await _entrarNaPlataformaSemReload();
+      // criada pelo backend.
+      await _completarIdentificacaoEregistrarInteresse();
       return;
     }
     // E-mail novo OU ultimo acesso ha mais de 3 meses -- pede os dados completos.
@@ -438,22 +382,28 @@ document.addEventListener("DOMContentLoaded", () => {
       erroEl.classList.remove("hidden");
       return;
     }
-    await _entrarNaPlataformaSemReload();
+    await _completarIdentificacaoEregistrarInteresse();
   });
 
   _atualizarTopbarSessao();
 
   document.getElementById("topbar-interesse-btn").addEventListener("click", async () => {
-    const modal = document.getElementById("interesse-modal-overlay");
-    // Mostra o agradecimento IMEDIATAMENTE (a pessoa ja informou os dados dela na
-    // identificacao, nao ha formulario adicional aqui) -- o registro em si e
-    // best-effort, uma falha de rede nao deve incomodar quem ja clicou.
-    modal.classList.remove("hidden");
-    try {
-      await postJSON("/api/interesse", {});
-    } catch (e) {
-      // best-effort -- ver comentario acima.
+    const sessao = await obterSessaoAtual();
+    if (sessao.username && !sessao.staff) {
+      // Ja identificado num opt-in anterior -- registra de novo sem pedir os
+      // dados de novo (mesmo comportamento de sempre pra quem ja se identificou).
+      document.getElementById("interesse-modal-overlay").classList.remove("hidden");
+      try {
+        await postJSON("/api/interesse", {});
+      } catch (e) {
+        // best-effort -- ver comentario acima.
+      }
+      return;
     }
+    // Visitante anonimo -- abre o modal de identificacao (reaproveita
+    // #landing-overlay); so ao completar o formulario e' que o interesse de fato
+    // e' registrado (ver _completarIdentificacaoEregistrarInteresse acima).
+    _mostrarLanding();
   });
   document.getElementById("interesse-modal-fechar").addEventListener("click", () => {
     document.getElementById("interesse-modal-overlay").classList.add("hidden");
@@ -874,6 +824,25 @@ async function initFiltersAndTabs() {
   // do backend responder.
   _ligarBotoesDeAba();
 
+  // Gate de STAFF pra /interno-artica -- desde a reversao da barreira de entrada
+  // (2026-09-23) a maioria das rotas /api/* NAO 401 mais por falta de sessao (ver
+  // secao "Acesso" em webapp/main.py), entao nao da mais pra depender de um 401
+  // incidental do primeiro fetch (como o codigo antigo dependia) pra acionar este
+  // gate -- checa /api/me DIRETO e proativamente, ANTES de qualquer fetch de
+  // dado, e bloqueia a tela se a sessao atual nao for de staff. O dado em si
+  // (fetches de _initFiltersAndTabsImpl abaixo) e' publico e carregaria
+  // normalmente mesmo sem isso -- so nao deve aparecer pro visitante ate a tela
+  // desbloquear, exatamente como o gate de staff sempre se comportou aqui.
+  if (MODO_INTERNO) {
+    const sessao = await obterSessaoAtual();
+    if (!sessao.staff) {
+      _mostrarLanding();
+      _esconderLoadingOverlay();
+      _resolverFiltrosProntos();
+      return;
+    }
+  }
+
   try {
     await _initFiltersAndTabsImpl();
   } finally {
@@ -900,11 +869,11 @@ async function _initFiltersAndTabsImpl() {
   try {
     status = await fetchJSON("/api/status");
   } catch (e) {
+    // /api/status e' publica (ver secao "Acesso" em webapp/main.py) -- nao 401
+    // mais por falta de sessao, entao qualquer erro aqui e' rede/backend de
+    // verdade (ErroAutenticacao so viria de MODO_INTERNO, ja tratado acima antes
+    // de chegar aqui).
     _esconderLoadingOverlay();
-    if (e instanceof ErroAutenticacao) {
-      _mostrarLanding();
-      return;
-    }
     pill.textContent = "não foi possível conectar ao servidor";
     return;
   }

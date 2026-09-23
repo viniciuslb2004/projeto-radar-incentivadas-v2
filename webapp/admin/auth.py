@@ -221,10 +221,16 @@ def exigir_staff(request: Request):
 
 
 def verificar_acesso_principal(request: Request):
-    """Gate do SITE PRINCIPAL (usado por webapp/main.py::_verificar_acesso) -- e a
-    parte da EXCECAO documentada a segregacao (ver docstring do modulo e CLAUDE.md):
-    o login do site inteiro passou a depender de admin_usuarios. Abre UMA conexao
-    pra resolver os dois casos:
+    """Gate de sessao do SITE PRINCIPAL (usado por webapp/main.py::_verificar_acesso).
+
+    Ate 2026-09-22 isto protegia QUASE toda rota /api/* (barreira de entrada --
+    ninguem navegava sem se identificar antes). Revertido em 2026-09-23 (pedido
+    explicito do usuario, ver secao "Acesso" no topo de webapp/main.py): a
+    navegacao publica (Consolidado/Insights/Linhas Incentivadas/Busca/Potenciais
+    Linhas/Editais) NAO passa mais por aqui -- so restou UMA chamadora,
+    POST /api/interesse (o proprio gatilho do opt-in, disparado logo apos o
+    modal de identificacao criar sessao). Continua resolvendo os dois casos de
+    sempre:
       1. Nenhuma conta cadastrada ainda (banco novo/dev local sem seed rodado) --
          acesso livre, mesmo espirito de rodar sem SITE_PASSWORD configurada antes.
       2. Pelo menos uma conta existe -- exige sessao valida (qualquer role; so as
