@@ -120,15 +120,19 @@ def _get_pool():
         # SERVIDOR, por sessao (options -c, sem ALTER no Aiven): idle_session_timeout
         # derruba a conexao ociosa apos 60s; check_connection descarta a morta no
         # proximo checkout. max_idle/max_lifetime cobrem a instancia quente.
+        conn_kwargs = {"application_name": "radar-webapp", "connect_timeout": 10}
+        if os.environ.get("DATABASE_URL_POOLER"):
+            # PgBouncer (Aiven connection pool, modo transaction): sem prepared
+            # statements server-side (prepare_threshold=None) e sem "options -c ..."
+            # no startup (PgBouncer rejeita parametros de startup desconhecidos).
+            conn_kwargs["prepare_threshold"] = None
+        else:
+            conn_kwargs["options"] = "-c idle_session_timeout=60000 -c idle_in_transaction_session_timeout=30000"
         _POOL = ConnectionPool(
             database_url, min_size=0, max_size=2, open=True,
             check=ConnectionPool.check_connection,
             timeout=10, max_idle=45, max_lifetime=600, reconnect_timeout=30,
-            kwargs={
-                "application_name": "radar-webapp",
-                "connect_timeout": 10,
-                "options": "-c idle_session_timeout=60000 -c idle_in_transaction_session_timeout=30000",
-            },
+            kwargs=conn_kwargs,
         )
     return _POOL
 
