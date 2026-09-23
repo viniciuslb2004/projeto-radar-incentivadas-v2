@@ -114,9 +114,21 @@ def _get_pool():
         database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
+        # Incidente 2026-09-23 ("remaining connection slots"): 12 conexoes ociosas de
+        # instancias Vercel congeladas ocupavam o teto de 20. Instancia congelada nao
+        # roda o timer de max_idle do pool, entao o corte de verdade e do lado do
+        # SERVIDOR, por sessao (options -c, sem ALTER no Aiven): idle_session_timeout
+        # derruba a conexao ociosa apos 60s; check_connection descarta a morta no
+        # proximo checkout. max_idle/max_lifetime cobrem a instancia quente.
         _POOL = ConnectionPool(
             database_url, min_size=0, max_size=2, open=True,
             check=ConnectionPool.check_connection,
+            timeout=10, max_idle=45, max_lifetime=600, reconnect_timeout=30,
+            kwargs={
+                "application_name": "radar-webapp",
+                "connect_timeout": 10,
+                "options": "-c idle_session_timeout=60000 -c idle_in_transaction_session_timeout=30000",
+            },
         )
     return _POOL
 
@@ -141,7 +153,14 @@ def get_connection(pooled: bool = False):
     free tier, que nao tem endpoint de pooler proprio -- o pool acima e que faz esse
     papel, do lado do cliente)."""
     if pooled:
-        return _PooledConnection(_get_pool(), _get_pool().getconn())
+        pool = _get_pool()
+        try:
+            return _PooledConnection(pool, pool.getconn())
+        except Exception:
+            # retry curto unico: cobre slot liberado segundos depois (idle_session_timeout)
+            import time
+            time.sleep(0.5)
+            return _PooledConnection(pool, pool.getconn())
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
@@ -150,7 +169,7 @@ def get_connection(pooled: bool = False):
             "arquivo .env na raiz do repo; em producao, como variavel de ambiente "
             "real da plataforma de deploy."
         )
-    return psycopg.connect(database_url)
+    return psycopg.connect(database_url, application_name=os.environ.get("RADAR_APP_NAME", "radar-pipeline"), connect_timeout=15)
 
 
 def get_engine():
@@ -178,7 +197,7 @@ def get_engine():
         # SQLAlchemy precisa do dialeto explicito ("+psycopg") para usar o driver
         # psycopg (v3) em vez de tentar psycopg2 (nao instalado neste projeto).
         sqlalchemy_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-        _ENGINE = create_engine(sqlalchemy_url)
+        _ENGINE = create_engine(sqlalchemy_url, connect_args={"application_name": "radar-pipeline"})
     return _ENGINE
 
 
