@@ -29,6 +29,7 @@ from db import (
 import download
 import parse_bndes
 import parse_finep
+import finep_condicoes
 import unify
 import embeddings
 import enrich_cnae
@@ -221,6 +222,15 @@ def run_refresh() -> str:
 
             resultado_unify = unify.build_operations()
             ops_rows = resultado_unify["total"]
+
+            # Best-effort: taxa/indexador/carencia/titulo FINEP vem de outra aba do
+            # mesmo xlsx (ver finep_condicoes.py); falha aqui nao derruba o refresh.
+            try:
+                finep_condicoes.aplicar_condicoes_finep()
+            except Exception:
+                aviso = f"aviso: condicoes FINEP falharam (nao bloqueia o resto do refresh):\n{traceback.format_exc()}"
+                print(aviso)
+                detalhe += aviso + "\n\n"
             pendentes = resultado_unify["pendentes"]
             reclassificados_ids = resultado_unify["reclassificados_ids"]
 

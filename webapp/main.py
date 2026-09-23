@@ -1186,6 +1186,34 @@ def operacao_detalhe(op_id: int, request: Request):
         raw = dict(zip(col_names, raw_row))
         secoes = montar_detalhe_amigavel(raw_table, raw)
 
+        # FINEP: taxa/indexador/carencia/linha/titulo nao vem nas abas de projetos --
+        # vem da aba "Crd - Condicoes Financiamento" e so existem em `operations`
+        # (ver src/finep_condicoes.py). So o que a fonte documenta (NULL fica fora).
+        if raw_table in ("finep_credito_direto_raw", "finep_credito_descentralizado_raw"):
+            cond = cur.execute(
+                "SELECT indexador, taxa_juros, prazo_carencia_meses, prazo_amortizacao_meses, "
+                "instrumento_financeiro, descricao_projeto FROM operations WHERE id = ?", (op_id,)
+            ).fetchone()
+            if cond:
+                idx, taxa, car, amort, linha, desc = cond
+                taxa_txt = None
+                if idx or taxa is not None:
+                    taxa_fmt = f"{taxa:g}".replace(".", ",") + "%" if taxa is not None else None
+                    taxa_txt = " + ".join(v for v in (idx, taxa_fmt) if v)
+                campos_cond = [
+                    {"label": "Taxa final ao cliente", "tipo": "texto", "valor": taxa_txt},
+                    {"label": "Linha do subcrédito", "tipo": "texto", "valor": linha},
+                    {"label": "Carência (meses)", "tipo": "texto", "valor": f"{car:g}" if car is not None else None},
+                    {"label": "Amortização (meses)", "tipo": "texto", "valor": f"{amort:g}" if amort is not None else None},
+                ]
+                campos_cond = [c for c in campos_cond if c["valor"] not in (None, "")]
+                if campos_cond:
+                    secoes.append({"titulo": "Condições de financiamento", "campos": campos_cond})
+                ja_tem_titulo = raw_table == "finep_credito_direto_raw" and raw.get("titulo")
+                if desc and not ja_tem_titulo:
+                    secoes.append({"titulo": "Projeto", "campos": [
+                        {"label": "Título do projeto", "tipo": "texto_longo", "valor": desc}]})
+
         # Identificacao da empresa (item 3.2 do pedido) -- CNAE/razao social oficial/
         # natureza juridica/porte/capital social, ja enriquecidos localmente em
         # cnpj_cnae (ver enrich_cnae.py); so aparece quando o CNPJ ja foi resolvido.
