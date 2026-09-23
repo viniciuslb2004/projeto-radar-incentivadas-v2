@@ -722,6 +722,27 @@ def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: 
         conn.close()
 
 
+@app.get("/api/produtos")
+def produtos_por_agencia(agencia: str = None):
+    """Produtos/instrumentos distintos, opcionalmente restritos a uma agencia --
+    usado pela cascata Entidade -> Tipo de linha da aba Busca (item 7 do pedido de
+    melhorias, 2026-09-23, ver webapp/static/js/busca.js::_repopularProdutoCascataBusca),
+    mesmo padrao ja usado por /api/subsetores?setor=X na cascata Setor -> Subsetor
+    do Consolidado. Sem `agencia` (ou "Todas"), devolve a lista completa (mesma de
+    /api/filtros::produtos)."""
+    where, params = _filters_clause(agencia)
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"SELECT DISTINCT produto FROM operations {where} {'AND' if where else 'WHERE'} produto IS NOT NULL ORDER BY produto",
+            params,
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
 @app.get("/api/uf")
 def uf_breakdown(
     agencia: str = None, setor: str = None, subsetor: str = None,
@@ -1177,14 +1198,31 @@ if not MOTOR_BUSCA_IA:
     @app.get("/api/busca")
     def busca(
         q: str = Query(..., min_length=3), agencia: str = None,
-        valor_minimo: float = None, regiao: str = None, produto: str = None, porte: str = None,
-        setor: str = None, uf: str = None,
+        valor_minimo: float = None, valor_maximo: float = None, regiao: str = None, produto: str = None,
+        porte: str = None, setor: str = None, uf: str = None,
     ):
         try:
-            return buscar_texto(
+            resultado = buscar_texto(
                 q, agencia=agencia or None, valor_minimo=valor_minimo, regiao=regiao or None,
                 produto=produto or None, porte=porte or None, setor=setor or None, uf=uf or None,
             )
+            # valor_maximo (item 6, 2026-09-23): filtro estruturado AND, mesmo espirito
+            # de valor_minimo -- mas aplicado AQUI (pos-processamento sobre os
+            # candidatos ja devolvidos por buscar_texto), nao dentro de
+            # src/search_fts.py (motor/ranking de texto, fora do escopo desta
+            # mudanca). buscar_texto ja capa em `limite` (200 por padrao) candidatos
+            # ANTES deste filtro rodar -- uma query com poucos resultados abaixo do
+            # teto de valor pode, em tese, perder candidatos que ficaram de fora dos
+            # 200 originais; aceitavel pro volume tipico de uma busca (ver
+            # comentario de paginacao em busca.js), mas documentado aqui pra quem
+            # for mexer de novo.
+            if valor_maximo is not None and isinstance(resultado, dict) and resultado.get("resultados"):
+                resultado["resultados"] = [
+                    r for r in resultado["resultados"]
+                    if r.get("valor_contratado") is not None and r["valor_contratado"] <= valor_maximo
+                ]
+                resultado["n_resultados"] = len(resultado["resultados"])
+            return resultado
         except Exception as e:
             logger.exception("motor de busca indisponivel")
             return {"erro": f"motor de busca indisponivel no momento: {e}"}

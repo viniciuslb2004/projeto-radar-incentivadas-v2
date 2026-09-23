@@ -945,11 +945,20 @@ async function _initFiltersAndTabsImpl() {
     if (paramsIniciais.has("ano_ini")) document.getElementById("f-ano-ini").value = paramsIniciais.get("ano_ini");
     if (paramsIniciais.has("mes_fim")) document.getElementById("f-mes-fim").value = paramsIniciais.get("mes_fim");
     if (paramsIniciais.has("ano_fim")) document.getElementById("f-ano-fim").value = paramsIniciais.get("ano_fim");
+    // Um link salvo/antigo pode trazer um mes_fim/ano_fim alem do teto real da base
+    // (ver _aplicarTetoMesFim acima) -- reaplica o teto ja aqui, antes do primeiro
+    // fetch de cada aba, pra nunca aplicar um filtro "fim" alem do dado disponivel.
+    _aplicarTetoMesFim();
   }
 
   const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
   ["f-agencia", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
     document.getElementById(id).addEventListener("change", async () => {
+      // Teto dinamico (item 5): #f-ano-fim mudar pode tornar meses ja desabilitados
+      // validos de novo (ano anterior ao mais recente) ou invalidar o mes atual (ano
+      // mais recente da base) -- reaplica ANTES de validarIntervaloDatas, que compara
+      // #f-mes-fim/#f-ano-fim ja coerentes com o teto.
+      if (id === "f-ano-fim") _aplicarTetoMesFim();
       if (CAMPOS_DATA.includes(id)) validarIntervaloDatas(id);
       // Cascata Setor -> Subsetor (ver consolidado.js::_repopularSubsetorCascata):
       // quando o Setor muda, o Subsetor precisa ser repopulado/resetado ANTES do
@@ -980,6 +989,33 @@ function _preencherSelectFiltro(id, values) {
   (values || []).forEach((v) => sel.appendChild(new Option(v, v)));
 }
 
+// Teto dinamico do filtro de periodo (item 5 do pedido de melhorias, 2026-09-23):
+// {ano, mes} do ULTIMO mes com dado real em operations.data_contratacao (ver
+// filtros.data_max, /api/filtros -- MAX(data_contratacao) calculado no banco a
+// cada chamada, nunca hardcoded aqui). Antes disso #f-mes-fim sempre oferecia os
+// 12 meses do ano escolhido em #f-ano-fim, mesmo quando o ano mais recente da
+// base (#f-ano-fim so lista anos com pelo menos 1 operacao, ver `anos` abaixo)
+// so tinha dado ate um mes especifico -- ex: base com dado ate Jun/2026 deixava
+// escolher Dez/2026, um recorte que nunca devolveria a operacao nenhuma alem das
+// ja existentes ate Jun. `_aplicarTetoMesFim` (abaixo) desabilita as opcoes de
+// mes POSTERIORES ao ultimo real, so quando o ano escolhido em #f-ano-fim e' o
+// ano mais recente da base (anos anteriores tem o ano inteiro coberto).
+let _dataMaxDisponivel = null;
+
+function _aplicarTetoMesFim() {
+  const anoFimEl = document.getElementById("f-ano-fim");
+  const mesFimEl = document.getElementById("f-mes-fim");
+  if (!anoFimEl || !mesFimEl || !_dataMaxDisponivel) return;
+  const anoFimSelecionado = Number(anoFimEl.value);
+  const ehAnoMaisRecente = anoFimSelecionado === _dataMaxDisponivel.ano;
+  Array.from(mesFimEl.options).forEach((opt) => {
+    opt.disabled = ehAnoMaisRecente && Number(opt.value) > _dataMaxDisponivel.mes;
+  });
+  if (ehAnoMaisRecente && Number(mesFimEl.value) > _dataMaxDisponivel.mes) {
+    mesFimEl.value = _dataMaxDisponivel.mes;
+  }
+}
+
 // Selects de ano (sem opcao fixa no HTML, ver index.html -- <select
 // id="f-ano-ini"></select> vazio) sao sempre RECRIADOS do zero; os de MES
 // (Jan..Dez) so populam uma vez (guardado pelo proprio `options.length`).
@@ -1005,6 +1041,7 @@ function _preencherAnosEMeses(filtros) {
 
   const dataMin = filtros.data_min ? new Date(filtros.data_min) : null;
   const dataMax = filtros.data_max ? new Date(filtros.data_max) : null;
+  _dataMaxDisponivel = dataMax ? { ano: dataMax.getUTCFullYear(), mes: dataMax.getUTCMonth() + 1 } : null;
   if (dataMin) {
     mesIni.value = dataMin.getUTCMonth() + 1;
     anoIni.value = dataMin.getUTCFullYear();
@@ -1017,6 +1054,7 @@ function _preencherAnosEMeses(filtros) {
   } else if (anos.length) {
     anoFim.value = anos[anos.length - 1];
   }
+  _aplicarTetoMesFim();
 }
 
 // Popula o filterbar compartilhado (Consolidado/Tendencias) a partir da

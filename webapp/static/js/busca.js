@@ -296,12 +296,19 @@ function _configurarExportarBuscaBtn(query) {
 }
 
 function _filtrosBusca() {
-  // Valor minimo e digitado em R$ MILHOES na UI (ex: "15" = R$15.000.000) -- mais
-  // facil de digitar do que o valor cheio; a API continua recebendo o valor real
-  // (em reais), so a multiplicacao por 1e6 acontece aqui.
+  // Valor minimo/maximo (item 6) sao digitados em R$ MILHOES na UI (ex: "15" =
+  // R$15.000.000) -- mais facil de digitar do que o valor cheio; a API continua
+  // recebendo o valor real (em reais), so a multiplicacao por 1e6 acontece aqui.
+  // valor_maximo: filtro estruturado (AND, nunca entra no ranking de texto -- mesma
+  // regra ja aplicada a valor_minimo/uf/etc, ver docstring de buscar_texto em
+  // search_fts.py), aplicado no backend (ver /api/busca em webapp/main.py) DEPOIS
+  // do motor de busca devolver os candidatos -- src/search_fts.py (motor/ranking)
+  // fica fora do escopo desta mudanca, so o parametro novo trafega ate o backend.
   const valorMinimoMilhoes = document.getElementById("bu-f-valor-minimo").value;
+  const valorMaximoMilhoes = document.getElementById("bu-f-valor-maximo").value;
   const filtros = {
     valor_minimo: valorMinimoMilhoes ? Number(valorMinimoMilhoes) * 1e6 : "",
+    valor_maximo: valorMaximoMilhoes ? Number(valorMaximoMilhoes) * 1e6 : "",
     regiao: document.getElementById("bu-f-regiao").value,
     porte: document.getElementById("bu-f-porte").value,
     setor: document.getElementById("bu-f-setor").value,
@@ -320,6 +327,7 @@ function _sincronizarFiltrosBuscaNaURL(q) {
   const params = {
     q: q || "",
     valor_minimo: document.getElementById("bu-f-valor-minimo").value,
+    valor_maximo: document.getElementById("bu-f-valor-maximo").value,
     regiao: document.getElementById("bu-f-regiao").value,
     porte: document.getElementById("bu-f-porte").value,
     setor: document.getElementById("bu-f-setor").value,
@@ -334,6 +342,7 @@ function _aplicarFiltrosBuscaDaURL() {
   const params = paramsDaURL();
   if (params.has("agencia")) document.getElementById("bu-f-agencia").value = params.get("agencia");
   if (params.has("valor_minimo")) document.getElementById("bu-f-valor-minimo").value = params.get("valor_minimo");
+  if (params.has("valor_maximo")) document.getElementById("bu-f-valor-maximo").value = params.get("valor_maximo");
   if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
   if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
   if (params.has("porte")) document.getElementById("bu-f-porte").value = params.get("porte");
@@ -484,12 +493,64 @@ document.addEventListener("DOMContentLoaded", async () => {
   // a aba ativa na URL e de fato a Busca (ver _viewInicialDaURL).
   if (_viewInicialDaURL() === "busca") _aplicarFiltrosBuscaDaURL();
 
+  // Cascata Entidade -> Tipo de linha (item 7, mesmo espirito de Setor->Subsetor
+  // no Consolidado -- ver consolidado.js::_repopularSubsetorCascata). Narrowa
+  // #bu-f-produto pra so os produtos daquela agencia, preservando o valor ja
+  // restaurado da URL (se ainda for compativel).
+  await _repopularProdutoCascataBusca(true);
+
   // Mudar um filtro re-roda a busca atual (se ja tiver uma) -- filtro sem busca
   // nenhuma feita ainda nao faz nada sozinho, precisa de uma query pra filtrar.
-  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-regiao", "bu-f-produto", "bu-f-porte", "bu-f-setor", "bu-f-uf"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", () => {
+  ["bu-f-agencia", "bu-f-valor-minimo", "bu-f-valor-maximo", "bu-f-regiao", "bu-f-produto", "bu-f-porte", "bu-f-setor", "bu-f-uf"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", async () => {
+      // Entidade mudou: repopula/reseta Tipo de linha ANTES de rodar a busca de novo,
+      // senao a busca dispararia por uma fracao de segundo com um produto de outra
+      // agencia ainda selecionado (mesma ordem ja usada pra Setor->Subsetor).
+      if (id === "bu-f-agencia") await _repopularProdutoCascataBusca(false);
       if (input.value.trim().length >= 3) runBusca(input.value.trim());
       else _sincronizarFiltrosBuscaNaURL(input.value.trim());
     });
   });
 });
+
+// ---- Cascata Entidade -> Tipo de linha (#bu-f-agencia -> #bu-f-produto) ----
+// Escolher uma Entidade (BNDES/FINEP/...) restringe as opcoes de #bu-f-produto
+// aos produtos/instrumentos daquela agencia (via /api/produtos?agencia=X, novo --
+// ver webapp/main.py, mesmo padrao de /api/subsetores?setor=X ja usado no
+// Consolidado). Quando a Entidade muda pra uma que nao tem mais o produto
+// selecionado, o produto e resetado pra "Todas" -- nunca deixa um par
+// Entidade/Produto incompativel aplicado em silencio.
+async function _repopularProdutoCascataBusca(preservarValorAtual) {
+  const agenciaSel = document.getElementById("bu-f-agencia");
+  const produtoSel = document.getElementById("bu-f-produto");
+  if (!agenciaSel || !produtoSel) return;
+  const agencia = agenciaSel.value;
+  const valorAnterior = produtoSel.value;
+
+  let produtos;
+  if (!agencia) {
+    // Sem entidade escolhida: volta pra lista completa (todos os produtos, de
+    // qualquer agencia) -- mesma fonte usada na populacao inicial do filterbar
+    // (_fetchFiltrosCompartilhado ja cacheia a promise, entao isso nao bate rede
+    // de novo depois da carga inicial).
+    let filtros;
+    try {
+      filtros = await _fetchFiltrosCompartilhado();
+    } catch (e) {
+      filtros = {};
+    }
+    produtos = (filtros.produtos || []).filter(Boolean);
+  } else {
+    let data;
+    try {
+      data = await fetchJSON("/api/produtos?" + qs({ agencia }));
+    } catch (e) {
+      data = [];
+    }
+    produtos = Array.isArray(data) ? data.filter(Boolean) : [];
+  }
+
+  _limparOpcoesBuscaFiltro("bu-f-produto");
+  produtos.forEach((v) => produtoSel.appendChild(new Option(v, v)));
+  produtoSel.value = (preservarValorAtual && produtos.includes(valorAnterior)) ? valorAnterior : "";
+}
