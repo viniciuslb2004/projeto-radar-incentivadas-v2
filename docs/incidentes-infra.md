@@ -158,3 +158,6 @@
   uma rota pontual (sem UI): mintar um token direto (`webapp.admin.auth.criar_sessao(conn,
   usuario_id)`) e mandar via `curl -b "admin_session=<token>"` — mais simples que navegador
   quando não precisa ver a tela renderizada.
+
+
+- **2026-09-23**: Aiven migrado in-place para GCP us-west2 (DNS do mesmo host trocou de 178.128.70.164/DO para 34.102.80.210/GCP em ~8 min). Teto subiu só de 20→25 conexões — regra de pool `max_size=2` mantida.

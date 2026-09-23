@@ -51,7 +51,7 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
   literal numa query (`LIKE`) precisa virar `%%`.
 - **Nunca inventar dado**: valor/taxa/prazo/indexador/carência não documentado na fonte oficial
   fica `NULL`/`NAO_INFORMADO`, nunca estimado/inferido (catálogo de Linhas Incentivadas).
-- **Rotas da webapp usam `get_connection(pooled=True)`** (pool `psycopg_pool`, `max_size=2`).
+- **Rotas da webapp usam `get_connection(pooled=True)`** (pool `psycopg_pool`, `max_size=2`; mantido após migração 2026-09-23 pro Aiven GCP us-west2: `max_connections` foi só de 20→25, 22 úteis → ~11 instâncias Vercel de margem; subir pra 3 cairia pra ~7 sem ganho medido).
   Scripts de pipeline (rodados só via GitHub Actions) usam `get_connection()` sem pool. Não
   inverter — ver `docs/incidentes-infra.md` pro histórico de esgotamento de conexão no Aiven.
 - **Mudança de schema/índice contra o Aiven de produção exige confirmação do usuário antes**

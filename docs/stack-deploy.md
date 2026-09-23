@@ -66,3 +66,8 @@
   Admin" abaixo): sem nenhuma linha em `admin_usuarios` (banco novo, `webapp/admin/seed.py`
   nunca rodado), o servidor local roda sem exigir login — assim que a primeira conta existir
   (local ou em produção), toda rota `/api/*` passa a exigir sessão válida.
+
+
+## 2026-09-23 — Aiven migrado para Google Cloud us-west2 (Los Angeles)
+
+Migração in-place (mesmo host/porta, `DATABASE_URL` inalterada em .env/Vercel/GitHub). Antes: DigitalOcean Santa Clara (free tier, 20 conexões). Agora: GCP us-west2, plano pago, PostgreSQL 18.6, `max_connections=25` (3 reservadas superuser), 505 MB, dados e 72 índices íntegros, `ALTER ROLE avnadmin idle_session_timeout=5min` preservado. Vercel continua em `sfo1` (LA ~10ms de SFO). Pool mantido `max_size=2`. Se o plano oferecer Connection pools (PgBouncer): console Aiven → serviço → Connection pools → criar pool modo *transaction* em `defaultdb`/avnadmin → copiar a URI para `DATABASE_URL_POOLER` (só no Vercel, Production) e redeploy; pipeline continua na URL direta.
