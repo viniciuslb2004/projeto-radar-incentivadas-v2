@@ -8,8 +8,27 @@
 
 let potenciaisOpcoesCarregadas = false;
 
+// Campo "UF da empresa" (gap-fix 2026-09-23 -- item 3 do pedido: filtro
+// geografico pra diferenciar linhas de bancos regionais como BASA/BNB/
+// Desenvolve SP das linhas nacionais BNDES/FINEP). Escopo desta tarefa e SO
+// webapp/potenciais.py + este arquivo -- index.html pertence a outra area de
+// edicao, entao o campo e criado via DOM em vez de editar o HTML estatico
+// (mesmo container .filterbar que ja tem Setor/Subsetor/Porte/Volume/Uso).
+function _garantirCampoUf() {
+  if (document.getElementById("pt-f-uf")) return;
+  const setorWrapper = document.getElementById("pt-f-setor")?.closest("div");
+  const filterbar = setorWrapper?.parentElement;
+  if (!filterbar) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML =
+    '<label>UF da empresa <span class="hint">(opcional, prioriza/filtra linhas regionais como BASA, BNB e Desenvolve SP)</span></label>' +
+    '<select id="pt-f-uf"><option value="">Todo o Brasil</option></select>';
+  filterbar.appendChild(wrapper);
+}
+
 async function _initPotenciaisOpcoes() {
   if (potenciaisOpcoesCarregadas) return;
+  _garantirCampoUf();
   let opcoes;
   try {
     opcoes = await fetchJSON("/api/potenciais/opcoes");
@@ -30,6 +49,7 @@ async function _initPotenciaisOpcoes() {
   fill("pt-f-subsetor", opcoes.subsetores || []);
   fill("pt-f-porte", opcoes.portes || []);
   fill("pt-f-uso", opcoes.usos || []);
+  fill("pt-f-uf", opcoes.ufs || []);
   potenciaisOpcoesCarregadas = true;
 }
 
@@ -48,6 +68,9 @@ function _potenciaisFormAtual() {
     // continuam em reais cheios, sem nenhuma mudanca de schema/contrato.
     volume: document.getElementById("pt-f-volume").value,
     uso: document.getElementById("pt-f-uso").value,
+    // UF da empresa (gap-fix 2026-09-23): campo criado via _garantirCampoUf,
+    // pode nao existir ainda na primeira renderizacao -- optional chaining.
+    uf: document.getElementById("pt-f-uf")?.value || "",
   };
 }
 
@@ -186,6 +209,12 @@ async function _buscarPotenciais() {
   if (form.porte) params.porte = form.porte;
   if (form.volume) params.volume = form.volume;
   if (form.uso) params.uso = form.uso;
+  if (form.uf) params.uf = form.uf;
+  // Subsetor (gap-fix 2026-09-23): so entra como sinal ADICIONAL de correlacao
+  // textual dentro do criterio de setor (ver webapp/potenciais.py::
+  // _correlacao_textual_setor) -- nunca um filtro estrutural novo, continua
+  // sem contar pro "informe ao menos um critério" do backend.
+  if (form.subsetor) params.subsetor = form.subsetor;
 
   let data;
   try {

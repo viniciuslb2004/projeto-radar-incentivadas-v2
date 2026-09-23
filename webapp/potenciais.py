@@ -23,6 +23,9 @@ os filtros porte/valor_min/valor_max/produto, ver webapp/main.py::
 _filters_clause), reaproveitando o motor de filtros que a aba Consolidado/Busca
 ja usa em vez de duplicar logica de query aqui.
 """
+import re
+import unicodedata
+
 from fastapi import APIRouter
 
 from db import get_connection
@@ -31,6 +34,14 @@ router = APIRouter()
 
 NAO_INFORMADO = "Não informado pela fonte"
 NAO_INFORMADO_GRUPO = "Não informado"
+
+
+def _sem_acento(texto: str) -> str:
+    """Remove acentos (mesma logica de src/linhas_incentivadas.py::_sem_acento,
+    reimplementada aqui pra manter este pacote ISOLADO -- ver docstring do
+    modulo). So usada em comparacao de texto livre (correlacao setorial e
+    regiao_elegivel), nunca em dado gravado/exibido."""
+    return "".join(c for c in unicodedata.normalize("NFKD", texto or "") if not unicodedata.combining(c))
 
 # Porte do INPUT do usuario (o porte/faturamento da PROPRIA empresa dele, item 3
 # do pedido) usa o MESMO vocabulario canonico ja usado em todo o resto do site
@@ -58,7 +69,142 @@ _COLS_CANDIDATO = [
     "percentual_financiavel", "taxa_completa", "indexador", "spread",
     "prazo_total", "carencia", "valor_minimo", "valor_maximo",
     "agente_financeiro", "url_oficial",
+    # Adicionadas pro sinal de correlacao textual + filtro geografico (gap-fix
+    # 2026-09-23, ver comentarios em _correlacao_textual/_avaliar_regiao_elegivel
+    # abaixo) -- setores_elegiveis e o texto LIVRE original (distinto de
+    # setor_padronizado, a categorizacao em 4 baldes), regiao_elegivel idem.
+    "setores_elegiveis", "regiao_elegivel",
 ]
+
+# Lista estatica das 27 UFs -- nao existe coluna de UF em linhas_incentivadas
+# (o campo e regiao_elegivel, texto livre da fonte oficial, ver
+# _avaliar_regiao_elegivel), entao as opcoes do formulario sao so a lista fixa
+# de UFs do Brasil (mesmo padrao ja usado por _ORDEM_PORTE_INPUT: enumeracao
+# fechada que nao depende de nenhuma tabela).
+_UFS_BRASIL = [
+    "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
+    "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
+    "SP", "SE", "TO",
+]
+
+_UF_NOME = {
+    "AC": "acre", "AL": "alagoas", "AP": "amapa", "AM": "amazonas", "BA": "bahia",
+    "CE": "ceara", "DF": "distrito federal", "ES": "espirito santo", "GO": "goias",
+    "MA": "maranhao", "MT": "mato grosso", "MS": "mato grosso do sul",
+    "MG": "minas gerais", "PA": "para", "PB": "paraiba", "PR": "parana",
+    "PE": "pernambuco", "PI": "piaui", "RJ": "rio de janeiro",
+    "RN": "rio grande do norte", "RS": "rio grande do sul", "RO": "rondonia",
+    "RR": "roraima", "SC": "santa catarina", "SP": "sao paulo", "SE": "sergipe",
+    "TO": "tocantins",
+}
+
+# Grupos regionais usados quando regiao_elegivel cita a area de atuacao de um
+# fundo/orgao regional em vez de listar UFs (ex: "SUDAM"/"Amazonia Legal",
+# "Sudene"/"Nordeste", "Centro-Oeste") -- ver dados reais em
+# src/linhas_incentivadas.py (BASA/BNB/FCO). Definicao oficial de cada area
+# (nao inventada): Amazonia Legal = AC/AP/AM/MA/MT/PA/RO/RR/TO; area da Sudene
+# = Nordeste (9 estados) + partes de MG/ES (aqui tratado no nivel de UF
+# inteira, sem como recortar dentro do estado); Centro-Oeste = DF/GO/MT/MS.
+_UFS_NORDESTE = {"AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"}
+_UFS_AMAZONIA_LEGAL = {"AC", "AP", "AM", "MA", "MT", "PA", "RO", "RR", "TO"}
+_UFS_CENTRO_OESTE = {"DF", "GO", "MT", "MS"}
+_UFS_SUL = {"PR", "SC", "RS"}
+_UFS_SUDESTE = {"SP", "RJ", "MG", "ES"}
+
+
+def _avaliar_regiao_elegivel(regiao_elegivel: str, uf: str) -> str:
+    """Compara o texto LIVRE de regiao_elegivel (fonte oficial, nunca inventado)
+    contra a UF informada pelo usuario. Retorna 'nacional' (linha cobre o Brasil
+    inteiro), 'compativel' (linha regional cuja area cobre a UF), 'incompativel'
+    (linha regional que claramente NAO cobre a UF -- unico caso que justifica
+    EXCLUIR a linha do resultado, ver chamador) ou 'neutro' (nao informado pela
+    fonte, ou texto que este parser nao reconhece -- nunca exclui por incerteza
+    de parsing, so trata como sem sinal, igual as demais "Não informado pela
+    fonte" do resto do arquivo)."""
+    if not regiao_elegivel or regiao_elegivel == NAO_INFORMADO:
+        return "neutro"
+    texto = _sem_acento(regiao_elegivel).lower()
+    if "nacional" in texto or "brasil" in texto:
+        return "nacional"
+    if "sao paulo" in texto:
+        return "compativel" if uf == "SP" else "incompativel"
+    if "sudam" in texto or "amazonia legal" in texto or "desenvolvimento da amazonia" in texto:
+        return "compativel" if uf in _UFS_AMAZONIA_LEGAL else "incompativel"
+    if "sudene" in texto or "nordeste" in texto:
+        cobre = set(_UFS_NORDESTE)
+        if "minas gerais" in texto:
+            cobre.add("MG")
+        if "espirito santo" in texto:
+            cobre.add("ES")
+        return "compativel" if uf in cobre else "incompativel"
+    if "centro-oeste" in texto or "centro oeste" in texto:
+        return "compativel" if uf in _UFS_CENTRO_OESTE else "incompativel"
+    if re.search(r"\bsul\b", texto) and "sudeste" not in texto:
+        return "compativel" if uf in _UFS_SUL else "incompativel"
+    if "sudeste" in texto:
+        return "compativel" if uf in _UFS_SUDESTE else "incompativel"
+    nome_uf = _UF_NOME.get(uf)
+    if nome_uf and nome_uf in texto:
+        return "compativel"
+    return "neutro"
+
+
+# Termos tipicos de cada setor_padronizado (as 4 categorias reais, ver
+# src/sector_taxonomy.py) -- usados SO como sinal de correlacao textual quando
+# a linha nao tem setor_padronizado formal (NAO_INFORMADO), pra distinguir uma
+# linha claramente FORA de escopo (ex: "Finem Segurança Pública" pra um pedido
+# de Agropecuária) de uma linha genuinamente generica/aberta a qualquer setor
+# (ex: BNDES Automático). NUNCA usado pra sobrepor um setor_padronizado real
+# (dado curado bate mais do que um keyword match). Termos sem acento, minusculo,
+# como substrings (cobre singular/plural/genero: "agric" cobre
+# agricola/agricultura/agrícolas etc.).
+_CORRELACAO_SETOR_TERMOS = {
+    "AGROPECUÁRIA": (
+        "agro", "agric", "rural", "pecuar", "pesca", "aquicult", "florest",
+        "silvicult", "grao", "lavoura", "fazenda",
+    ),
+    "INDUSTRIA": (
+        "industr", "manufatur", "fabril", "metalurg", "quimic", "textil",
+        "siderurg", "petroquimic",
+    ),
+    "INFRAESTRUTURA": (
+        "infraestrutur", "energia", "eletric", "rodovia", "saneamento",
+        "transporte", "logistic", "portuari", "ferrovi", "telecom", "hidrovi",
+        "aeroportu", "mobilidade urbana",
+    ),
+    "COMERCIO/SERVICOS": (
+        "comercio", "servic", "varejo", "turismo", "hotel", "franquia", "franque",
+    ),
+}
+
+_STOPWORDS_SUBSETOR = {"de", "da", "do", "das", "dos", "e", "em", "a", "o"}
+
+
+def _termos_subsetor(subsetor: str):
+    """Deriva termos de correlacao a partir do texto do PROPRIO subsetor
+    informado (em vez de mais um dicionario fixo -- subsetor tem dezenas de
+    valores possiveis em operations.subsetor_bndes, curar um dicionario por
+    valor nao escala). Ex: subsetor='ENERGIA ELÉTRICA' -> ('energia', 'eletric')."""
+    if not subsetor:
+        return ()
+    texto = _sem_acento(subsetor).lower()
+    palavras = re.findall(r"[a-z]{4,}", texto)
+    return tuple(p for p in palavras if p not in _STOPWORDS_SUBSETOR)
+
+
+def _correlacao_textual_setor(linha: dict, setor: str, subsetor: str) -> bool:
+    """Sinal de correlacao textual: procura termos tipicos do setor (+ subsetor,
+    se informado) no CONTEUDO REAL da linha -- nome_oficial, destinacao,
+    criterios_elegibilidade, setores_elegiveis (nunca um campo inventado). So
+    chamada quando setor_padronizado da linha e NAO_INFORMADO (ver
+    _pontuar_linha) -- uma linha com setor_padronizado formal ja pontua pelo
+    dado curado, nao pelo texto."""
+    texto = _sem_acento(" ".join(filter(None, [
+        linha.get("nome_oficial"), linha.get("destinacao"),
+        linha.get("criterios_elegibilidade"), linha.get("setores_elegiveis"),
+    ]))).lower()
+    termos = list(_CORRELACAO_SETOR_TERMOS.get(setor, ())) + list(_termos_subsetor(subsetor))
+    return any(t in texto for t in termos)
 
 
 @router.get("/opcoes")
@@ -103,12 +249,16 @@ def potenciais_opcoes():
             "SELECT DISTINCT subsetor_bndes FROM operations WHERE subsetor_bndes IS NOT NULL ORDER BY subsetor_bndes"
         ).fetchall()]
 
-        return {"setores": setores, "portes": portes, "usos": usos, "subsetores": subsetores}
+        return {
+            "setores": setores, "portes": portes, "usos": usos, "subsetores": subsetores,
+            "ufs": list(_UFS_BRASIL),
+        }
     finally:
         conn.close()
 
 
-def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str):
+def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str,
+                    uf: str = None, subsetor: str = None):
     """Score determinístico 0-100 por quantos criterios (dos que o usuario de fato
     informou) a linha atende, cada um com peso fixo, RENORMALIZADO pela soma dos
     pesos dos criterios informados (um usuario que so preenche 1 campo nao deveria
@@ -116,7 +266,31 @@ def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str)
     informado pela fonte"/"Não informado" na linha nunca zera o criterio (nao ha
     como confirmar OU descartar compatibilidade), mas tambem nunca vale igual a
     um match confirmado -- credito parcial, sempre com o motivo deixando claro
-    que e uma suposicao, nao uma confirmacao."""
+    que e uma suposicao, nao uma confirmacao.
+
+    Hierarquia de prioridade (gap-fix 2026-09-23, nao mexer): setor(peso 30) >
+    porte(25) = volume(25) > uso(20) > regiao/UF(15) -- geografia e SEMPRE o
+    menor peso dos criterios estruturados, nunca reordena a aderencia principal.
+    Correlacao textual (setor/subsetor pelo NOME/CONTEUDO da linha) NAO e um
+    criterio novo -- e um refinamento de QUANTO credito parcial o proprio
+    criterio de setor da (pontos entre 6 e 22, sempre abaixo dos 30 de um match
+    real), pra parar de dar o mesmo credito parcial generico pra uma linha
+    aberta a todos os setores (ex: BNDES Automático) e uma linha claramente FORA
+    de escopo mas sem setor_padronizado curado (ex: Finem Segurança Pública).
+
+    Geografia (UF) e o UNICO sinal novo que pode EXCLUIR a linha inteira (nunca
+    so penalizar) -- so quando regiao_elegivel descreve uma area regional
+    especifica que claramente NAO cobre a UF informada (ex: linha exclusiva do
+    BASA/Amazônia Legal pedida por uma empresa de SP). Excluir aqui e
+    equivalente a nao entrar no ranking, mesmo tratamento que peso_total==0 mais
+    abaixo -- por isso a checagem fica logo no topo da funcao."""
+    if uf:
+        avaliacao_regiao = _avaliar_regiao_elegivel(linha.get("regiao_elegivel"), uf)
+        if avaliacao_regiao == "incompativel":
+            return None
+    else:
+        avaliacao_regiao = None
+
     pontos = 0.0
     peso_total = 0.0
     motivos = []
@@ -129,8 +303,17 @@ def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str)
             pontos += 30
             motivos.append(f"Setor do projeto compatível ({setor})")
         elif linha.get("setor_padronizado") == NAO_INFORMADO:
-            pontos += 12
-            motivos.append("Setor elegível não informado pela fonte oficial (não descarta compatibilidade)")
+            setores_elegiveis_txt = _sem_acento(linha.get("setores_elegiveis") or "").lower()
+            if "todos os setores" in setores_elegiveis_txt:
+                pontos += 12
+                motivos.append("Linha genérica, aberta a todos os setores (não privilegia nem descarta compatibilidade)")
+            elif _correlacao_textual_setor(linha, setor, subsetor):
+                pontos += 22
+                alvo = f"{setor}/{subsetor}" if subsetor else setor
+                motivos.append(f"Setor elegível não informado formalmente, mas nome/destinação da linha têm forte correlação textual com {alvo}")
+            else:
+                pontos += 6
+                motivos.append(f"Setor elegível não informado pela fonte oficial e nome/destinação da linha não indicam relação clara com {setor} (compatibilidade incerta)")
         else:
             motivos.append(f"Setor da linha ({linha.get('setor_padronizado') or 'Não informado'}) diferente do informado")
 
@@ -181,6 +364,19 @@ def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str)
             motivos.append("Destinação da linha não claramente classificada na fonte")
         else:
             motivos.append(f"Destinação típica da linha ({grupo}) diferente do uso informado")
+
+    if uf:
+        criterios_avaliados += 1
+        peso_total += 15
+        if avaliacao_regiao == "nacional":
+            pontos += 15
+            motivos.append("Linha de abrangência nacional, atende qualquer UF")
+        elif avaliacao_regiao == "compativel":
+            pontos += 15
+            motivos.append(f"UF do projeto ({uf}) está na área de atuação regional da linha")
+        else:  # "neutro" -- "incompativel" ja saiu por return None no topo da funcao
+            pontos += 6
+            motivos.append("Área de atuação regional não informada claramente pela fonte (não descarta compatibilidade)")
 
     if peso_total == 0:
         return None
@@ -268,15 +464,25 @@ def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
 @router.get("/buscar")
 def potenciais_buscar(
     setor: str = None, porte: str = None, volume: float = None, uso: str = None,
+    uf: str = None, subsetor: str = None,
     limit: int = 20,
 ):
     """Motor de recomendacao: filtro estruturado (setor, quando informado, ja
     reduz o SELECT pra so a categoria escolhida + linhas com setor não informado
     -- essas ultimas continuam candidatas, so com credito parcial no score, ver
-    _pontuar_linha) + score determinístico em Python sobre os candidatos."""
+    _pontuar_linha) + score determinístico em Python sobre os candidatos.
+
+    `uf`/`subsetor` sao OPCIONAIS e refinam so dentro do criterio de
+    setor/elegibilidade (correlacao textual + geografia, gap-fix 2026-09-23,
+    ver docstring de _pontuar_linha) -- nunca contam pro "informe ao menos um
+    critério" abaixo, que continua exigindo setor/porte/volume/uso (a hierarquia
+    de aderencia principal nao muda)."""
     limit = max(1, min(limit, 100))
     if not any([setor, porte, volume is not None, uso]):
         return {"erro": "informe ao menos um critério (setor, porte, volume ou uso dos recursos)"}
+    uf = (uf or "").strip().upper() or None
+    if uf and uf not in _UF_NOME:
+        return {"erro": f"UF inválida: {uf}"}
 
     conn = get_connection(pooled=True)
     try:
@@ -292,7 +498,7 @@ def potenciais_buscar(
 
         resultados = []
         for linha in candidatos:
-            pontuacao = _pontuar_linha(linha, setor, porte, volume, uso)
+            pontuacao = _pontuar_linha(linha, setor, porte, volume, uso, uf=uf, subsetor=subsetor)
             if pontuacao is None:
                 continue
             score_pct, motivos, criterios_avaliados = pontuacao
@@ -315,6 +521,7 @@ def potenciais_buscar(
                 "setor_padronizado": linha["setor_padronizado"],
                 "porte_grupo": linha["porte_grupo"],
                 "destinacao_grupo": linha["destinacao_grupo"],
+                "regiao_elegivel": linha["regiao_elegivel"],
                 "agente_financeiro": linha["agente_financeiro"],
                 "url_oficial": linha["url_oficial"],
                 "score_pct": score_pct,
@@ -357,6 +564,7 @@ def potenciais_buscar(
             "criterios_informados": {
                 "setor": setor or None, "porte": porte or None,
                 "volume": volume, "uso": uso or None,
+                "uf": uf or None, "subsetor": subsetor or None,
             },
             "total_candidatos": len(candidatos),
             "resultados": resultados[:limit],
