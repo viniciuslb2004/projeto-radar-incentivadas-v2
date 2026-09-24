@@ -59,11 +59,14 @@ async function _carregarAnoMesMax() {
 function _rotuloPeriodoSerie(granularidade, ano, periodo, anoMesMax) {
   if (granularidade === "mensal") return `${ano}-${String(periodo).padStart(2, "0")}`;
   if (granularidade === "semestral") return `${ano}-S${periodo}`;
-  if (granularidade === "anual") {
-    const parcial = anoMesMax && ano === anoMesMax.ano && anoMesMax.mes < 12;
-    return parcial ? `${ano} (YTD até ${MESES[anoMesMax.mes - 1]}/${ano})` : `${ano}`;
-  }
+  if (granularidade === "anual") return `${ano}`; // sufixo YTD virou nota abaixo do grafico + tooltip
   return `${ano}-T${periodo}`; // trimestral (padrao)
+}
+
+// true se o periodo (ano/granularidade) e o ultimo ano da serie e esta parcial
+// (dado so vai ate anoMesMax.mes, nao o ano inteiro) -- usado pra tooltip.
+function _periodoParcial(granularidade, ano, anoMesMax) {
+  return granularidade === "anual" && anoMesMax && ano === anoMesMax.ano && anoMesMax.mes < 12;
 }
 
 const _PASSOS_POR_ANO = { mensal: 12, trimestral: 4, semestral: 2, anual: 1 };
@@ -117,6 +120,19 @@ async function loadSerieTemporal(filters) {
     }),
   }));
 
+  const sequencia = _sequenciaCompletaPeriodos(granularidade, paresUnicos, anoMesMax);
+  const anoDoIndice = (i) => (sequencia[i] ? sequencia[i].ano : null);
+
+  // Nota "Dados até <mês>/<ano>" abaixo do grafico -- mesma fonte (anoMesMax) que
+  // antes alimentava o sufixo "(YTD)" no rotulo do eixo X. So exibe se a serie
+  // realmente alcanca o ano/mes mais recente (senao a nota nao se aplicaria ao
+  // recorte de filtro atual).
+  const elDadosAte = document.getElementById("chart-serie-dados-ate");
+  if (elDadosAte) {
+    const mostrar = anoMesMax && sequencia.some((s) => s.ano === anoMesMax.ano);
+    elDadosAte.textContent = mostrar ? `Dados até ${MESES[anoMesMax.mes - 1]}/${anoMesMax.ano}` : "";
+  }
+
   if (chartSerie) chartSerie.destroy();
   chartSerie = new Chart(document.getElementById("chart-serie"), {
     type: "bar",
@@ -125,7 +141,17 @@ async function loadSerieTemporal(filters) {
       responsive: true,
       maintainAspectRatio: false,
       scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => fmtBRL(v) } } },
-      plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtBRLFull(ctx.raw)}` } } },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtBRLFull(ctx.raw)}`,
+            afterLabel: (ctx) => {
+              const ano = anoDoIndice(ctx.dataIndex);
+              return _periodoParcial(granularidade, ano, anoMesMax) ? `(até ${MESES[anoMesMax.mes - 1]}/${ano})` : undefined;
+            },
+          },
+        },
+      },
     },
   });
 }
