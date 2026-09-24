@@ -2,6 +2,13 @@
 
 ## Coisas a saber antes de mexer
 
+- **Espaço (2026-09-24)**: remover muitas linhas de `operations` (ex.: 200k BNB) deixa a tabela
+  inchada; VACUUM comum não devolve disco. `VACUUM (FULL, ANALYZE) operations` levou 28 s
+  (806 -> 219 MB; banco 1.050 -> 430 MB) e travou a tabela nesse tempo. Rodar com
+  `SET lock_timeout='30s'` e checar `pg_stat_activity` antes. O usuário da app não tem
+  permissão em `pg_ls_waldir`. `idx_operations_cnpj_digits_trgm` aparece com idx_scan=0, mas
+  a tier 1 da busca usa esse índice: não dropar.
+
 - **BUG REAL CRÍTICO encontrado e corrigido em 2026-09-10: TODAS as sequences de
   colunas `IDENTITY` do banco estavam dessincronizadas em produção (Aiven)**,
   travadas em `last_value=1` mesmo com dados reais até id 58824 (`operations`) —
