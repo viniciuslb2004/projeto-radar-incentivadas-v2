@@ -74,8 +74,8 @@ Público-alvo: análise de mercado (prospecção/benchmarking), não originaçã
 
 | Tabela | O que é |
 |---|---|
-| `bndes_raw`, `finep_credito_direto_raw`, `finep_credito_descentralizado_raw` | staging, quase cru da fonte oficial |
-| `operations` | tabela UNIFICADA BNDES+FINEP — todo dashboard/busca lê daqui |
+| `bndes_raw`, `finep_credito_direto_raw`, `finep_credito_descentralizado_raw`, `bnb_raw` | staging, quase cru da fonte oficial (`bnb_raw`: só PJ com valor > R$ 1 mi, extraído do Power BI público do BNB por `src/bnb.py`, reconciliado em `bnb_reconciliacao`) |
+| `operations` | tabela UNIFICADA BNDES+FINEP+BNB — todo dashboard/busca lê daqui |
 | `cnpj_cnae` | cache CNPJ→CNAE/razão social/porte/uf/município (Receita Federal) |
 | `de_para_cnae` | crosswalk oficial BNDES: divisão CNAE → Setor/Subsetor |
 | `editais_raw` | editais (chamadas públicas) da FINEP — não entra no rebuild de `operations` |

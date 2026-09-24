@@ -288,7 +288,7 @@ async function _buscarPotenciais() {
           // nunca inventa o filtro pra BNB/Desenvolve SP/BASA/BB/CEF (a base de
           // transacoes reais nao tem essas instituicoes, ver restricao no topo
           // deste arquivo/CLAUDE.md).
-          const AGENCIAS_COM_OPERACOES_REAIS = ["BNDES", "FINEP"];
+          const AGENCIAS_COM_OPERACOES_REAIS = ["BNDES", "FINEP", "BNB"];
           const formComSetorDaLinha = Object.assign({}, form, {
             setor: SETORES_TAXONOMIA_BNDES.includes(l.setor_padronizado) ? l.setor_padronizado : form.setor,
             agencia: AGENCIAS_COM_OPERACOES_REAIS.includes(l.instituicao) ? l.instituicao : undefined,

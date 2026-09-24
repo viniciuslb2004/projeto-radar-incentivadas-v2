@@ -71,7 +71,7 @@ function _periodoParcial(granularidade, ano, anoMesMax) {
 
 const _PASSOS_POR_ANO = { mensal: 12, trimestral: 4, semestral: 2, anual: 1 };
 
-// Preenche periodos SEM nenhuma operacao (nem BNDES nem FINEP) como zero, em vez de
+// Preenche periodos SEM nenhuma operacao (de nenhuma agência) como zero, em vez de
 // simplesmente omitir esse ponto do eixo X -- so faz sentido pra metricas aditivas
 // (valor_total, n_operacoes: "zero operacoes" e um fato real, nao um dado inventado),
 // e so preenche o MEIO do intervalo observado (do primeiro ao ultimo periodo com
@@ -109,7 +109,7 @@ async function loadSerieTemporal(filters) {
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
   const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos, anoMesMax).map((s) => s.label);
   const grupos = [...new Set(data.map((d) => d[agrupador]))];
-  const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC" };
+  const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC", BNB: "#A9BAC9" };
 
   const datasets = grupos.map((g) => ({
     label: g,

@@ -1,4 +1,4 @@
-name: Enriquecimento CNAE (FINEP, mensal)
+name: Enriquecimento CNAE (BNDES + FINEP + BNB, mensal)
 
 on:
   schedule:
@@ -39,6 +39,6 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Rodar enriquecimento de CNAE (FINEP)
+      - name: Rodar enriquecimento de CNAE (BNDES + FINEP + BNB)
         working-directory: src
         run: python enrich_cnae.py

@@ -224,7 +224,7 @@ function renderResultados(data) {
   let html = "";
 
   if (data.confianca_baixa) {
-    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${esc(data.query)}" na base do BNDES/FINEP. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round((data.melhor_score || 0) * 100)}%).</div>`;
+    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${esc(data.query)}" na base do BNDES/FINEP/BNB. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round((data.melhor_score || 0) * 100)}%).</div>`;
   }
   if (data.enriquecido_via_web) {
     html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${esc(data.query_original || data.query)}" na web, para tentar entender melhor do que se trata.</div>`;

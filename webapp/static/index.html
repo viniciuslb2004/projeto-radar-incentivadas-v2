@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Radar de Crédito Incentivado | Ártica</title>
-<meta name="description" content="Plataforma pública de inteligência de mercado sobre crédito incentivado no Brasil, da Ártica: operações do BNDES e da FINEP desde 2002, tendências por setor e UF, editais e catálogo de linhas de fomento.">
+<meta name="description" content="Plataforma pública de inteligência de mercado sobre crédito incentivado no Brasil, da Ártica: operações do BNDES e da FINEP desde 2002 e do BNB desde 2016, tendências por setor e UF, editais e catálogo de linhas de fomento.">
 <meta name="theme-color" content="#223850">
 <link rel="canonical" href="https://projeto-radar-incentivadas.vercel.app/">
 <meta property="og:url" content="https://projeto-radar-incentivadas.vercel.app/">
@@ -12,11 +12,11 @@
 <meta property="og:locale" content="pt_BR">
 <meta property="og:site_name" content="Ártica">
 <meta property="og:title" content="Radar de Crédito Incentivado | Ártica">
-<meta property="og:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES e da FINEP, tendências setoriais e catálogo de linhas de fomento.">
+<meta property="og:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES, da FINEP e do BNB, tendências setoriais e catálogo de linhas de fomento.">
 <meta property="og:image" content="https://projeto-radar-incentivadas.vercel.app/img/logo-artica.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Radar de Crédito Incentivado | Ártica">
-<meta name="twitter:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES e da FINEP, tendências setoriais e catálogo de linhas de fomento.">
+<meta name="twitter:description" content="Inteligência de mercado sobre crédito incentivado no Brasil: operações do BNDES, da FINEP e do BNB, tendências setoriais e catálogo de linhas de fomento.">
 <meta name="twitter:image" content="https://projeto-radar-incentivadas.vercel.app/img/logo-artica.png">
 <link rel="icon" type="image/png" href="/img/favicon.png">
 <link rel="apple-touch-icon" href="/img/favicon.png">
@@ -50,7 +50,7 @@
       <h1 class="landing-titulo brand-texto">Radar de Crédito Incentivado</h1>
       <p class="landing-subtitulo">
         Inteligência de mercado sobre crédito incentivado no Brasil — operações reais do
-        BNDES e da FINEP, tendências por setor e região, e o catálogo de linhas de crédito
+        BNDES, da FINEP e do BNB, tendências por setor e região, e o catálogo de linhas de crédito
         permanentes das principais instituições de fomento, em um só lugar.
       </p>
       <ul class="landing-bullets">
@@ -548,6 +548,16 @@
   </section>
 
 </main>
+
+<!-- Nota de fonte do BNB (decisao do usuario 2026-09-24): discreta, todas as abas.
+     Data preenchida por common.js a partir de /api/status (bnb_fonte_atualizada_em). -->
+<footer class="nota-fontes" id="nota-fontes">
+  Dados do BNB: operações de pessoas jurídicas acima de R$ 1 milhão publicadas pelo Banco do
+  Nordeste no painel
+  <a href="https://www.bnb.gov.br/acesso-a-informacao/dados-de-contratacoes/consulta-de-operacoes-de-credito" target="_blank" rel="noopener noreferrer">Consulta de Operações de Crédito</a>
+  (FNE e outros fundos), desde 2016<span id="nota-bnb-data"></span>. O painel não reúne todas as
+  operações contratadas pelo banco. Nomes de MEI publicados com CPF tiveram o CPF removido (LGPD).
+</footer>
 
 <div class="modal-overlay" id="modal-overlay">
   <div class="modal">

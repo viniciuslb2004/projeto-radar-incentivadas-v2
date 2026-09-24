@@ -675,7 +675,15 @@ def status():
     try:
         cur = conn.cursor()
         n_ops = cur.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
+        # Data da ultima atualizacao do dataset publico do BNB (nota de fonte no
+        # rodape do site) -- best-effort, nunca derruba /api/status.
+        try:
+            bnb_atualizado = cur.execute("SELECT MAX(dataset_atualizado_em) FROM bnb_reconciliacao").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            conn.rollback()
+            bnb_atualizado = None
         valor = {
+            "bnb_fonte_atualizada_em": (bnb_atualizado or "")[:10] or None,
             "n_operacoes": n_ops,
             # Sempre True: o app so tem um modo agora (banco Postgres compartilhado,
             # sem SQLite local). Mantido por compatibilidade com o frontend (ver

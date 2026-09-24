@@ -42,6 +42,21 @@
   não traz o campo); direto → programa da coluna `demanda` com grafia unificada
   (`unify.produto_finep_direto`). Rota `/api/tendencias/operadores` (agentes do Inovacred) e
   filtro `agente` (só `agencia=FINEP`) em `_filters_clause`.
+- **BNB (2026-09-24, publicado com aprovação do usuário):** `bnb_raw` ← `src/bnb.py` (Power
+  BI público "Consulta de Operações de Crédito", endpoint `querydata` com a chave pública do
+  embed). Só PJ (CNPJ com DV válido) e **só valor contratado > R$ 1.000.000,00** (decisão do
+  usuário; filtro na própria query, `ComparisonKind 1`, + conferência no cliente) — 9.644
+  contratos, 6.587 CNPJs, R$ 107,1 bi (2016-01..2026-06). Reconciliação por ano × UF × fundo em
+  `bnb_reconciliacao` (0 diferenças, mesmo recorte dos dois lados). `mascarar_cpf` remove CPF de
+  nome de MEI (LGPD) — também aplicado em `enrich_cnae._limpar_nome`. `unify._build_bnb_ops`:
+  `agencia='BNB'`, `produto` = fundo da fonte (FNE, FNE-2, BNDES/FINAME, FEDAF),
+  `instrumento_financeiro` = "Programa cód. N" (a fonte não traz nome), taxa/indexador/prazos
+  como publicados, UF do contrato, município/porte/natureza/setor via `cnpj_cnae` (mesma regra
+  da FINEP, `setor_origem` enriquecido/pendente), `instrumento`/descrição/desembolsado NULL.
+  Detalhe do modal: `detalhe.SECOES_BNB`. `refresh.py` chama `bnb.extrair` best-effort antes
+  do unify (janelas já reconciliadas contra o mesmo refresh do dataset são puladas). Rodapé do
+  site cita a fonte (data via `/api/status.bnb_fonte_atualizada_em`). Linhas BNB alteradas
+  depois na fonte NÃO são reatualizadas em `operations` (unify só insere raw novo).
 - **`editais_raw`**: chamadas públicas (editais) abertas da FINEP — dado próprio, upsert
   (preserva id da própria FINEP), NÃO faz parte do rebuild de `operations`.
 - **`linhas_incentivadas`**: catálogo de PRODUTOS de crédito permanentes (não transações) —

@@ -9,6 +9,8 @@ tabela do modelo (AT509_PortalTranspOperPublicaCliente), fatiada em janelas
 ano x UF x fundo (e mes, se uma janela passar do limite de linhas por query).
 
 Regras:
+- Recorte: so contratos com valor contratado > R$ 1.000.000,00 (decisao do usuario
+  2026-09-24), filtrado na propria query e reconciliado sobre o mesmo recorte.
 - Filtro PJ no servidor (CpfCnpj contem '/', formato "XXXXXXXX/XXXX-XX") E validacao do
   digito verificador no cliente: qualquer documento que nao seja CNPJ valido de 14
   digitos e descartado e so contado -- CPF/nome de pessoa fisica nunca e gravado.
@@ -95,7 +97,7 @@ def _lit(v):
 
 
 def _cmp(prop, kind, lit):
-    # kind: 0 =, 2 >=, 4 <
+    # kind: 0 =, 1 >, 2 >=, 4 <
     return {"Comparison": {"ComparisonKind": kind, "Left": _ref("a", prop), "Right": _lit(lit)}}
 
 
@@ -115,6 +117,11 @@ def _str(s):
 
 
 FILTRO_PJ = {"Contains": {"Left": _ref("a", "CpfCnpj"), "Right": _lit("'/'")}}
+# Recorte (decisao do usuario 2026-09-24): so contratos com valor ESTRITAMENTE maior que
+# R$ 1.000.000,00 -- filtrado no servidor (ComparisonKind 1 = GreaterThan) e conferido de
+# novo no cliente antes de gravar. Reconciliacao compara o mesmo recorte dos dois lados.
+VALOR_MINIMO_EXCLUSIVO = Decimal("1000000.00")
+FILTRO_VALOR = {"Comparison": {"ComparisonKind": 1, "Left": _ref("a", "ValorContratado"), "Right": _lit("1000000D")}}
 
 
 def _modelo_info():
@@ -266,7 +273,7 @@ def esperado_por_ano(ano):
     """Query agregada do proprio dataset: linhas e soma de valor por UF x fundo (so PJ)."""
     rows, completo = _query(
         [_col("UF"), _col("Fonte"), _agg("CodContrato", 5), _agg("ValorContratado", 0)],
-        [FILTRO_PJ, _cmp("DataContratacao", 2, _dt(f"{ano}-01-01")), _cmp("DataContratacao", 4, _dt(f"{ano + 1}-01-01"))],
+        [FILTRO_PJ, FILTRO_VALOR, _cmp("DataContratacao", 2, _dt(f"{ano}-01-01")), _cmp("DataContratacao", 4, _dt(f"{ano + 1}-01-01"))],
         top=5000,
     )
     assert completo
@@ -275,7 +282,7 @@ def esperado_por_ano(ano):
 
 def _buscar_linhas(uf, fundo, ini, fim):
     select = [_col(p, src) for p, _, src in COLUNAS] + [_agg("CodContrato", 5)]
-    conds = [FILTRO_PJ, _cmp("UF", 0, _str(uf)), _cmp("Fonte", 0, _str(fundo)),
+    conds = [FILTRO_PJ, FILTRO_VALOR, _cmp("UF", 0, _str(uf)), _cmp("Fonte", 0, _str(fundo)),
              _cmp("DataContratacao", 2, _dt(ini)), _cmp("DataContratacao", 4, _dt(fim))]
     rows, completo = _query(select, conds, top=LIMITE_JANELA, com_agencia=True)
     if completo and len(rows) < LIMITE_JANELA:
@@ -317,13 +324,16 @@ def processar_janela(conn, ano, uf, fundo, esperado, agora):
             descartados += 1  # nunca grava documento/nome que nao seja CNPJ valido
             continue
         rec["cnpj"] = cnpj
+        if rec["valor_contratado"] is None or rec["valor_contratado"] <= VALOR_MINIMO_EXCLUSIVO:
+            descartados += 1  # fora do recorte > R$ 1 mi (defesa extra; o servidor ja filtra)
+            continue
         rec["cliente"] = mascarar_cpf(rec["cliente"])
         registros.append([rec[c] for _, c, _ in COLUNAS] + [int(r[-1]), agora])
     _gravar(conn, registros)
     cur = conn.cursor()
     cur.execute(
         "SELECT COALESCE(SUM(n_linhas_fonte),0), COALESCE(SUM(valor_contratado),0) FROM bnb_raw "
-        "WHERE uf=? AND fundo=? AND data_contratacao >= ? AND data_contratacao < ?",
+        "WHERE uf=? AND fundo=? AND valor_contratado > 1000000 AND data_contratacao >= ? AND data_contratacao < ?",
         (uf, fundo, f"{ano}-01-01", f"{ano + 1}-01-01"),
     )
     g_n, g_v = cur.fetchone()

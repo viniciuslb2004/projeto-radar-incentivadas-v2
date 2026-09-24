@@ -116,7 +116,7 @@
       { rotulo: "Leads (Quero Contatar)", valor: dashboard.total_leads },
       { rotulo: "Leads a abordar", valor: dashboard.leads_pendentes },
       { rotulo: "Contas do painel", valor: dashboard.total_usuarios },
-      { rotulo: "Operações (BNDES + FINEP)", valor: dashboard.total_operacoes },
+      { rotulo: "Operações (BNDES + FINEP + BNB)", valor: dashboard.total_operacoes },
       { rotulo: "Linhas incentivadas", valor: dashboard.total_linhas_incentivadas },
       { rotulo: "Editais FINEP", valor: dashboard.total_editais },
       { rotulo: "CNPJs pendentes de enriquecimento", valor: dashboard.pendentes_enriquecimento },

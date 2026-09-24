@@ -1113,3 +1113,14 @@ img, svg, canvas { max-width: 100%; }
   .landing-fechar-btn { top: 8px; right: 8px; }
 }
 .filterbar.filterbar-embutida { padding: 0; }
+
+/* Nota de fonte (BNB) no rodape -- discreta, todas as abas. */
+.nota-fontes {
+  max-width: 1100px;
+  margin: 8px auto 24px;
+  padding: 0 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.nota-fontes a { color: inherit; text-decoration: underline; }

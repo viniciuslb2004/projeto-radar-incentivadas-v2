@@ -154,6 +154,16 @@ def _baixar_municipios(month: str) -> dict:
     return nomes
 
 
+def _limpar_nome(nome):
+    """Razao social/nome fantasia antes de gravar: remove CPF embutido em nome de MEI
+    (LGPD -- mesma regra de bnb.mascarar_cpf) e colapsa espacos duplicados."""
+    if nome is None or (isinstance(nome, float) and pd.isna(nome)):
+        return None
+    from bnb import mascarar_cpf
+    limpo = mascarar_cpf(" ".join(str(nome).split()))
+    return limpo or None
+
+
 def _txt(v):
     return str(v) if v is not None and str(v) not in ("", "nan") else None
 
@@ -168,7 +178,7 @@ def _rows_para_commit(novos: dict, divisao_map: dict, cnae_nomes: dict, now: str
         cnae_descricao = cnae_nomes.get(cnae_str) if cnae_str else None
         cod_mun = _txt(cod_municipio)
         municipio = municipios.get(cod_mun.lstrip("0").zfill(4)) or municipios.get(cod_mun) if cod_mun else None
-        rows.append((cnpj, nome_fantasia, cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, _txt(uf), municipio, now))
+        rows.append((cnpj, _limpar_nome(nome_fantasia), cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, _txt(uf), municipio, now))
     return rows
 
 
@@ -283,7 +293,7 @@ def _commit_rows_empresas(conn, novos: dict, basico_para_cnpjs: dict, naturezas:
         porte_nome = PORTE_EMPRESA_RFB.get(porte_codigo, porte_codigo)
         capital = _capital_social_para_float(capital_social)
         for cnpj in basico_para_cnpjs.get(basico, []):
-            rows.append((razao_social, natureza_nome, porte_nome, capital, now, cnpj))
+            rows.append((_limpar_nome(razao_social), natureza_nome, porte_nome, capital, now, cnpj))
     if not rows:
         return 0
     cur = conn.cursor()
@@ -384,11 +394,11 @@ def enrich_pendentes_via_api(conn, cnpjs: set, divisao_map: dict) -> int:
                 atualizado_em=excluded.atualizado_em
             """,
             (
-                cnpj, dados.get("nome_fantasia") or dados.get("razao_social"),
+                cnpj, _limpar_nome(dados.get("nome_fantasia") or dados.get("razao_social")),
                 cnae_codigo, dados.get("cnae_fiscal_descricao"),
                 str(divisao) if divisao is not None else None,
                 setor_bndes, subsetor_bndes,
-                dados.get("razao_social"), dados.get("natureza_juridica"), porte,
+                _limpar_nome(dados.get("razao_social")), dados.get("natureza_juridica"), porte,
                 dados.get("capital_social"),
                 dados.get("uf"), dados.get("municipio"),
                 agora,
@@ -503,6 +513,50 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
         nao_encontrados = len(targets) - len(found)
         print(f"cnpj_cnae: {total_gravados} CNPJs gravados/atualizados. {nao_encontrados} nao encontrados na base da RFB.")
         return total_gravados
+    finally:
+        conn.close()
+
+
+def preencher_uf_municipio_faltantes(month: str = None, keep_downloads: bool = False) -> int:
+    """Uma vez (2026-09-24): CNPJs ja cacheados sem UF/municipio (o upsert antigo nunca
+    voltava a eles por only_unresolved=True). Varre os Estabelecimentos*.zip da RFB so
+    para esses CNPJs e grava APENAS uf/municipio que estiverem NULL -- nao sobrescreve
+    nenhum outro campo nem valor existente."""
+    conn = get_connection()
+    try:
+        targets = {r[0] for r in conn.execute(
+            "SELECT cnpj FROM cnpj_cnae WHERE uf IS NULL OR municipio IS NULL").fetchall()}
+        print(f"CNPJs sem UF/municipio no cache: {len(targets)}")
+        if not targets:
+            return 0
+        month = month or latest_month()
+        municipios = _baixar_municipios(month)
+        found, total = {}, 0
+        for i in range(10):
+            if len(found) >= len(targets):
+                break
+            zip_path = _download_to_disk(month, f"Estabelecimentos{i}.zip")
+            antes = set(found)
+            try:
+                _scan_zip_for_targets(zip_path, targets, found)
+            finally:
+                if not keep_downloads:
+                    zip_path.unlink(missing_ok=True)
+            rows = []
+            for cnpj in set(found) - antes:
+                _, _, uf, cod_municipio = found[cnpj]
+                cod_mun = _txt(cod_municipio)
+                mun = (municipios.get(cod_mun.lstrip("0").zfill(4)) or municipios.get(cod_mun)) if cod_mun else None
+                rows.append((_txt(uf), mun, cnpj))
+            if rows:
+                conn.close()  # scan leva minutos; Aiven derruba sessao ociosa (5 min)
+                conn = get_connection()
+                conn.cursor().executemany(
+                    "UPDATE cnpj_cnae SET uf = COALESCE(uf, ?), municipio = COALESCE(municipio, ?) WHERE cnpj = ?", rows)
+                conn.commit()
+                total += len(rows)
+            print(f"  {len(found)}/{len(targets)} encontrados, {total} atualizados", flush=True)
+        return total
     finally:
         conn.close()
 

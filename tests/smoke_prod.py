@@ -11,6 +11,11 @@ ROTAS = [
     ("/api/kpis", lambda d: bool(d)),
     ("/api/busca?q=energia%20solar", lambda d: d.get("n_resultados", 0) > 0),
     ("/api/busca?q=software&uf=SP", lambda d: d.get("n_resultados", 0) > 0),
+    # BNB (2026-09-24): agencia publicada, com filtro/Busca/rodape funcionando.
+    ("/api/kpis?agencia=BNB", lambda d: d.get("n_operacoes", 0) > 5000),
+    ("/api/filtros", lambda d: "BNB" in (d.get("agencias") or [])),
+    ("/api/busca?q=supermercado&agencia=BNB", lambda d: d.get("n_resultados", 0) > 0),
+    ("/api/status", lambda d: bool(d.get("bnb_fonte_atualizada_em"))),
     ("/api/editais", lambda d: d is not None),
     ("/api/linhas", lambda d: bool(d)),
     ("/api/potenciais/buscar?uso=energia%20solar", lambda d: d is not None),

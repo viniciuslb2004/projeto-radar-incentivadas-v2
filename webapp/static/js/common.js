@@ -952,6 +952,12 @@ async function _initFiltersAndTabsImpl() {
   // o dado de ultimo_refresh continua vindo de /api/status (usado em outros
   // lugares, ex: painel de admin), so parou de aparecer aqui.
   pill.textContent = `${fmtNum(status.n_operacoes)} operações`;
+  // Nota de fonte do BNB no rodape: data da ultima atualizacao do dataset publico.
+  const notaBnbData = document.getElementById("nota-bnb-data");
+  if (notaBnbData && /^\d{4}-\d{2}-\d{2}$/.test(status.bnb_fonte_atualizada_em || "")) {
+    const [a, m, d] = status.bnb_fonte_atualizada_em.split("-");
+    notaBnbData.textContent = `; fonte atualizada em ${d}/${m}/${a}`;
+  }
 
   let filtros;
   try {

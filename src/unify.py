@@ -380,6 +380,66 @@ def _build_finep_descentralizado_ops(conn, cnae_lookup: pd.DataFrame) -> pd.Data
     return out
 
 
+# ============ BNB (2026-09-24, publicado com aprovacao do usuario) ============
+# Fonte: bnb_raw (src/bnb.py -- painel publico "Consulta de Operacoes de Credito" do
+# BNB, so PJ). agencia exibida = "BNB" (decisao do usuario, nao "FNE"); produto = fundo
+# exatamente como vem da fonte (FNE, FNE-2, BNDES/FINAME, FEDAF). O programa so existe
+# como CODIGO numerico na fonte -- vai cru em instrumento_financeiro, sem inventar nome.
+# Taxa/indexador/prazos/carencia: exatamente como publicados (sem correcao/inferencia).
+# UF = do contrato; municipio/porte/natureza/setor = cnpj_cnae (Receita Federal).
+# Sem descricao de projeto nem valor desembolsado na fonte (ficam NULL).
+# Recorte: so contratos > R$ 1.000.000,00 (decisao do usuario 2026-09-24) -- bnb.py ja
+# extrai so esse recorte; o filtro aqui e defesa extra, persistente a cada refresh.
+def _build_bnb_ops(conn, cnae_lookup: pd.DataFrame) -> pd.DataFrame:
+    from bnb import mascarar_cpf
+    df = pd.read_sql(
+        "SELECT b.*, c.municipio AS municipio_rfb FROM bnb_raw b LEFT JOIN cnpj_cnae c ON c.cnpj = b.cnpj "
+        "WHERE b.valor_contratado > 1000000 "
+        "AND b.id NOT IN (SELECT raw_id FROM operations WHERE raw_table = 'bnb_raw')",
+        get_engine(),
+    )
+    if df.empty:
+        return df
+    df["data_contratacao"] = pd.to_datetime(df["data_contratacao"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = _add_periodo(df, "data_contratacao")
+    df = df.merge(cnae_lookup, on="cnpj", how="left")
+    setor_origem = df["setor_bndes_mapeado"].notna().map({True: "enriquecido", False: "pendente"})
+    return pd.DataFrame({
+        "agencia": "BNB",
+        "instrumento": None,
+        "fonte_id": df["cod_contrato"].astype(str) + "/" + df["num_operacao"].astype(str),
+        # ja mascarado na extracao; defesa extra (LGPD) + espacos duplicados colapsados
+        "cliente": df["cliente"].map(lambda v: mascarar_cpf(" ".join(v.split())) if isinstance(v, str) else v),
+        "cnpj": df["cnpj"],
+        "uf": df["uf"],
+        "municipio": df["municipio_rfb"],
+        "data_contratacao": df["data_contratacao"],
+        "ano": df["ano"],
+        "trimestre": df["trimestre"],
+        "valor_contratado": df["valor_contratado"].astype(float),
+        "valor_desembolsado": None,
+        "setor_bndes": df["setor_bndes_mapeado"],
+        "subsetor_bndes": df["subsetor_bndes_mapeado"],
+        "segmento": df["cnae_descricao"],
+        "setor_origem": setor_origem,
+        "porte_cliente": df["porte_empresa"],
+        "natureza_cliente": df["natureza_juridica"],
+        "razao_social_oficial": df["razao_social_oficial"],
+        "produto": df["fundo"],
+        "instrumento_financeiro": df["cod_programa_credito"].map(
+            lambda v: f"Programa cód. {int(v)}" if pd.notna(v) else None),
+        "modalidade_apoio": "REEMBOLSAVEL",
+        "indexador": df["indexador"],
+        "taxa_juros": df["taxa_juros_aa"],
+        "prazo_carencia_meses": df["prazo_carencia_meses"],
+        "prazo_amortizacao_meses": df["prazo_amortizacao_meses"],
+        "descricao_projeto": None,
+        "agente_financeiro": None,
+        "raw_table": "bnb_raw",
+        "raw_id": df["id"],
+    })
+
+
 def _faixa_valor(valor) -> str:
     if valor is None or pd.isna(valor):
         return None
@@ -539,6 +599,10 @@ def _atualizar_search_vector(conn, ids: list) -> None:
     ids = [int(i) for i in dict.fromkeys(ids)]
     if not ids:
         return
+    if len(ids) > 5000:  # lotes curtos (carga inicial do BNB = ~210 mil ids)
+        for i in range(0, len(ids), 5000):
+            _atualizar_search_vector(conn, ids[i:i + 5000])
+        return
     # regexp_replace(..., 'optic', 'otic', 'gi') depois de cada unaccent(): unifica
     # grafias como "optica"/"otica" (mesmo conceito -- "fibra optica" grafia antiga
     # ainda comum, "fibra otica" grafia atual -- mas palavras DIFERENTES pro
@@ -657,6 +721,9 @@ def reclassificar_pendentes(conn=None) -> list:
             conn.close()
 
 
+LOTE_INSERT_OPERATIONS = 5000
+
+
 def build_operations():
     """Incremental: so insere operacoes para linhas raw novas + reclassifica pendentes
     que resolveram desde o ultimo refresh. Devolve um dict (nao so uma tupla) porque o
@@ -670,6 +737,12 @@ def build_operations():
             _build_finep_direto_ops(conn, cnae_lookup),
             _build_finep_descentralizado_ops(conn, cnae_lookup),
         ]
+        # BNB: best-effort -- se bnb_raw nao existir/falhar, BNDES/FINEP seguem normalmente.
+        try:
+            parts.append(_build_bnb_ops(conn, cnae_lookup))
+        except Exception as e:  # noqa: BLE001
+            conn.rollback()
+            print(f"aviso: BNB nao unificado nesta rodada ({e})")
         parts = [p for p in parts if p is not None and not p.empty]
         novas = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
         if not novas.empty:
@@ -686,18 +759,41 @@ def build_operations():
             novas["embedding_text"] = novas.apply(lambda r: _embedding_text(r, boilerplate), axis=1)
             novas["search_document"] = novas.apply(lambda r: _search_document(r, boilerplate), axis=1)
             novas["search_taxonomia_termos"] = novas.apply(_search_taxonomia_termos, axis=1)
-            insert_new_rows(conn, "operations", novas, OPERATIONS_COLS)
-            conn.commit()
+            # Lotes com commit por lote (BNB traz ~210 mil linhas na 1a carga --
+            # nunca uma transacao longa em `operations`).
+            # O calculo dos textos acima leva minutos na 1a carga do BNB e o Aiven
+            # derruba sessao ociosa (idle_session_timeout=5min) -- reabre a conexao.
+            conn.close()
+            conn = get_connection()
+            for i in range(0, len(novas), LOTE_INSERT_OPERATIONS):
+                lote = novas.iloc[i:i + LOTE_INSERT_OPERATIONS]
+                for tentativa in range(3):
+                    try:
+                        insert_new_rows(conn, "operations", lote, OPERATIONS_COLS)
+                        conn.commit()
+                        break
+                    except Exception:  # noqa: BLE001 -- conexao caiu no meio do lote (rollback no servidor)
+                        if tentativa == 2:
+                            raise
+                        try:
+                            conn.close()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        conn = get_connection()
             # recupera os ids autoincrement recem-atribuidos, por (raw_table, raw_id)
             for raw_table, grupo in novas.groupby("raw_table"):
                 raw_ids = grupo["raw_id"].astype(int).tolist()
-                placeholders = ", ".join("?" * len(raw_ids))
                 rows = conn.execute(
-                    f"SELECT id FROM operations WHERE raw_table = ? AND raw_id IN ({placeholders})",
-                    [raw_table] + raw_ids,
+                    "SELECT id FROM operations WHERE raw_table = ? AND raw_id = ANY(?)",
+                    [raw_table, raw_ids],
                 ).fetchall()
                 novos_ids.extend(r[0] for r in rows)
-            _atualizar_search_vector(conn, novos_ids)
+        # Autocorrecao: qualquer linha sem search_vector (ex. rodada anterior que caiu
+        # entre o insert e este passo) entra junto.
+        sem_vetor = [r[0] for r in conn.execute("SELECT id FROM operations WHERE search_vector IS NULL").fetchall()]
+        ja = set(novos_ids)
+        novos_ids.extend(i for i in sem_vetor if i not in ja)
+        _atualizar_search_vector(conn, novos_ids)
 
         reclassificados_ids = _reclassificar_pendentes(conn, cnae_lookup, boilerplate)
         conn.commit()

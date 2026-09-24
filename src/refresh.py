@@ -220,6 +220,28 @@ def run_refresh() -> str:
                 print(aviso)
                 detalhe += aviso + "\n\n"
 
+            # BNB (2026-09-24): extracao do painel publico do BNB (bnb.py) -- best-effort,
+            # nunca derruba o refresh de BNDES/FINEP. Retomavel: janelas ano x UF x fundo
+            # ja reconciliadas contra o mesmo refresh do dataset BNB sao puladas (rodada
+            # semanal sem dataset novo custa so ~11 queries agregadas).
+            try:
+                import bnb
+                ano_atual = datetime.datetime.now(datetime.timezone.utc).year
+                problemas_bnb = bnb.extrair(range(2016, ano_atual + 1))
+                if problemas_bnb:
+                    aviso = f"aviso: BNB com {problemas_bnb} janela(s) ano x UF x fundo com diferenca na reconciliacao (ver bnb_reconciliacao)"
+                    print(aviso)
+                    detalhe += aviso + "
+
+"
+            except Exception:
+                aviso = f"erro: BNB falhou nesta rodada (nao bloqueia BNDES/FINEP nem o resto do refresh):
+{traceback.format_exc()}"
+                print(aviso)
+                detalhe += aviso + "
+
+"
+
             resultado_unify = unify.build_operations()
             ops_rows = resultado_unify["total"]
 

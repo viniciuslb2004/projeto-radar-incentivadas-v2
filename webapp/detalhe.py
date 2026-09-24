@@ -1,5 +1,5 @@
 """Monta uma visao amigavel (secoes rotuladas) do detalhe de uma operacao,
-a partir das colunas brutas de cada tabela de origem (BNDES / FINEP)."""
+a partir das colunas brutas de cada tabela de origem (BNDES / FINEP / BNB)."""
 
 
 def _cnpj_fmt(v):
@@ -109,7 +109,38 @@ SECOES_FINEP_DESCENTRALIZADO = [
     ]),
 ]
 
+# BNB (painel publico "Consulta de Operacoes de Credito", so PJ -- ver src/bnb.py).
+# Programa so como codigo (a fonte nao traz o nome); taxa/prazos como publicados.
+SECOES_BNB = [
+    ("Empresa", [
+        ("cliente", "Cliente", "texto", None),
+        ("cnpj", "CNPJ", "texto", _cnpj_fmt),
+        ("uf", "UF", "texto", None),
+    ]),
+    ("Operação", [
+        ("cod_contrato", "Número do contrato", "texto", None),
+        ("num_operacao", "Nº da operação", "texto", None),
+        ("data_contratacao", "Data da contratação", "data", None),
+        ("data_vencimento_fim", "Vencimento final", "data", None),
+        ("fundo", "Fundo (fonte de recursos)", "texto", None),
+        ("cod_programa_credito", "Código do programa de crédito", "texto", None),
+        ("agencia", "Agência do BNB", "texto", None),
+    ]),
+    ("Valores", [
+        ("valor_contratado", "Valor contratado", "moeda", None),
+    ]),
+    ("Condições financeiras", [
+        ("taxa_juros_aa", "Taxa de juros (a.a.)", "percentual", None),
+        ("indexador", "Indexador", "texto", None),
+        ("prazo_total_meses", "Prazo total", "meses", None),
+        ("prazo_carencia_meses", "Prazo de carência", "meses", None),
+        ("prazo_amortizacao_meses", "Prazo de amortização", "meses", None),
+        ("periodicidade_principal", "Periodicidade do principal (código da fonte)", "texto", None),
+    ]),
+]
+
 MAPA_SECOES = {
+    "bnb_raw": SECOES_BNB,
     "bndes_raw": SECOES_BNDES,
     "finep_credito_direto_raw": SECOES_FINEP_CREDITO_DIRETO,
     "finep_credito_descentralizado_raw": SECOES_FINEP_DESCENTRALIZADO,

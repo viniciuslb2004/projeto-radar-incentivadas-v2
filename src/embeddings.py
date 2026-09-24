@@ -41,9 +41,8 @@ def _encode_ids(ids: list) -> tuple:
 
     conn = get_connection()
     try:
-        placeholders = ", ".join("?" * len(ids))
         rows = conn.execute(
-            f"SELECT id, embedding_text FROM operations WHERE id IN ({placeholders})", ids
+            "SELECT id, embedding_text FROM operations WHERE id = ANY(?)", [list(map(int, ids))]
         ).fetchall()
     finally:
         conn.close()

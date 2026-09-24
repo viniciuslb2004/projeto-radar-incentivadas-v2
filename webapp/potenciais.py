@@ -410,7 +410,7 @@ LIMIAR_SIMILARIDADE_TRGM_HISTORICO = 0.4
 # qualquer outra instituicao NUNCA entram no calculo de frequencia (ficam
 # sempre com frequencia_historica = None, nunca 0 -- 0 implicaria "confirmado
 # que nao e usada", o que nao podemos afirmar por limitacao de cobertura).
-_AGENCIAS_COM_OPERACOES_REAIS = ("BNDES", "FINEP")
+_AGENCIAS_COM_OPERACOES_REAIS = ("BNDES", "FINEP", "BNB")
 
 # So vira motivo textual ("frequentemente utilizada...") acima deste piso --
 # 1-2 correspondencias por similaridade de texto sao ruido demais pra virar uma
@@ -444,7 +444,7 @@ def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
         WITH termos AS (
             SELECT agencia, COALESCE(produto, instrumento) AS termo, COUNT(*) AS n
             FROM operations
-            WHERE agencia IN ('BNDES', 'FINEP') AND COALESCE(produto, instrumento) IS NOT NULL
+            WHERE agencia IN ('BNDES', 'FINEP', 'BNB') AND COALESCE(produto, instrumento) IS NOT NULL
             GROUP BY agencia, COALESCE(produto, instrumento)
         ),
         candidatos(id, instituicao, nome) AS (
