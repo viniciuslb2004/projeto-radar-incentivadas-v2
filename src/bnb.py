@@ -12,6 +12,8 @@ Regras:
 - Filtro PJ no servidor (CpfCnpj contem '/', formato "XXXXXXXX/XXXX-XX") E validacao do
   digito verificador no cliente: qualquer documento que nao seja CNPJ valido de 14
   digitos e descartado e so contado -- CPF/nome de pessoa fisica nunca e gravado.
+- LGPD: razao social de MEI vem da fonte como "NOME 12345678901" (CPF do titular). Toda
+  sequencia isolada de 11 digitos e removida de `cliente` antes de gravar (mascarar_cpf).
 - `fundo` = texto exato da fonte (coluna Fonte); `cod_programa_credito` = codigo cru.
 - Idempotente: upsert por (cod_contrato, num_operacao, cnpj, cod_area_operacional). Retomavel: janelas ja
   reconciliadas (bnb_reconciliacao) contra o mesmo refresh do dataset sao puladas.
@@ -21,6 +23,7 @@ Uso: python src/bnb.py [--force] [--anos 2016-2026]
 """
 import argparse
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -226,6 +229,18 @@ def cnpj_valido(doc):
     return d
 
 
+# CPF puro (11 digitos; 12 cobre CPF digitado com um digito a mais na fonte) ou pontuado.
+# 14 digitos (CNPJ usado como nome) e publico e fica.
+_RE_CPF = re.compile(r"(?<!\d)(?:\d{11,12}|\d{3}\.\d{3}\.\d{3}-\d{2})(?!\d)")
+
+
+def mascarar_cpf(nome):
+    """Remove sequencias de 11 digitos (CPF, com ou sem pontuacao) de um nome (LGPD/MEI)."""
+    if not nome:
+        return nome
+    return re.sub(r"\s{2,}", " ", _RE_CPF.sub("", nome)).strip(" -") or None
+
+
 def _dinheiro(v):
     if v is None:
         return None
@@ -302,6 +317,7 @@ def processar_janela(conn, ano, uf, fundo, esperado, agora):
             descartados += 1  # nunca grava documento/nome que nao seja CNPJ valido
             continue
         rec["cnpj"] = cnpj
+        rec["cliente"] = mascarar_cpf(rec["cliente"])
         registros.append([rec[c] for _, c, _ in COLUNAS] + [int(r[-1]), agora])
     _gravar(conn, registros)
     cur = conn.cursor()
