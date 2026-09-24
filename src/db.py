@@ -722,6 +722,63 @@ CREATE TABLE IF NOT EXISTS usuario_operacoes_salvas (
 );
 CREATE INDEX IF NOT EXISTS idx_usuario_operacoes_salvas_usuario ON usuario_operacoes_salvas(usuario_id, criado_em DESC);
 
+-- ============ Staging BNB (Banco do Nordeste) -- ver src/bnb.py ============
+-- Extraido do relatorio Power BI publico "Consulta de Operacoes de Credito" do BNB.
+-- SOMENTE pessoa juridica (CNPJ valido de 14 digitos, DV conferido) -- CPF/nome de
+-- pessoa fisica nunca e gravado. `fundo` = texto exato da fonte (FNE, FNE-2,
+-- BNDES/FINAME, FEDAF, ...); `cod_programa_credito` = codigo cru da fonte (sem nome
+-- inventado). Chave natural (cod_contrato, num_operacao, cnpj, cod_area_operacional) --
+-- conferida unica na fonte (so cod_contrato+num_operacao+cnpj colide: 2022 AL); `n_linhas_fonte` > 1 indicaria linhas identicas colapsadas pela query.
+-- Ainda NAO alimenta `operations`.
+CREATE TABLE IF NOT EXISTS bnb_raw (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    cod_contrato TEXT NOT NULL,
+    num_operacao INTEGER NOT NULL,
+    cnpj TEXT NOT NULL,
+    cliente TEXT,
+    uf TEXT,
+    cod_agencia INTEGER,
+    agencia TEXT,
+    cod_area_operacional INTEGER,
+    data_contratacao DATE,
+    data_vencimento_fim DATE,
+    fundo TEXT,
+    cod_fonte_recurso INTEGER,
+    cod_programa_credito INTEGER,
+    cod_cliente BIGINT,
+    taxa_juros_aa DOUBLE PRECISION,
+    custo TEXT,
+    indexador TEXT,
+    valor_contratado NUMERIC(18,2),
+    prazo_total_meses DOUBLE PRECISION,
+    prazo_carencia_meses DOUBLE PRECISION,
+    prazo_amortizacao_meses DOUBLE PRECISION,
+    carencia_total DOUBLE PRECISION,
+    periodicidade_principal TEXT,
+    n_linhas_fonte INTEGER NOT NULL DEFAULT 1,
+    extraido_em TEXT NOT NULL,
+    UNIQUE (cod_contrato, num_operacao, cnpj, cod_area_operacional)
+);
+CREATE INDEX IF NOT EXISTS idx_bnb_raw_cnpj ON bnb_raw(cnpj);
+CREATE INDEX IF NOT EXISTS idx_bnb_raw_data ON bnb_raw(data_contratacao);
+
+-- Reconciliacao por janela (ano x UF x fundo): total da query agregada do proprio
+-- dataset (so PJ) vs. linhas gravadas em bnb_raw. dif_* devem ser 0.
+CREATE TABLE IF NOT EXISTS bnb_reconciliacao (
+    ano INTEGER NOT NULL,
+    uf TEXT NOT NULL,
+    fundo TEXT NOT NULL,
+    esperado_linhas INTEGER NOT NULL,
+    esperado_valor NUMERIC(18,2) NOT NULL,
+    extraido_linhas INTEGER,
+    descartados_nao_cnpj INTEGER,
+    gravado_linhas INTEGER,
+    gravado_valor NUMERIC(18,2),
+    dataset_atualizado_em TEXT,
+    verificado_em TEXT,
+    PRIMARY KEY (ano, uf, fundo)
+);
+
 """
 
 

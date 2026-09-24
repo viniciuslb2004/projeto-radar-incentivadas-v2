@@ -35,7 +35,7 @@ ESTAB_COLS = [
     "cep", "uf", "municipio", "ddd1", "telefone1", "ddd2", "telefone2",
     "ddd_fax", "fax", "email", "situacao_especial", "data_situacao_especial",
 ]
-KEEP_COLS = ["cnpj_basico", "cnpj_ordem", "cnpj_dv", "nome_fantasia", "cnae_fiscal_principal"]
+KEEP_COLS = ["cnpj_basico", "cnpj_ordem", "cnpj_dv", "nome_fantasia", "cnae_fiscal_principal", "uf", "municipio"]
 
 
 def _list_month_folders() -> list:
@@ -74,6 +74,8 @@ def _target_cnpjs(conn, only_unresolved: bool = True) -> set:
         SELECT cnpj_beneficiario AS cnpj FROM finep_credito_descentralizado_raw
         UNION
         SELECT cnpj FROM bndes_raw
+        UNION
+        SELECT cnpj FROM bnb_raw
         """,
         get_engine(),
     )
@@ -134,17 +136,39 @@ def _scan_zip_for_targets(zip_path: Path, targets: set, found: dict):
                 )
                 matches = chunk[chunk["cnpj"].isin(targets)]
                 for _, row in matches.iterrows():
-                    found[row["cnpj"]] = (row["nome_fantasia"], row["cnae_fiscal_principal"])
+                    found[row["cnpj"]] = (row["nome_fantasia"], row["cnae_fiscal_principal"], row["uf"], row["municipio"])
 
 
-def _rows_para_commit(novos: dict, divisao_map: dict, cnae_nomes: dict, now: str) -> list:
+def _baixar_municipios(month: str) -> dict:
+    """Municipios.zip: tabela oficial codigo RFB (4 digitos) -> nome do municipio."""
+    url = f"{CNPJ_DIR}/{month}/Municipios.zip"
+    resp = requests.get(url, auth=AUTH, timeout=60)
+    resp.raise_for_status()
+    nomes = {}
+    with zipfile.ZipFile(__import__("io").BytesIO(resp.content)) as zf:
+        with zf.open(zf.namelist()[0]) as f:
+            for linha in f.read().decode("latin1").splitlines():
+                partes = linha.split(";")
+                if len(partes) == 2:
+                    nomes[partes[0].strip('"').strip()] = partes[1].strip('"').strip()
+    return nomes
+
+
+def _txt(v):
+    return str(v) if v is not None and str(v) not in ("", "nan") else None
+
+
+def _rows_para_commit(novos: dict, divisao_map: dict, cnae_nomes: dict, now: str, municipios: dict = None) -> list:
     rows = []
-    for cnpj, (nome_fantasia, cnae) in novos.items():
+    municipios = municipios or {}
+    for cnpj, (nome_fantasia, cnae, uf, cod_municipio) in novos.items():
         cnae_str = str(cnae) if cnae and str(cnae) != "nan" else None
         divisao = int(cnae_str[:2]) if cnae_str and cnae_str[:2].isdigit() else None
         setor_bndes, subsetor_bndes = divisao_map.get(divisao, (None, None))
         cnae_descricao = cnae_nomes.get(cnae_str) if cnae_str else None
-        rows.append((cnpj, nome_fantasia, cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, now))
+        cod_mun = _txt(cod_municipio)
+        municipio = municipios.get(cod_mun.lstrip("0").zfill(4)) or municipios.get(cod_mun) if cod_mun else None
+        rows.append((cnpj, nome_fantasia, cnae_str, cnae_descricao, str(divisao) if divisao else None, setor_bndes, subsetor_bndes, _txt(uf), municipio, now))
     return rows
 
 
@@ -154,8 +178,8 @@ def _commit_rows(conn, rows: list) -> None:
     cur = conn.cursor()
     cur.executemany(
         """
-        INSERT INTO cnpj_cnae (cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao, setor_bndes_mapeado, subsetor_bndes_mapeado, atualizado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO cnpj_cnae (cnpj, razao_social, cnae_codigo, cnae_descricao, cnae_divisao, setor_bndes_mapeado, subsetor_bndes_mapeado, uf, municipio, atualizado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cnpj) DO UPDATE SET
             razao_social=excluded.razao_social,
             cnae_codigo=excluded.cnae_codigo,
@@ -163,6 +187,8 @@ def _commit_rows(conn, rows: list) -> None:
             cnae_divisao=excluded.cnae_divisao,
             setor_bndes_mapeado=excluded.setor_bndes_mapeado,
             subsetor_bndes_mapeado=excluded.subsetor_bndes_mapeado,
+            uf=COALESCE(excluded.uf, cnpj_cnae.uf),
+            municipio=COALESCE(excluded.municipio, cnpj_cnae.municipio),
             atualizado_em=excluded.atualizado_em
         """,
         rows,
@@ -445,6 +471,8 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
         print("Baixando tabela de nomes de CNAE (Cnaes.zip)...")
         cnae_nomes = _baixar_cnae_nomes(month)
         print(f"  {len(cnae_nomes)} codigos CNAE carregados.")
+        municipios = _baixar_municipios(month)
+        print(f"  {len(municipios)} municipios carregados (Municipios.zip).")
 
         # Cada Estabelecimentos*.zip tem varios GB: grava/commita o que foi achado logo
         # apos escanear cada arquivo, em vez de acumular tudo em memoria ate o final. Assim,
@@ -467,7 +495,7 @@ def enrich(month: str = None, keep_downloads: bool = False, targets: set = None)
             novos = {cnpj: found[cnpj] for cnpj in found.keys() - antes}
             if novos:
                 now = datetime.now(timezone.utc).isoformat()
-                rows = _rows_para_commit(novos, divisao_map, cnae_nomes, now)
+                rows = _rows_para_commit(novos, divisao_map, cnae_nomes, now, municipios)
                 _commit_rows(conn, rows)
                 total_gravados += len(rows)
             print(f"  progresso: {len(found)}/{len(targets)} CNPJs encontrados ate agora ({total_gravados} ja gravados no banco)", flush=True)
