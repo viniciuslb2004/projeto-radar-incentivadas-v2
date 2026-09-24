@@ -116,6 +116,7 @@ PORTE_NORMALIZADO_SQL = """
     CASE porte_cliente
         WHEN 'Empresa de Pequeno Porte' THEN 'PEQUENA'
         WHEN 'Micro Empresa' THEN 'MICRO'
+        WHEN 'Demais' THEN 'MÉDIA OU GRANDE'
         WHEN 'GRANDE' THEN 'GRANDE'
         WHEN 'MÉDIA' THEN 'MÉDIA'
         WHEN 'PEQUENA' THEN 'PEQUENA'
@@ -123,6 +124,26 @@ PORTE_NORMALIZADO_SQL = """
         ELSE 'Não informado'
     END
 """
+
+# Revisao 2026-09-24 (filtro de porte entre BNDES/FINEP/BNB): "Demais" da Receita
+# (FINEP e BNB, ~15 mil operacoes) deixou de cair em "Não informado" e virou
+# 'MÉDIA OU GRANDE' -- a Receita so separa Micro/EPP/Demais, entao media x grande
+# e indistinguivel ali (nao inventar). Filtro:
+#   MICRO/PEQUENA -> bate BNDES nativo + Receita (mesmo conceito)
+#   MÉDIA/GRANDE  -> so BNDES nativo (unica fonte que separa)
+#   MÉDIA OU GRANDE -> uniao: BNDES MÉDIA + BNDES GRANDE + Receita "Demais"
+# Proxy por valor da operacao foi TESTADO e rejeitado (acuracia 15-24% vs porte
+# nativo BNDES em 47 mil operacoes -- ver Decisões.md no Obsidian); tamanho da
+# transacao continua disponivel so como filtro separado de valor (min/max).
+PORTES_CANONICOS = ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "MÉDIA OU GRANDE", "Não informado")
+
+
+def porte_clause(porte):
+    """(sql, params) do filtro de porte canonico -- sempre AND, nunca ranking."""
+    if porte == "MÉDIA OU GRANDE":
+        return f"({PORTE_NORMALIZADO_SQL}) IN (?, ?, ?)", ["MÉDIA", "GRANDE", "MÉDIA OU GRANDE"]
+    return f"({PORTE_NORMALIZADO_SQL}) = ?", [porte]
+
 
 _UFS_VALIDAS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
@@ -277,9 +298,10 @@ def buscar_texto(
         # "PEQUENA" no dropdown precisa achar tanto o "PEQUENA" nativo do BNDES
         # quanto o "Empresa de Pequeno Porte" da RFB (FINEP), senao o filtro so
         # bate a metade das operacoes daquela categoria.
-        filtros_extra.append(f"({PORTE_NORMALIZADO_SQL}) = ?")
-        params_extra_principal.append(porte)
-        params_extra_trigrama.append(porte)
+        sql_porte, params_porte = porte_clause(porte)
+        filtros_extra.append(sql_porte)
+        params_extra_principal.extend(params_porte)
+        params_extra_trigrama.extend(params_porte)
     if setor:
         # O dropdown combina setor_bndes (4 categorias amplas) e subsetor_bndes (19,
         # mais granulares) NA MESMA lista (pedido do usuario, 2026-09-15) -- os dois

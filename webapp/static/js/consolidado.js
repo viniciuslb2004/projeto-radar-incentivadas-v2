@@ -400,7 +400,7 @@ async function loadPorte(filters) {
       onClick: (evt, els) => {
         if (!els.length) return;
         const porte = data[els[0].index].porte;
-        openOperacoesModal(`Porte: ${porte}`, { porte_cliente: porte });
+        openOperacoesModal(`Porte: ${porte}`, { porte });
       },
     },
   });

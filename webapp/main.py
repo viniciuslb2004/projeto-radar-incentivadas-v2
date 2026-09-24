@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from db import get_connection
-from search_fts import PORTE_NORMALIZADO_SQL
+from search_fts import PORTE_NORMALIZADO_SQL, PORTES_CANONICOS, porte_clause
 from webapp.detalhe import montar_detalhe_amigavel
 from webapp.admin.auth import (
     SESSION_COOKIE,
@@ -595,8 +595,9 @@ def _filters_clause(
     # usada pelo filtro de porte da Busca (ver PORTE_NORMALIZADO_SQL, importado de
     # search_fts.py).
     if porte and porte != "Todos":
-        clauses.append(f"({PORTE_NORMALIZADO_SQL}) = ?")
-        params.append(porte)
+        sql_porte, params_porte = porte_clause(porte)
+        clauses.append(sql_porte)
+        params.extend(params_porte)
     if valor_min is not None:
         clauses.append("valor_contratado >= ?")
         params.append(valor_min)
@@ -738,7 +739,7 @@ def filtros():
         # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
         # informado" so aparece se alguma operacao realmente cair nela.
         portes_presentes = set(portes_presentes or [])
-        portes = [p for p in ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "Não informado") if p in portes_presentes]
+        portes = [p for p in PORTES_CANONICOS if p in portes_presentes or p == "MÉDIA OU GRANDE" and {"MÉDIA", "GRANDE"} & portes_presentes]
 
         return {
             "agencias": agencias or [],
