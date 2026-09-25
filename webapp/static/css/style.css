@@ -1799,7 +1799,8 @@ body[data-view="potenciais"] main { padding-top: 0; margin-top: -24px; position:
 /* Navegação em linha própria no desktop: as 6 abas ficam sempre visíveis
    (antes transbordavam a 1440px e "Potenciais Linhas" sumia atrás do fade). */
 @media (min-width: 901px) {
-  .faixa > .topbar { flex-wrap: wrap; row-gap: 0; }
+  .faixa > .topbar { flex-wrap: wrap; row-gap: 0; padding-top: 18px; }
+  .faixa > .topbar .brand { min-height: 44px; }
   .faixa > .topbar .tabs-wrap { order: 3; flex: 1 0 100%; margin-top: 6px; }
   .faixa > .topbar .tabs-wrap::before,
   .faixa > .topbar .tabs-wrap::after { display: none; }
