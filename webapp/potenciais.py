@@ -490,6 +490,14 @@ def _perfil_de_parametros(atividade, setor, porte, volume, finalidade, uso, uf, 
     if not ativ and setor and setor != "Todos":
         ativ = _ATIVIDADE_POR_ID.get(_SETOR_PARA_ATIVIDADE.get(setor, ""))
     fin = finalidade if finalidade in _FINALIDADE_ROTULO else _USO_ANTIGO_PARA_FINALIDADE.get(uso or "")
+    if not fin and uso:
+        # `uso` em texto livre (links/integracoes antigas, ex: "energia solar"):
+        # mesmos termos usados pra classificar a finalidade das linhas.
+        uso_txt = " " + _norm(uso)
+        if any(t in uso_txt for t in ("solar", "renovave", "eolic")):
+            fin = "sustentabilidade"
+        else:
+            fin = next((f for f, termos in _FINALIDADE_TERMOS.items() if any(t in uso_txt for t in termos)), None)
     porte = (porte or "").strip().upper() or None
     if porte == "MEDIA":
         porte = "MÉDIA"
