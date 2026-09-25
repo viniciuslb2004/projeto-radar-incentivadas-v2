@@ -109,7 +109,7 @@ async function loadSerieTemporal(filters) {
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
   const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos, anoMesMax).map((s) => s.label);
   const grupos = [...new Set(data.map((d) => d[agrupador]))];
-  const coresIncentivado = { BNDES: "#223850", FINEP: "#7C93AC", BNB: "#A9BAC9" };
+  const coresIncentivado = { BNDES: "#223850", FINEP: "#5878A0", BNB: "#A9BAC9" };
 
   const datasets = grupos.map((g) => ({
     label: g,

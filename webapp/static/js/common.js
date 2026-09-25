@@ -2,6 +2,14 @@
 
 const AZUL_TONS = ["#223850", "#2E4A68", "#36587E", "#5878A0", "#7C93AC", "#A9BAC9", "#D3DCE3"];
 
+// Tipografia/cores padrao dos graficos (Sistema Artica v2) -- so aparencia.
+if (window.Chart) {
+  Chart.defaults.font.family = '"IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif';
+  Chart.defaults.font.size = 12;
+  Chart.defaults.color = "#6B7684";
+  Chart.defaults.borderColor = "#EBECED";
+}
+
 // Mapa FIXO categoria -> cor do grafico "Por porte do cliente" (Consolidado e
 // Tendencias, se algum dia ganhar o mesmo grafico) -- cor por indice/ordem foi
 // trocada por isto (2026-09-25) porque a ordem de chegada dos dados da API podia
@@ -11,7 +19,7 @@ const CORES_PORTE = {
   "Pequena": "#36587E",
   "Média": "#5878A0",
   "Grande": "#223850",
-  "Não informado": "#A9BAC9",
+  "Não informado": "#D3DCE3",
 };
 
 // Valores antigos de porte salvos em URL (antes da consolidacao em 4 categorias,

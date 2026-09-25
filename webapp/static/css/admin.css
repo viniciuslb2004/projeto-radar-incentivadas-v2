@@ -315,3 +315,45 @@
 .admin-timeline-paginas { margin-top: 4px; color: var(--text-muted); }
 .admin-timeline-lead { margin-top: 4px; color: var(--negative); }
 .admin-timeline-lead.contatado { color: var(--positive); }
+
+/* ============ Painel /admin (restyle; regras-base em admin.css) ============ */
+.admin-body { font-family: var(--font); }
+.admin-topbar { box-shadow: none; padding: 14px 28px; }
+.admin-brand > div:last-child { font-family: var(--font); font-weight: 500; color: var(--blue-lighter); border-left: 1px solid var(--steel-2); padding-left: 14px; line-height: 24px; }
+/* Login sobre a propria faixa marinha (logo oficial branco precisa de fundo marinho) */
+.admin-login-card { background: transparent; box-shadow: none; color: #fff; max-width: 360px; }
+.admin-login-card .login-titulo { color: #fff; font-size: 26px; font-weight: 700; font-stretch: 110%; margin-top: 8px; }
+.admin-login-card .login-subtitulo { color: var(--blue-lighter); font-size: 13px; margin-bottom: 8px; }
+.admin-login-card label { color: var(--blue-lighter); font-size: 13px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+.admin-login-card input { background: #fff; color: var(--text-main); border-color: var(--blue-lighter); border-radius: var(--radius-sm); padding: 10px 12px; }
+.admin-login-card input:focus { outline: 2px solid var(--blue-light); outline-offset: 2px; }
+.admin-login-card .login-erro { color: #ffb4b4; }
+#admin-login-btn { background: #fff; color: var(--navy); border-color: #fff; border-radius: var(--radius-sm); padding: 11px; }
+#admin-login-btn:hover { background: var(--blue-lightest); }
+.admin-btn-secundario { border-color: var(--steel-2); border-radius: var(--radius-btn); }
+.admin-btn-primario, .admin-toggle-btn { border-radius: var(--radius-btn); font-weight: 600; }
+.admin-toggle-btn { border-color: var(--blue-lightest); }
+.admin-toggle-btn:hover { border-color: var(--blue-lighter); background: var(--bg); }
+.admin-secao h2 { font-size: 20px; font-weight: 700; }
+.admin-cards { gap: 0; background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.admin-card { border: none; box-shadow: none; border-radius: 0; border-left: 1px solid var(--border); }
+.admin-card:first-child { border-left: none; }
+.admin-card .rotulo { font-size: 13px; }
+.admin-refresh-card { border: none; }
+.admin-refresh-card h3 { font-family: var(--font); font-stretch: 100%; }
+.admin-tabela { border: none; }
+.admin-tabela th { background: #fff; border-bottom: 1px solid var(--blue-lightest); font-size: 12px; }
+.admin-tabela tbody tr:hover { background: var(--bg); }
+.admin-form-usuario, .admin-correcao-form { border: none; box-shadow: var(--shadow); }
+.admin-modal { box-shadow: var(--shadow-lift); }
+.admin-modal h4 { font-family: var(--font-display); font-stretch: 104%; color: var(--navy); font-size: 14px; }
+@media (max-width: 620px) {
+  .admin-topbar { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+  .admin-main { padding: 16px; }
+  .admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-card { border-left: none; border-top: 1px solid var(--border); }
+  .admin-card:nth-child(-n+2) { border-top: none; }
+  .admin-card:nth-child(even) { border-left: 1px solid var(--border); }
+  .admin-tabela { display: block; overflow-x: auto; white-space: nowrap; }
+  .admin-secao-header { flex-wrap: wrap; gap: 8px; }
+}

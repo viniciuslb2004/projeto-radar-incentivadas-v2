@@ -460,7 +460,7 @@ async function loadOperadores(filters) {
       labels: data.map((d) => `${curto(d.agente)} (${fmtNum(d.n_operacoes)} ops)`),
       datasets: [{
         data: data.map((d) => d.valor_total),
-        backgroundColor: data.map((d) => (d.outros ? AZUL_TONS[5] : AZUL_TONS[1])),
+        backgroundColor: data.map((d) => (d.outros ? AZUL_TONS[6] : AZUL_TONS[1])),
       }],
     },
     options: {
