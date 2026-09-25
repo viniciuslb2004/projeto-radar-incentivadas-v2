@@ -521,37 +521,50 @@
        listagem existente). -->
   <section id="view-potenciais" class="view">
     <div class="card mb-16">
-      <div class="card-header">Conte sobre o seu projeto</div>
+      <div class="card-header">Perfil do projeto</div>
       <div class="card-body">
-        <div class="filterbar filterbar-embutida">
+        <form id="pt-form" class="pt-form" novalidate onsubmit="return false;">
           <div>
-            <label for="pt-f-setor">Setor</label>
-            <select id="pt-f-setor"><option value="">Selecione...</option></select>
+            <label for="pt-f-atividade">Atividade</label>
+            <select id="pt-f-atividade"><option value="">Selecione...</option></select>
           </div>
           <div>
-            <label for="pt-f-subsetor">Subsetor <span class="hint">(opcional, só refina as transações semelhantes)</span></label>
-            <select id="pt-f-subsetor"><option value="">Todos</option></select>
+            <label for="pt-f-finalidade">Finalidade do crédito</label>
+            <select id="pt-f-finalidade"><option value="">Selecione...</option></select>
           </div>
           <div>
-            <label for="pt-f-porte">Porte da empresa</label>
-            <select id="pt-f-porte"><option value="">Selecione...</option></select>
+            <label for="pt-f-tomador">Tomador</label>
+            <select id="pt-f-tomador"></select>
           </div>
           <div>
-            <label for="pt-f-volume">Valor desejado (R$ MM)</label>
-            <input type="number" id="pt-f-volume" placeholder="Ex: 15" min="0" step="0.1">
+            <label for="pt-f-porte">Porte <span class="hint">(receita bruta anual)</span></label>
+            <select id="pt-f-porte">
+              <option value="">Selecione...</option>
+              <option value="MICRO">Micro (até R$ 360 mil)</option>
+              <option value="PEQUENA">Pequena (até R$ 4,8 mi)</option>
+              <option value="MÉDIA">Média (até R$ 300 mi)</option>
+              <option value="GRANDE">Grande (acima de R$ 300 mi)</option>
+            </select>
           </div>
           <div>
-            <label for="pt-f-uso">Uso dos recursos</label>
-            <select id="pt-f-uso"><option value="">Selecione...</option></select>
+            <label for="pt-f-uf">UF do projeto</label>
+            <select id="pt-f-uf"><option value="">Selecione...</option></select>
           </div>
+          <div>
+            <label for="pt-f-volume">Valor do financiamento <span class="hint">(R$ milhões)</span></label>
+            <input type="text" inputmode="decimal" id="pt-f-volume" placeholder="Ex: 2,5" autocomplete="off" aria-describedby="pt-erro">
+          </div>
+        </form>
+        <div class="pt-form-rodape">
+          <button type="button" class="acao-btn" id="pt-buscar-btn">Ver linhas</button>
+          <button type="button" class="pt-btn" id="pt-limpar-btn">Limpar</button>
+          <p class="meta">Resultados atualizam ao alterar o perfil. Aderência indicativa, não confirma elegibilidade.</p>
         </div>
-        <button type="button" class="acao-btn mt-14" id="pt-buscar-btn">Ver linhas potenciais</button>
-        <p class="meta" id="pt-erro" style="display:none;"></p>
+        <p class="pt-erro" id="pt-erro" role="alert" hidden></p>
       </div>
     </div>
 
-    <p class="meta" id="pt-contagem"></p>
-    <div id="pt-lista"></div>
+    <div id="pt-resultado" aria-live="polite"></div>
   </section>
 
 </main>

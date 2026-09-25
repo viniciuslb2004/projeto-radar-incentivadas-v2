@@ -104,3 +104,20 @@ prioriza precisão com baixo custo operacional, conforme pedido). Linguagem semp
 aderência", nunca "elegível". Inclui **"Transações Semelhantes"**: reaproveita `/api/operacoes`
 (parâmetros opcionais novos, retrocompatíveis) pra mostrar operações reais comparáveis, deixando
 claro que são referência histórica, não garantia.
+
+**Potenciais Linhas v2 (2026-09-25)** — motor reescrito após avaliação com 16 perfis-gabarito
+(`scripts/avaliar_potenciais.py`, precisão@3 0,43→0,92, precisão@5 0,57→0,86). Formulário:
+Atividade (14 opções mais granulares que as 4 categorias; cada uma mapeia pra um setor BNDES),
+Finalidade (investimento/máquinas/giro/inovação/sustentabilidade), Tomador (empresa/produtor
+rural/cooperativa/ente público), Porte, UF, Valor (R$ mi). Parâmetros antigos `setor`/`uso`
+continuam aceitos. **Regras duras EXCLUEM** (região que não cobre a UF, porte fora do que
+`porte_elegivel` lista, valor fora de min/max, finalidade incompatível, nicho setorial de outra
+atividade, público restrito: Pronaf/agricultura familiar, só cooperativas, estudante PF, entes
+públicos/sem fins lucrativos) — um resultado exibido nunca tem contradição. Critério sem dado na
+fonte = chip "–" com fator fixo 0,4 (nunca conta como match). Score = Σ peso×fator / Σ pesos
+(atividade 35, finalidade 25, porte 15, valor 15, UF 10); ≥80 Alta, 60–79 Média, <60 vai pra
+"Outras opções". Tudo parse determinístico do texto da fonte, sem IA. Resumos curtos dos cards
+("Prazo até 15 anos (varia)") só extraem números literais do texto (helpers `lnResumo*` em
+`linhas.js`); o modal de detalhe da linha só corta em fronteira de palavra + "ver mais".
+Limitação conhecida: linhas com poucos campos preenchidos na fonte (ex.: Finame BK, porte/setor
+"Não informado") ficam em Média mesmo sendo o produto clássico pro caso — reflexo honesto do dado.

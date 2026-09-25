@@ -1,310 +1,316 @@
-// Aba "Potenciais Linhas" (item 3 do pedido): usuario informa caracteristicas do
-// projeto (setor, porte, volume, uso dos recursos) e recebe um ranking de Linhas
-// Incentivadas com "potencial aderência" -- NUNCA "elegibilidade confirmada" (ver
-// texto no card de cada resultado). Motor de recomendacao 100% determinístico
-// (filtros + score por regras, ver webapp/potenciais.py), sem IA/chamada a
-// modelo. "Transações Semelhantes" (item 4) reaproveita /api/operacoes (mesma
-// rota que Consolidado/Busca/modal ja usam), sem rota nova.
+// Aba "Potenciais Linhas" (v2, 2026-09-25): usuario informa o perfil do projeto e
+// recebe linhas do catalogo com "potencial aderência" -- NUNCA "elegibilidade
+// confirmada". Motor 100% deterministico em webapp/potenciais.py (regras duras
+// excluem, criterios verificados viram chips ✓ / –). Resultados atualizam sem
+// recarregar a cada mudanca do formulario (debounce). "Transações semelhantes"
+// reaproveita /api/operacoes. Helpers de texto (lnResumo*, lnCortarNaPalavra)
+// vivem em linhas.js.
 
 let potenciaisOpcoesCarregadas = false;
+let _ptSetorPorAtividade = {};
+const _PT_CAMPOS = {
+  atividade: "pt-f-atividade", finalidade: "pt-f-finalidade", tomador: "pt-f-tomador",
+  porte: "pt-f-porte", uf: "pt-f-uf", volume: "pt-f-volume",
+};
+const _PT_EXEMPLOS = [
+  { rotulo: "Pequena indústria em SP comprando máquinas (R$ 2 mi)", v: { atividade: "industria", finalidade: "maquinas", porte: "PEQUENA", uf: "SP", volume: "2" } },
+  { rotulo: "Geradora eólica no RN (R$ 500 mi)", v: { atividade: "energia", finalidade: "investimento", porte: "GRANDE", uf: "RN", volume: "500" } },
+  { rotulo: "Hospital na BA, expansão (R$ 80 mi)", v: { atividade: "saude", finalidade: "investimento", porte: "GRANDE", uf: "BA", volume: "80" } },
+  { rotulo: "Micro varejo em PE, capital de giro (R$ 200 mil)", v: { atividade: "comercio", finalidade: "giro", porte: "MICRO", uf: "PE", volume: "0,2" } },
+];
 
-// Campo "UF da empresa" (gap-fix 2026-09-23 -- item 3 do pedido: filtro
-// geografico pra diferenciar linhas de bancos regionais como BASA/BNB/
-// Desenvolve SP das linhas nacionais BNDES/FINEP). Escopo desta tarefa e SO
-// webapp/potenciais.py + este arquivo -- index.html pertence a outra area de
-// edicao, entao o campo e criado via DOM em vez de editar o HTML estatico
-// (mesmo container .filterbar que ja tem Setor/Subsetor/Porte/Volume/Uso).
-function _garantirCampoUf() {
-  if (document.getElementById("pt-f-uf")) return;
-  const setorWrapper = document.getElementById("pt-f-setor")?.closest("div");
-  const filterbar = setorWrapper?.parentElement;
-  if (!filterbar) return;
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML =
-    '<label for="pt-f-uf">UF da empresa <span class="hint">(opcional, prioriza/filtra linhas regionais como BASA, BNB e Desenvolve SP)</span></label>' +
-    '<select id="pt-f-uf" aria-label="UF da empresa"><option value="">Todo o Brasil</option></select>';
-  filterbar.appendChild(wrapper);
+function _ptFill(id, itens) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  itens.forEach(([valor, rotulo]) => {
+    const opt = document.createElement("option");
+    opt.value = valor;
+    opt.textContent = rotulo;
+    sel.appendChild(opt);
+  });
 }
 
 async function _initPotenciaisOpcoes() {
   if (potenciaisOpcoesCarregadas) return;
-  _garantirCampoUf();
   let opcoes;
   try {
     opcoes = await fetchJSON("/api/potenciais/opcoes");
   } catch (e) {
-    return; // selects ficam so com a opcao padrao -- nao trava o resto da aba
+    return;
   }
-  const fill = (id, values, manterPrimeira) => {
-    const sel = document.getElementById(id);
-    if (!sel) return;
-    (values || []).forEach((v) => {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
-      sel.appendChild(opt);
-    });
-  };
-  fill("pt-f-setor", opcoes.setores || []);
-  fill("pt-f-subsetor", opcoes.subsetores || []);
-  fill("pt-f-porte", opcoes.portes || []);
-  fill("pt-f-uso", opcoes.usos || []);
-  fill("pt-f-uf", opcoes.ufs || []);
+  (opcoes.atividades || []).forEach((a) => { _ptSetorPorAtividade[a.id] = a.setor; });
+  _ptFill("pt-f-atividade", (opcoes.atividades || []).map((a) => [a.id, a.rotulo]));
+  _ptFill("pt-f-finalidade", (opcoes.finalidades || []).map((f) => [f.id, f.rotulo]));
+  _ptFill("pt-f-tomador", (opcoes.tomadores || []).map((t) => [t.id, t.rotulo]));
+  _ptFill("pt-f-uf", (opcoes.ufs || []).map((u) => [u, u]));
   potenciaisOpcoesCarregadas = true;
   _aplicarFiltrosPotenciaisDaURL();
 }
 
-// Restaura o formulario a partir da URL (F5/link compartilhado) DEPOIS que as
-// opcoes dos selects existem, e ja dispara a busca se houver algum criterio --
-// nenhum request extra alem do que o proprio clique em "Buscar" faria.
-const _CAMPOS_POTENCIAIS_URL = { setor: "pt-f-setor", subsetor: "pt-f-subsetor", porte: "pt-f-porte", volume: "pt-f-volume", uso: "pt-f-uso", uf: "pt-f-uf" };
 function _aplicarFiltrosPotenciaisDaURL() {
-  if (_viewInicialDaURL() !== "potenciais") return;
+  if (_viewInicialDaURL() !== "potenciais") { _ptRenderVazio(); return; }
   const params = paramsDaURL();
   let algum = false;
-  Object.entries(_CAMPOS_POTENCIAIS_URL).forEach(([chave, id]) => {
+  Object.entries(_PT_CAMPOS).forEach(([chave, id]) => {
     const el = document.getElementById(id);
     if (el && params.has(chave)) { el.value = params.get(chave); algum = algum || !!el.value; }
   });
-  if (algum) _buscarPotenciais();
+  if (algum) _buscarPotenciais(); else _ptRenderVazio();
 }
 
-function _potenciaisFormAtual() {
-  return {
-    setor: document.getElementById("pt-f-setor").value,
-    subsetor: document.getElementById("pt-f-subsetor").value,
-    porte: document.getElementById("pt-f-porte").value,
-    // Valor digitado pelo usuario em R$ MM (item 3 do gap-fix 2026-09-22, campo
-    // "Valor desejado (R$ MM)" em index.html) -- ainda em MM aqui, string bruta
-    // do <input>. A conversao pra reais cheios (x 1_000_000) e a validacao
-    // acontecem em _buscarPotenciais, ANTES de montar os parametros pra API e
-    // ANTES de qualquer uso deste mesmo objeto `form` mais abaixo (inclusive
-    // "Transações Semelhantes", que reusa `form` via closure) -- backend
-    // (webapp/potenciais.py) e valor_minimo/valor_maximo de linhas_incentivadas
-    // continuam em reais cheios, sem nenhuma mudanca de schema/contrato.
-    volume: document.getElementById("pt-f-volume").value,
-    uso: document.getElementById("pt-f-uso").value,
-    // UF da empresa (gap-fix 2026-09-23): campo criado via _garantirCampoUf,
-    // pode nao existir ainda na primeira renderizacao -- optional chaining.
-    uf: document.getElementById("pt-f-uf")?.value || "",
+function _ptForm() {
+  const f = {};
+  Object.entries(_PT_CAMPOS).forEach(([chave, id]) => { f[chave] = (document.getElementById(id)?.value || "").trim(); });
+  return f;
+}
+
+function _ptParseValorMM(txt) {
+  if (!txt) return null;
+  const n = Number(String(txt).replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : NaN;
+}
+
+function _ptRenderVazio() {
+  const box = document.getElementById("pt-resultado");
+  if (!box) return;
+  box.innerHTML = `<div class="pt-vazio">
+    <p>Preencha o perfil acima para ver as linhas de crédito incentivado com maior potencial de aderência.</p>
+    <div class="pt-exemplos">${_PT_EXEMPLOS.map((e, i) => `<button type="button" class="pt-exemplo" data-exemplo="${i}">${esc(e.rotulo)}</button>`).join("")}</div>
+  </div>`;
+  box.querySelectorAll("[data-exemplo]").forEach((b) => b.addEventListener("click", () => {
+    const ex = _PT_EXEMPLOS[Number(b.dataset.exemplo)].v;
+    Object.entries(_PT_CAMPOS).forEach(([chave, id]) => {
+      const el = document.getElementById(id);
+      if (el && chave !== "tomador") el.value = ex[chave] || "";
+    });
+    _buscarPotenciais();
+  }));
+}
+
+function _ptSeloClasse(rotulo) {
+  return rotulo === "Alta" ? "pt-selo-alta" : rotulo === "Média" ? "pt-selo-media" : "pt-selo-baixa";
+}
+
+// Linha de atributos-chave: so o que a fonte informa (numero literal extraido ou
+// corte curto); o que faltar vai pra um "Não informado: ..." discreto.
+function _ptAtributos(l) {
+  const partes = [];
+  const faltando = [];
+  const add = (rot, resumo, bruto) => {
+    if (lnNaoInformado(bruto)) { faltando.push(rot.toLowerCase()); return; }
+    partes.push(`<span class="rot">${esc(rot)}</span> ${esc(resumo || lnCortarNaPalavra(bruto, 40))}`);
   };
+  add("Prazo", lnResumoDuracao(l.prazo_total), l.prazo_total);
+  add("Carência", lnResumoDuracao(l.carencia), l.carencia);
+  add("Participação", lnResumoPercentual(l.percentual_financiavel), l.percentual_financiavel);
+  const taxaBruta = lnNaoInformado(l.taxa_completa) ? l.indexador : l.taxa_completa;
+  add("Taxa", lnResumoTaxa(l.taxa_completa, l.indexador), taxaBruta);
+  let html = partes.join('<span class="sep" aria-hidden="true">·</span>');
+  if (faltando.length) html += `${partes.length ? '<span class="sep" aria-hidden="true">·</span>' : ""}<span class="rot">Não informado: ${esc(faltando.join(", "))}</span>`;
+  return html;
 }
 
-function _rotuloParaClasseBadge(rotulo) {
-  if (rotulo === "Alta") return "up";
-  if (rotulo === "Baixa") return "down";
-  return "neutro";
+function _ptDetalhesCondicoes(l) {
+  const itens = [["Taxa", l.taxa_completa], ["Prazo", l.prazo_total], ["Carência", l.carencia], ["Participação", l.percentual_financiavel]]
+    .filter(([, v]) => !lnNaoInformado(v));
+  if (!itens.length) return "";
+  return `<dl class="pt-detalhes" hidden>${itens.map(([r, v]) => `<dt>${esc(r)}</dt><dd>${esc(v)}</dd>`).join("")}
+    ${l.url_oficial ? `<dd style="margin-top:8px;"><a href="${escUrl(l.url_oficial)}" target="_blank" rel="noopener noreferrer">Fonte oficial ↗</a></dd>` : ""}</dl>`;
 }
 
-// "Transações Semelhantes" (item 4 do pedido): busca comparaveis reais em
-// `operations` reaproveitando /api/operacoes (ja estendido com os filtros
-// porte/valor_min/valor_max, ver webapp/main.py::_filters_clause) -- nenhuma
-// logica de query nova aqui, so montagem dos parametros. Mostra so um preview
-// pequeno (5 linhas) inline, "não inundar a tela" (item 4), nunca a lista
-// inteira sem o usuario pedir.
-async function _renderTransacoesSemelhantes(containerId, filtrosForm) {
-  const container = document.getElementById(containerId);
-  container.innerHTML = '<p class="empty-state">Buscando transações semelhantes...</p>';
+function _ptCard(l) {
+  const crit = (l.criterios || []).map((c) => {
+    const ok = c.status === "ok";
+    return `<li class="${ok ? "ok" : "na"}"><span class="ic" aria-hidden="true">${ok ? "✓" : "–"}</span><span><span class="sr-only">${ok ? "Atende: " : "Não informado: "}</span>${esc(c.texto)}</span></li>`;
+  }).join("");
+  const alertas = (l.alertas || []).map((a) => `<p class="pt-alerta">⚠ ${esc(a)}</p>`).join("");
+  const freq = l.frequencia_historica >= 10 ? ` · ~${fmtNum(l.frequencia_historica)} operações parecidas na base` : "";
+  const detalhes = _ptDetalhesCondicoes(l);
+  return `<article class="pt-card" data-id="${esc(l.id)}">
+    <div class="pt-card-topo">
+      <div>
+        <h3>${esc(l.nome)}</h3>
+        <div class="pt-inst">${esc(l.instituicao)} · ${l.fluxo === "edital" ? "Edital" : "Fluxo contínuo"}${esc(freq)}</div>
+      </div>
+      <span class="pt-selo ${_ptSeloClasse(l.score_rotulo)}" title="Potencial aderência calculada pelos critérios verificados">Aderência ${esc(l.score_rotulo).toLowerCase()} · ${esc(l.score_pct)}%</span>
+    </div>
+    <p class="pt-attrs">${_ptAtributos(l)}</p>
+    <ul class="pt-crit" aria-label="Critérios avaliados">${crit}</ul>
+    ${alertas}
+    <div class="pt-acoes">
+      ${detalhes ? `<button type="button" class="pt-btn" data-acao="condicoes" aria-expanded="false">Ver condições completas</button>` : ""}
+      <button type="button" class="pt-btn" data-acao="linha">Detalhe completo da linha</button>
+      <button type="button" class="pt-btn" data-acao="transacoes" aria-expanded="false">Transações semelhantes</button>
+    </div>
+    ${detalhes}
+    <div class="pt-painel" hidden></div>
+  </article>`;
+}
 
-  const params = {};
-  if (filtrosForm.setor) params.setor = filtrosForm.setor;
-  if (filtrosForm.subsetor) params.subsetor = filtrosForm.subsetor;
-  if (filtrosForm.porte) params.porte = filtrosForm.porte;
-  // Instituicao (item 5 do gap-fix 2026-09-22): so quando o CHAMADOR ja
-  // confirmou que a instituicao da linha e uma das poucas que `operations.agencia`
-  // de fato cobre (ver AGENCIAS_COM_OPERACOES_REAIS mais abaixo, no unico lugar
-  // que chama esta funcao com uma linha especifica) -- restricao conhecida
-  // (CLAUDE.md/webapp/potenciais.py): operations.agencia SO tem 'BNDES'/'FINEP',
-  // a base de transacoes reais nao cobre BNB/Desenvolve SP/BASA/BB/CEF. Nunca
-  // inventa um valor de agencia quando a linha e de outra instituicao -- so
-  // filtra quando ha dado real (mesmo texto) pra usar.
-  if (filtrosForm.agencia) params.agencia = filtrosForm.agencia;
-  if (filtrosForm.volume) {
-    // Faixa em torno do volume informado (metade a 2x) -- comparaveis "na mesma
-    // ordem de grandeza", nao so operacoes com o valor EXATO (quase nunca bate).
-    const v = Number(filtrosForm.volume);
-    if (v > 0) {
-      params.valor_min = Math.round(v * 0.5);
-      params.valor_max = Math.round(v * 2);
-    }
+async function _renderTransacoesSemelhantes(container, filtros) {
+  container.innerHTML = '<p class="meta">Buscando transações semelhantes...</p>';
+  const params = { limit: 5, order_by: "valor", order_dir: "desc" };
+  if (filtros.setor) params.setor = filtros.setor;
+  if (filtros.porte) params.porte = filtros.porte;
+  if (filtros.agencia) params.agencia = filtros.agencia;
+  if (filtros.volume > 0) {
+    // mesma ordem de grandeza (metade a 2x), nao o valor exato
+    params.valor_min = Math.round(filtros.volume * 0.5);
+    params.valor_max = Math.round(filtros.volume * 2);
   }
-  params.limit = 5;
-  params.order_by = "valor";
-  params.order_dir = "desc";
-
   let ops;
   try {
     ops = await fetchJSON("/api/operacoes?" + qs(params));
   } catch (e) {
-    container.innerHTML = '<p class="empty-state">Não foi possível carregar transações semelhantes agora.</p>';
+    container.innerHTML = '<p class="meta">Não foi possível carregar transações semelhantes agora.</p>';
     return;
   }
-
   if (!Array.isArray(ops) || !ops.length) {
-    container.innerHTML = '<p class="empty-state">Nenhuma transação semelhante encontrada na base para esses critérios.</p>';
+    container.innerHTML = '<p class="meta">Nenhuma transação semelhante na base para esse perfil.</p>';
     return;
   }
-
-  let html = '<p class="meta" style="margin-bottom:8px;">Referências históricas da base deste app -- não é garantia de aprovação nem das mesmas condições no futuro.</p>';
-  html += '<table class="ops-table"><thead><tr><th>Cliente</th><th>Agência</th><th>Setor</th><th>Valor contratado</th></tr></thead><tbody>';
-  ops.forEach((op) => {
-    html += `<tr data-id="${esc(op.id)}" style="cursor:pointer;">
-      <td>${esc(op.cliente || "-")}</td>
-      <td>${esc(op.agencia || "-")}</td>
-      <td>${esc(op.setor_bndes || "Não classificado")}</td>
-      <td>${fmtBRLFull(op.valor_contratado)}</td>
-    </tr>`;
-  });
-  html += "</tbody></table>";
-  container.innerHTML = html;
+  container.innerHTML = `<p class="meta" style="margin:0 0 6px;">Referências históricas da base (não garantem aprovação nem as mesmas condições).</p>
+    <table class="ops-table"><thead><tr><th>Cliente</th><th>Agência</th><th>Setor</th><th>Valor</th></tr></thead><tbody>
+    ${ops.map((op) => `<tr data-id="${esc(op.id)}" tabindex="0" style="cursor:pointer;">
+      <td>${esc(op.cliente || "-")}</td><td>${esc(op.agencia || "-")}</td>
+      <td>${esc(op.setor_bndes || "Não classificado")}</td><td>${fmtBRLFull(op.valor_contratado)}</td></tr>`).join("")}
+    </tbody></table>`;
   container.querySelectorAll("tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => openOperacaoDetalhe(tr.dataset.id));
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter") openOperacaoDetalhe(tr.dataset.id); });
   });
 }
 
-function _potenciaisCard(linha, formAtual) {
-  const badgeClasse = _rotuloParaClasseBadge(linha.score_rotulo);
-  const motivosHtml = (linha.motivos || []).map((m) => `<li>${esc(m)}</li>`).join("");
-  const transacoesId = `pt-transacoes-${esc(linha.id)}`;
-  const naoInf = (v) => esc(v && v !== "Não informado pela fonte" ? v : "Não informado");
-  return `<div class="result-card" data-id="${esc(linha.id)}" style="cursor:default;">
-    <div class="top-row">
-      <span class="cliente">${esc(linha.nome)}</span>
-      <span>
-        <span class="badge neutro">${esc(linha.instituicao)}</span>
-        <span class="badge ${badgeClasse}">Potencial aderência: ${esc(linha.score_rotulo)} (${esc(linha.score_pct)}%)</span>
-      </span>
-    </div>
-    <div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); margin:10px 0;">
-      <div class="kpi-card"><div class="label">Taxa</div><div class="value" style="font-size:15px;">${naoInf(linha.taxa_completa)}</div></div>
-      <div class="kpi-card"><div class="label">Prazo</div><div class="value" style="font-size:15px;">${naoInf(linha.prazo_total)}</div></div>
-      <div class="kpi-card"><div class="label">Carência</div><div class="value" style="font-size:15px;">${naoInf(linha.carencia)}</div></div>
-      <div class="kpi-card"><div class="label">Limite de participação</div><div class="value" style="font-size:15px;">${naoInf(linha.percentual_financiavel)}</div></div>
-    </div>
-    <div class="meta"><strong>Por que faz sentido:</strong></div>
-    <ul class="meta" style="margin:4px 0 8px 18px;">${motivosHtml || "<li>Nenhum critério em comum informado.</li>"}</ul>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-      <button class="acao-btn" id="pt-ver-linha-${esc(linha.id)}">Ver detalhe completo da linha</button>
-      <button class="acao-btn" id="pt-ver-transacoes-${esc(linha.id)}">Ver transações semelhantes</button>
-    </div>
-    <div id="${transacoesId}" style="display:none; margin-top:10px;"></div>
-  </div>`;
+function _ptLigarCards(box, linhasPorId, perfil) {
+  box.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".pt-btn[data-acao]");
+    if (!btn) return;
+    const card = btn.closest(".pt-card");
+    const l = linhasPorId[card?.dataset.id];
+    if (!l) return;
+    const acao = btn.dataset.acao;
+    if (acao === "linha") { openLinhaDetalhe(l.id); return; }
+    if (acao === "condicoes") {
+      const dl = card.querySelector(".pt-detalhes");
+      const abrir = dl.hidden;
+      dl.hidden = !abrir;
+      btn.setAttribute("aria-expanded", String(abrir));
+      btn.textContent = abrir ? "Ocultar condições" : "Ver condições completas";
+      return;
+    }
+    if (acao === "transacoes") {
+      const painel = card.querySelector(".pt-painel");
+      const abrir = painel.hidden;
+      painel.hidden = !abrir;
+      btn.setAttribute("aria-expanded", String(abrir));
+      if (abrir && !painel.dataset.carregado) {
+        painel.dataset.carregado = "1";
+        const SETORES_BNDES = ["AGROPECUÁRIA", "COMERCIO/SERVICOS", "INDUSTRIA", "INFRAESTRUTURA"];
+        const AGENCIAS_COM_OPERACOES = ["BNDES", "FINEP", "BNB"];
+        await _renderTransacoesSemelhantes(painel, {
+          setor: SETORES_BNDES.includes(l.setor_padronizado) ? l.setor_padronizado : perfil.setor,
+          porte: perfil.porte,
+          volume: perfil.volume,
+          agencia: AGENCIAS_COM_OPERACOES.includes(l.instituicao) ? l.instituicao : undefined,
+        });
+      }
+    }
+  });
+}
+
+function _ptResumoExclusoes(data) {
+  const descartadas = (data.total_candidatos || 0) - (data.total_compativeis || 0);
+  if (descartadas <= 0) return "";
+  const motivos = (data.exclusoes || []).map((x) => `${x.motivo.toLowerCase()} (${x.n})`).join(", ");
+  return ` · ${fmtNum(descartadas)} descartadas por regra de elegibilidade${motivos ? ": " + esc(motivos) : ""}`;
 }
 
 async function _buscarPotenciais() {
   const erroEl = document.getElementById("pt-erro");
-  erroEl.style.display = "none";
-  const form = _potenciaisFormAtual();
-  // URL reflete o formulario da busca efetivamente disparada (volume ainda em
-  // R$ MM, como digitado) -- ver secao "Filtros na URL" em common.js.
+  const volumeEl = document.getElementById("pt-f-volume");
+  const box = document.getElementById("pt-resultado");
+  erroEl.hidden = true;
+  volumeEl.removeAttribute("aria-invalid");
+  const form = _ptForm();
   sincronizarFiltrosNaURL(form);
 
-  if (!form.setor && !form.porte && !form.volume && !form.uso) {
-    erroEl.textContent = "Informe ao menos um critério (setor, porte, volume ou uso dos recursos).";
-    erroEl.style.display = "block";
+  const volumeMM = _ptParseValorMM(form.volume);
+  if (Number.isNaN(volumeMM)) {
+    erroEl.textContent = "Informe o valor em R$ milhões, maior que zero (ex.: 2,5).";
+    erroEl.hidden = false;
+    volumeEl.setAttribute("aria-invalid", "true");
+    return;
+  }
+  if (!form.atividade && !form.finalidade && !form.porte && volumeMM === null) {
+    _ptRenderVazio();
     return;
   }
 
-  // Valor desejado em R$ MM -> reais cheios (item 3), com validacao simples
-  // contra entrada absurda (0/negativo) -- muta `form.volume` no lugar pra que
-  // TODO uso posterior deste mesmo objeto (params abaixo e "Transações
-  // Semelhantes" via closure no forEach mais abaixo) ja receba o valor em reais.
-  if (form.volume) {
-    const volumeMM = Number(form.volume);
-    if (!Number.isFinite(volumeMM) || volumeMM <= 0) {
-      erroEl.textContent = "Informe um valor desejado válido em R$ MM (maior que zero).";
-      erroEl.style.display = "block";
-      return;
-    }
-    form.volume = volumeMM * 1_000_000;
-  }
-
-  const lista = document.getElementById("pt-lista");
-  const contagem = document.getElementById("pt-contagem");
-  lista.innerHTML = '<p class="empty-state">Buscando linhas potenciais...</p>';
-  contagem.textContent = "";
-
   const params = {};
-  if (form.setor) params.setor = form.setor;
-  if (form.porte) params.porte = form.porte;
-  if (form.volume) params.volume = form.volume;
-  if (form.uso) params.uso = form.uso;
-  if (form.uf) params.uf = form.uf;
-  // Subsetor (gap-fix 2026-09-23): so entra como sinal ADICIONAL de correlacao
-  // textual dentro do criterio de setor (ver webapp/potenciais.py::
-  // _correlacao_textual_setor) -- nunca um filtro estrutural novo, continua
-  // sem contar pro "informe ao menos um critério" do backend.
-  if (form.subsetor) params.subsetor = form.subsetor;
+  ["atividade", "finalidade", "tomador", "porte", "uf"].forEach((k) => { if (form[k]) params[k] = form[k]; });
+  if (volumeMM) params.volume = volumeMM * 1_000_000;
 
   const token = (_buscarPotenciais._token = (_buscarPotenciais._token || 0) + 1);
-  const btnBuscar = document.getElementById("pt-buscar-btn");
+  box.setAttribute("aria-busy", "true");
+  box.innerHTML = '<div class="pt-lista"><div class="pt-skel"></div><div class="pt-skel"></div><div class="pt-skel"></div></div>';
   let data;
   try {
-    if (btnBuscar) btnBuscar.disabled = true;
     data = await fetchJSON("/api/potenciais/buscar?" + qs(params));
   } catch (e) {
     if (token !== _buscarPotenciais._token) return;
-    lista.innerHTML = '<p class="empty-state">Erro ao buscar linhas potenciais. Tente novamente.</p>';
+    box.removeAttribute("aria-busy");
+    box.innerHTML = '<p class="pt-vazio">Erro ao buscar linhas. Tente novamente.</p>';
     return;
-  } finally {
-    if (btnBuscar && token === _buscarPotenciais._token) btnBuscar.disabled = false;
   }
-  if (token !== _buscarPotenciais._token) return; // busca mais nova ja disparada
+  if (token !== _buscarPotenciais._token) return;
+  box.removeAttribute("aria-busy");
 
   if (!data || data.erro) {
-    if (!data) { lista.innerHTML = '<p class="empty-state">Erro ao buscar linhas potenciais. Tente novamente.</p>'; return; }
-    erroEl.textContent = data.erro;
-    erroEl.style.display = "block";
-    lista.innerHTML = "";
+    erroEl.textContent = (data && data.erro) || "Erro ao buscar linhas.";
+    erroEl.hidden = false;
+    box.innerHTML = "";
     return;
   }
 
-  if (!data.resultados || !data.resultados.length) {
-    lista.innerHTML = '<p class="empty-state">Nenhuma linha incentivada com aderência avaliável para esses critérios.</p>';
-    return;
+  const principais = data.resultados || [];
+  const outras = data.outras_opcoes || [];
+  const perfil = Object.assign({}, data.perfil || {}, { setor: (data.perfil || {}).setor || _ptSetorPorAtividade[form.atividade] });
+  const linhasPorId = {};
+  principais.concat(outras).forEach((l) => { linhasPorId[l.id] = l; });
+
+  let html = `<p class="pt-resumo">${principais.length ? `${fmtNum(principais.length)} linha(s) com potencial aderência` : "Nenhuma linha com aderência média ou alta"}${_ptResumoExclusoes(data)}.</p>`;
+  if (principais.length) {
+    html += `<div class="pt-lista">${principais.map(_ptCard).join("")}</div>`;
+  } else {
+    html += '<p class="pt-vazio">Nenhuma linha do catálogo atende a todos os critérios informados. Tente ampliar o perfil (ex.: deixar a finalidade ou o valor em branco).</p>';
   }
-
-  contagem.textContent = `${data.resultados.length} linha(s) potencial(is) encontrada(s) (de ${fmtNum(data.total_candidatos || 0)} candidatas avaliadas)`;
-  lista.innerHTML = data.resultados.map((l) => _potenciaisCard(l, form)).join("");
-
-  data.resultados.forEach((l) => {
-    const btnLinha = document.getElementById(`pt-ver-linha-${l.id}`);
-    if (btnLinha) btnLinha.addEventListener("click", () => openLinhaDetalhe(l.id));
-
-    const btnTransacoes = document.getElementById(`pt-ver-transacoes-${l.id}`);
-    const painel = document.getElementById(`pt-transacoes-${l.id}`);
-    if (btnTransacoes && painel) {
-      btnTransacoes.addEventListener("click", async () => {
-        const abrindo = painel.style.display === "none";
-        painel.style.display = abrindo ? "block" : "none";
-        if (abrindo && !painel.dataset.carregado) {
-          painel.dataset.carregado = "1";
-          // Setor da PROPRIA linha (quando na taxonomia BNDES) tem prioridade
-          // sobre o setor generico do formulario -- comparavel mais preciso pra
-          // esta linha especifica. Ver mesma taxonomia em linhas.js.
-          const SETORES_TAXONOMIA_BNDES = ["AGROPECUÁRIA", "COMERCIO/SERVICOS", "INDUSTRIA", "INFRAESTRUTURA"];
-          // Instituicao (item 5): so passa agencia quando a instituicao da
-          // PROPRIA linha e uma das que `operations.agencia` realmente cobre --
-          // nunca inventa o filtro pra BNB/Desenvolve SP/BASA/BB/CEF (a base de
-          // transacoes reais nao tem essas instituicoes, ver restricao no topo
-          // deste arquivo/CLAUDE.md).
-          const AGENCIAS_COM_OPERACOES_REAIS = ["BNDES", "FINEP", "BNB"];
-          const formComSetorDaLinha = Object.assign({}, form, {
-            setor: SETORES_TAXONOMIA_BNDES.includes(l.setor_padronizado) ? l.setor_padronizado : form.setor,
-            agencia: AGENCIAS_COM_OPERACOES_REAIS.includes(l.instituicao) ? l.instituicao : undefined,
-          });
-          await _renderTransacoesSemelhantes(`pt-transacoes-${l.id}`, formComSetorDaLinha);
-        }
-      });
-    }
-  });
+  if (outras.length) {
+    html += `<details class="pt-outras"${principais.length ? "" : " open"}><summary>Outras opções, com aderência baixa (${fmtNum(outras.length)})</summary>
+      <div class="pt-lista">${outras.map(_ptCard).join("")}</div></details>`;
+  }
+  box.innerHTML = html;
+  const novo = box.cloneNode(true); // remove listeners de buscas anteriores
+  box.replaceWith(novo);
+  _ptLigarCards(novo, linhasPorId, perfil);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const btn = document.getElementById("pt-buscar-btn");
-  if (btn) btn.addEventListener("click", _buscarPotenciais);
-  // Opcoes so precisam ser buscadas 1x -- carrega incondicional no boot (mesmo
-  // padrao ja usado por linhas.js/editais.js pra funcionar com URL direta/F5,
-  // sem depender de clique na aba).
+  const buscarDebounced = debounce(_buscarPotenciais, 300);
+  document.getElementById("pt-buscar-btn")?.addEventListener("click", _buscarPotenciais);
+  document.getElementById("pt-limpar-btn")?.addEventListener("click", () => {
+    Object.entries(_PT_CAMPOS).forEach(([chave, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = chave === "tomador" ? "empresa" : "";
+    });
+    document.getElementById("pt-erro").hidden = true;
+    sincronizarFiltrosNaURL({});
+    _ptRenderVazio();
+  });
+  Object.values(_PT_CAMPOS).forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener(el.tagName === "SELECT" ? "change" : "input", buscarDebounced);
+    if (el.tagName === "INPUT") el.addEventListener("keydown", (e) => { if (e.key === "Enter") _buscarPotenciais(); });
+  });
   _initPotenciaisOpcoes();
 });

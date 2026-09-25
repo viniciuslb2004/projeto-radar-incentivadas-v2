@@ -1,27 +1,27 @@
-"""Rotas de "Potenciais Linhas" (item 3 do pedido) -- usuario informa
-caracteristicas do projeto (setor, porte, volume necessario, uso dos recursos) e
-recebe um ranking de Linhas Incentivadas (`linhas_incentivadas`) com "potencial
-aderencia" (NUNCA "elegibilidade confirmada" -- isso sempre depende de analise
-adicional que este app nao faz).
+"""Rotas de "Potenciais Linhas" -- usuario informa o perfil do projeto (atividade,
+tipo de tomador, porte, UF, valor, finalidade) e recebe um ranking de Linhas
+Incentivadas (`linhas_incentivadas`) com "potencial aderencia" (NUNCA
+"elegibilidade confirmada" -- isso sempre depende de analise da instituicao).
 
-Pacote ISOLADO, mesmo espirito de webapp/admin/webapp/salvos.py (ja removido,
-ver docs/archive/removed-features.md, mas o padrao de isolamento continua valido):
-nenhuma tabela nova, so consulta `linhas_incentivadas`/`operations` ja existentes.
-A UNICA integracao com webapp/main.py e o `app.include_router(...)` (ver la).
+Pacote ISOLADO: nenhuma tabela nova, so consulta `linhas_incentivadas`/`operations`.
+A UNICA integracao com webapp/main.py e o `app.include_router(...)`.
 
-Motor de recomendacao: filtros estruturados + score determinístico por regras
-(nunca IA/embeddings/chamada a modelo) -- ver `_pontuar_linha` abaixo. Pedido
-explicito do usuario: "boa precisão com baixo custo", sem obrigacao de IA. Dado
-o volume pequeno da tabela (~112 linhas), pontuar em Python depois de um SELECT
-simples e mais simples e transparente (motivos legiveis por linha) do que tentar
-expressar o mesmo score num CASE SQL gigante -- sem perda de performance real
-(tabela inteira cabe em memoria, nenhum N+1 contra o banco).
+Motor v2 (2026-09-25, reescrito apos avaliacao com 16 perfis-gabarito -- ver
+docs/linhas-incentivadas.md, secao "Potenciais Linhas"):
 
-"Transações Semelhantes" (item 4 do pedido) NAO tem rota propria aqui -- o
-frontend (potenciais.js) chama `/api/operacoes` diretamente (ja estendido com
-os filtros porte/valor_min/valor_max/produto, ver webapp/main.py::
-_filters_clause), reaproveitando o motor de filtros que a aba Consolidado/Busca
-ja usa em vez de duplicar logica de query aqui.
+1. REGRAS DURAS excluem (nunca so penalizam): regiao regional que nao cobre a UF,
+   porte fora do que a fonte lista, valor fora de [valor_minimo, valor_maximo],
+   finalidade incompativel, setor restrito a outro nicho, publico-alvo restrito
+   (agricultura familiar/Pronaf, cooperativas, estudante PF, entes publicos/sem
+   fins lucrativos). Assim um resultado exibido NUNCA tem contradicao explicita.
+2. Cada criterio informado vira um chip: "atende" (fator 0.7-1.0, conforme o quao
+   especifico e o match) ou "nao informado pela fonte" (fator fixo 0.4 -- sem
+   dado nunca conta a favor como se fosse match). Score = soma(peso*fator)/soma(peso).
+3. Rotulo calibrado: >=80 Alta, 60-79 Media, <60 vai pra "Outras opcoes".
+
+Tudo deterministico por regras sobre o TEXTO DA FONTE OFICIAL (porte_elegivel,
+setores_elegiveis, regiao_elegivel, descricao_resumida...), nunca IA e nunca dado
+inventado -- quando o parser nao reconhece o texto, o criterio fica neutro.
 """
 import re
 import unicodedata
@@ -36,57 +36,113 @@ NAO_INFORMADO = "Não informado pela fonte"
 NAO_INFORMADO_GRUPO = "Não informado"
 
 
-def _sem_acento(texto: str) -> str:
-    """Remove acentos (mesma logica de src/linhas_incentivadas.py::_sem_acento,
-    reimplementada aqui pra manter este pacote ISOLADO -- ver docstring do
-    modulo). So usada em comparacao de texto livre (correlacao setorial e
-    regiao_elegivel), nunca em dado gravado/exibido."""
-    return "".join(c for c in unicodedata.normalize("NFKD", texto or "") if not unicodedata.combining(c))
+def _norm(texto) -> str:
+    """minusculo + sem acento, so pra comparacao (nunca dado exibido)."""
+    t = "".join(c for c in unicodedata.normalize("NFKD", str(texto or "")) if not unicodedata.combining(c))
+    return t.lower()
 
-# Porte do INPUT do usuario (o porte/faturamento da PROPRIA empresa dele, item 3
-# do pedido) usa o MESMO vocabulario canonico ja usado em todo o resto do site
-# pra classificar operations.porte_cliente -- MICRO/PEQUENA/MÉDIA/GRANDE (ver
-# PORTE_NORMALIZADO_SQL em src/search_fts.py e o filtro de porte da aba Busca) --
-# em vez do bucket "Micro/Pequena" combinado usado em linhas_incentivadas.porte_grupo
-# (task 1, um problema DIFERENTE: colapsar 42 valores de TEXTO LIVRE da fonte
-# oficial). Usar o mesmo vocabulario do site aqui tem 2 vantagens: (1) da pra
-# filtrar "Transações Semelhantes" em `operations` com o MESMO valor, sem
-# converter nada; (2) fica consistente com o que o usuario ja ve na aba Busca.
-# _PORTE_INPUT_PARA_GRUPO_LINHA faz a ponte pro bucket de linhas_incentivadas
-# (mais grosso) na hora de pontuar.
+
+def _informado(v) -> bool:
+    return bool(v) and v not in (NAO_INFORMADO, NAO_INFORMADO_GRUPO)
+
+
+# ---------------------------------------------------------------- vocabulario do formulario
+
 _ORDEM_PORTE_INPUT = ["MICRO", "PEQUENA", "MÉDIA", "GRANDE"]
-_PORTE_INPUT_PARA_GRUPO_LINHA = {
-    "MICRO": "Micro/Pequena",
-    "PEQUENA": "Micro/Pequena",
-    "MÉDIA": "Média",
-    "GRANDE": "Grande",
+_TODOS_PORTES = frozenset(_ORDEM_PORTE_INPUT)
+_PORTE_GRUPO_PARA_INPUT = {
+    "Todos os portes": _TODOS_PORTES,
+    "Micro/Pequena": frozenset({"MICRO", "PEQUENA"}),
+    "Média": frozenset({"MÉDIA"}),
+    "Grande": frozenset({"GRANDE"}),
+}
+_PORTE_ROTULO = {"MICRO": "Micro", "PEQUENA": "Pequena", "MÉDIA": "Média", "GRANDE": "Grande"}
+
+# Atividade do projeto: mais granular que as 4 categorias de setor_padronizado
+# (sem isso "hospital" e "software" caem ambos em COMERCIO/SERVICOS e o motor nao
+# distingue Finem Saude de Finem TI). `setor` = categoria BNDES (pra Transacoes
+# Semelhantes e fallback); `termos` = match especifico (nome/setores/descricao);
+# `amplos` = match so contra setores_elegiveis (listas multissetoriais tipo
+# "Comercio, Turismo, Prestacao de Servicos, Industria").
+_ATIVIDADES = [
+    {"id": "industria", "rotulo": "Indústria (transformação)", "setor": "INDUSTRIA",
+     "termos": ("industr", "manufatur", "fabril", "metalurg", "quimic", "textil", "siderurg"),
+     "amplos": ("industr",)},
+    {"id": "agroindustria", "rotulo": "Agroindústria", "setor": "AGROPECUÁRIA",
+     "termos": ("agroindustr", "armazen", "beneficiamento"),
+     "amplos": ("agroindustr", "agronegocio", "agropecuar")},
+    {"id": "agro", "rotulo": "Agropecuária / produção rural", "setor": "AGROPECUÁRIA",
+     "termos": ("agropecuar", "agricultura", "agricola", "pecuar", "lavoura", "rural", "agronegocio", "graos"),
+     "amplos": ("agro", "rural")},
+    {"id": "energia", "rotulo": "Energia (geração, transmissão)", "setor": "INFRAESTRUTURA",
+     "termos": ("energia eletrica", "geracao de energia", "eolic", "solar", "fotovolt", "renovave", "minigeracao"),
+     "amplos": ("infraestrutur", "energia")},
+    {"id": "saneamento", "rotulo": "Saneamento / água e esgoto", "setor": "INFRAESTRUTURA",
+     "termos": ("saneamento", "agua e esgoto"),
+     "amplos": ("infraestrutur",)},
+    {"id": "logistica", "rotulo": "Logística, portos e transporte de cargas", "setor": "INFRAESTRUTURA",
+     "termos": ("logistic", "rodovi", "ferrovi", "hidrovi", "portuari", "porto", "infraestrutura de transporte", "navegacao", "embarcac"),
+     "amplos": ("infraestrutur", "transporte")},
+    {"id": "mobilidade", "rotulo": "Mobilidade urbana / transporte de passageiros", "setor": "INFRAESTRUTURA",
+     "termos": ("mobilidade urbana", "transporte escolar", "transporte publico"),
+     "amplos": ("infraestrutur", "transporte")},
+    {"id": "telecom", "rotulo": "Telecomunicações", "setor": "INFRAESTRUTURA",
+     "termos": ("telecom", "radio difus", "radiodifus"),
+     "amplos": ("infraestrutur",)},
+    {"id": "ti", "rotulo": "Tecnologia / software", "setor": "COMERCIO/SERVICOS",
+     "termos": ("tecnologia da informacao", "software", "startup", "base tecnologica", "digitaliza"),
+     "amplos": ("servic", "tecnolog")},
+    {"id": "saude", "rotulo": "Saúde", "setor": "COMERCIO/SERVICOS",
+     "termos": ("saude", "hospital"),
+     "amplos": ("servic",)},
+    {"id": "educacao", "rotulo": "Educação", "setor": "COMERCIO/SERVICOS",
+     "termos": ("educacao", "ensino"),
+     "amplos": ("servic",)},
+    {"id": "comercio", "rotulo": "Comércio / varejo / franquias", "setor": "COMERCIO/SERVICOS",
+     "termos": ("comercio", "varejo", "franquia"),
+     "amplos": ("comerci",)},
+    {"id": "servicos", "rotulo": "Serviços em geral", "setor": "COMERCIO/SERVICOS",
+     "termos": ("prestacao de servic",),
+     "amplos": ("servic",)},
+    {"id": "turismo", "rotulo": "Turismo / hotelaria", "setor": "COMERCIO/SERVICOS",
+     "termos": ("turismo", "hotel"),
+     "amplos": ("turismo", "servic")},
+    {"id": "cultura", "rotulo": "Cultura / economia criativa", "setor": "COMERCIO/SERVICOS",
+     "termos": ("cultura", "cultural", "editoria", "audiovisual"),
+     "amplos": ("cultura",)},
+]
+_ATIVIDADE_POR_ID = {a["id"]: a for a in _ATIVIDADES}
+# Compatibilidade com links antigos (?setor=INFRAESTRUTURA): categoria -> atividade generica.
+_SETOR_PARA_ATIVIDADE = {"INDUSTRIA": "industria", "AGROPECUÁRIA": "agro",
+                         "INFRAESTRUTURA": "logistica", "COMERCIO/SERVICOS": "servicos"}
+
+_FINALIDADES = [
+    {"id": "investimento", "rotulo": "Investimento / expansão (implantação, obras)"},
+    {"id": "maquinas", "rotulo": "Máquinas e equipamentos"},
+    {"id": "giro", "rotulo": "Capital de giro / custeio"},
+    {"id": "inovacao", "rotulo": "Inovação / P&D"},
+    {"id": "sustentabilidade", "rotulo": "Sustentabilidade / eficiência energética"},
+]
+_FINALIDADE_ROTULO = {f["id"]: f["rotulo"] for f in _FINALIDADES}
+# Compatibilidade com o parametro antigo `uso` (valores de destinacao_grupo).
+_USO_ANTIGO_PARA_FINALIDADE = {
+    "CAPEX / Projetos de investimento": "investimento", "Infraestrutura": "investimento",
+    "Máquinas e equipamentos": "maquinas", "Capital de giro": "giro",
+    "Inovação / P&D": "inovacao", "Eficiência energética / Sustentabilidade": "sustentabilidade",
 }
 
-_COLS_CANDIDATO = [
-    "id", "instituicao", "nome_oficial", "nome_simplificado", "status", "fluxo",
-    "setor_padronizado", "porte_padronizado", "porte_grupo", "destinacao",
-    "destinacao_grupo", "itens_financiaveis", "criterios_elegibilidade",
-    "percentual_financiavel", "taxa_completa", "indexador", "spread",
-    "prazo_total", "carencia", "valor_minimo", "valor_maximo",
-    "agente_financeiro", "url_oficial",
-    # Adicionadas pro sinal de correlacao textual + filtro geografico (gap-fix
-    # 2026-09-23, ver comentarios em _correlacao_textual/_avaliar_regiao_elegivel
-    # abaixo) -- setores_elegiveis e o texto LIVRE original (distinto de
-    # setor_padronizado, a categorizacao em 4 baldes), regiao_elegivel idem.
-    "setores_elegiveis", "regiao_elegivel",
+_TOMADORES = [
+    {"id": "empresa", "rotulo": "Empresa privada"},
+    {"id": "produtor_rural", "rotulo": "Produtor rural"},
+    {"id": "cooperativa", "rotulo": "Cooperativa"},
+    {"id": "ente_publico", "rotulo": "Ente público / estatal"},
 ]
 
-# Lista estatica das 27 UFs -- nao existe coluna de UF em linhas_incentivadas
-# (o campo e regiao_elegivel, texto livre da fonte oficial, ver
-# _avaliar_regiao_elegivel), entao as opcoes do formulario sao so a lista fixa
-# de UFs do Brasil (mesmo padrao ja usado por _ORDEM_PORTE_INPUT: enumeracao
-# fechada que nao depende de nenhuma tabela).
 _UFS_BRASIL = [
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
     "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
     "SP", "SE", "TO",
 ]
-
 _UF_NOME = {
     "AC": "acre", "AL": "alagoas", "AP": "amapa", "AM": "amazonas", "BA": "bahia",
     "CE": "ceara", "DF": "distrito federal", "ES": "espirito santo", "GO": "goias",
@@ -97,37 +153,47 @@ _UF_NOME = {
     "RR": "roraima", "SC": "santa catarina", "SP": "sao paulo", "SE": "sergipe",
     "TO": "tocantins",
 }
-
-# Grupos regionais usados quando regiao_elegivel cita a area de atuacao de um
-# fundo/orgao regional em vez de listar UFs (ex: "SUDAM"/"Amazonia Legal",
-# "Sudene"/"Nordeste", "Centro-Oeste") -- ver dados reais em
-# src/linhas_incentivadas.py (BASA/BNB/FCO). Definicao oficial de cada area
-# (nao inventada): Amazonia Legal = AC/AP/AM/MA/MT/PA/RO/RR/TO; area da Sudene
-# = Nordeste (9 estados) + partes de MG/ES (aqui tratado no nivel de UF
-# inteira, sem como recortar dentro do estado); Centro-Oeste = DF/GO/MT/MS.
+# Areas oficiais dos fundos regionais (nao inventadas): Amazonia Legal =
+# AC/AP/AM/MA/MT/PA/RO/RR/TO; Sudene = Nordeste + norte de MG/ES (tratado no nivel
+# de UF, sem recorte intraestadual); Centro-Oeste = DF/GO/MT/MS.
 _UFS_NORDESTE = {"AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"}
 _UFS_AMAZONIA_LEGAL = {"AC", "AP", "AM", "MA", "MT", "PA", "RO", "RR", "TO"}
 _UFS_CENTRO_OESTE = {"DF", "GO", "MT", "MS"}
+_UFS_NORTE = {"AC", "AP", "AM", "PA", "RO", "RR", "TO"}
 _UFS_SUL = {"PR", "SC", "RS"}
 _UFS_SUDESTE = {"SP", "RJ", "MG", "ES"}
 
+_COLS_CANDIDATO = [
+    "id", "instituicao", "nome_oficial", "nome_simplificado", "status", "fluxo",
+    "descricao_resumida", "setor_padronizado", "setores_elegiveis", "porte_elegivel",
+    "porte_grupo", "destinacao_grupo", "criterios_elegibilidade",
+    "percentual_financiavel", "taxa_completa", "indexador", "spread",
+    "prazo_total", "carencia", "valor_minimo", "valor_maximo",
+    "regiao_elegivel", "agente_financeiro", "url_oficial",
+]
+
+# Pesos (soma 100 quando tudo informado). Atividade/finalidade pesam mais: sao o
+# que mais diferencia uma linha de outra no catalogo.
+_PESOS = {"atividade": 35, "finalidade": 25, "porte": 15, "valor": 15, "uf": 10}
+FATOR_NAO_INFORMADO = 0.4
+LIMIAR_PRINCIPAL = 60
+LIMIAR_ALTA = 80
+
+
+# ---------------------------------------------------------------- parsers do texto da fonte
 
 def _avaliar_regiao_elegivel(regiao_elegivel: str, uf: str) -> str:
-    """Compara o texto LIVRE de regiao_elegivel (fonte oficial, nunca inventado)
-    contra a UF informada pelo usuario. Retorna 'nacional' (linha cobre o Brasil
-    inteiro), 'compativel' (linha regional cuja area cobre a UF), 'incompativel'
-    (linha regional que claramente NAO cobre a UF -- unico caso que justifica
-    EXCLUIR a linha do resultado, ver chamador) ou 'neutro' (nao informado pela
-    fonte, ou texto que este parser nao reconhece -- nunca exclui por incerteza
-    de parsing, so trata como sem sinal, igual as demais "Não informado pela
-    fonte" do resto do arquivo)."""
-    if not regiao_elegivel or regiao_elegivel == NAO_INFORMADO:
+    """'nacional' | 'compativel' | 'incompativel' | 'neutro' (texto nao reconhecido
+    ou nao informado -- nunca exclui por incerteza de parsing)."""
+    if not _informado(regiao_elegivel):
         return "neutro"
-    texto = _sem_acento(regiao_elegivel).lower()
-    if "nacional" in texto or "brasil" in texto:
+    texto = _norm(regiao_elegivel)
+    if "nacional" in texto or texto.startswith("brasil"):
         return "nacional"
     if "sao paulo" in texto:
         return "compativel" if uf == "SP" else "incompativel"
+    if "regiao norte" in texto:
+        return "compativel" if uf in _UFS_NORTE else "incompativel"
     if "sudam" in texto or "amazonia legal" in texto or "desenvolvimento da amazonia" in texto:
         return "compativel" if uf in _UFS_AMAZONIA_LEGAL else "incompativel"
     if "sudene" in texto or "nordeste" in texto:
@@ -149,297 +215,333 @@ def _avaliar_regiao_elegivel(regiao_elegivel: str, uf: str) -> str:
     return "neutro"
 
 
-# Termos tipicos de cada setor_padronizado (as 4 categorias reais, ver
-# src/sector_taxonomy.py) -- usados SO como sinal de correlacao textual quando
-# a linha nao tem setor_padronizado formal (NAO_INFORMADO), pra distinguir uma
-# linha claramente FORA de escopo (ex: "Finem Segurança Pública" pra um pedido
-# de Agropecuária) de uma linha genuinamente generica/aberta a qualquer setor
-# (ex: BNDES Automático). NUNCA usado pra sobrepor um setor_padronizado real
-# (dado curado bate mais do que um keyword match). Termos sem acento, minusculo,
-# como substrings (cobre singular/plural/genero: "agric" cobre
-# agricola/agricultura/agrícolas etc.).
-_CORRELACAO_SETOR_TERMOS = {
-    "AGROPECUÁRIA": (
-        "agro", "agric", "rural", "pecuar", "pesca", "aquicult", "florest",
-        "silvicult", "grao", "lavoura", "fazenda",
-    ),
-    "INDUSTRIA": (
-        "industr", "manufatur", "fabril", "metalurg", "quimic", "textil",
-        "siderurg", "petroquimic",
-    ),
-    "INFRAESTRUTURA": (
-        "infraestrutur", "energia", "eletric", "rodovia", "saneamento",
-        "transporte", "logistic", "portuari", "ferrovi", "telecom", "hidrovi",
-        "aeroportu", "mobilidade urbana",
-    ),
-    "COMERCIO/SERVICOS": (
-        "comercio", "servic", "varejo", "turismo", "hotel", "franquia", "franque",
-    ),
+def _rotulo_regiao(regiao_elegivel: str) -> str:
+    t = _norm(regiao_elegivel)
+    if "sao paulo" in t:
+        return "Estado de SP"
+    if "sudam" in t or "amazonia" in t or "regiao norte" in t:
+        return "Norte/Amazônia"
+    if "sudene" in t or "nordeste" in t:
+        return "Nordeste/Sudene"
+    if "centro-oeste" in t or "centro oeste" in t:
+        return "Centro-Oeste"
+    return (regiao_elegivel or "")[:40]
+
+
+def _portes_da_linha(linha: dict):
+    """Conjunto de portes (vocabulario do site) que a fonte lista, ou None quando
+    nao da pra afirmar nada. Le primeiro o texto livre porte_elegivel (mais rico e
+    fiel a fonte que o bucket porte_grupo), depois cai pro bucket."""
+    texto = _norm(linha.get("porte_elegivel")) if _informado(linha.get("porte_elegivel")) else ""
+    if texto:
+        if "todos os portes" in texto:
+            return _TODOS_PORTES
+        # Vocabulario BNB/Desenvolve SP: "Pequena-media" (receita 4,8-16 mi) e
+        # "Media-Grande" de empresa (90-300 mi) sao MEDIA na classificacao BNDES do
+        # site; "Medio-Grande Produtor" (Desenvolve Agro) cobre media e grande.
+        texto = re.sub(r"pequen[oa][- ]medi[oa]", " MEDIA ", texto)
+        texto = re.sub(r"medio[- ]grande", " MEDIA grande ", texto)
+        texto = re.sub(r"media[- ]grande", " MEDIA ", texto)
+        achados = set()
+        if re.search(r"\bmicro|\bmei\b|miniprodutor", texto):
+            achados.add("MICRO")
+        if re.search(r"\bpequen", texto):
+            achados.add("PEQUENA")
+        if re.search(r"\bmedi[oa]s?\b|\bMEDIA\b", texto):
+            achados.add("MÉDIA")
+        if re.search(r"\bgrandes?\b", texto):
+            achados.add("GRANDE")
+        if achados:
+            return frozenset(achados)
+    return _PORTE_GRUPO_PARA_INPUT.get(linha.get("porte_grupo"))
+
+
+_FINALIDADES_POR_GRUPO = {
+    "CAPEX / Projetos de investimento": {"investimento": 1.0, "maquinas": 0.8, "sustentabilidade": 0.6},
+    "Máquinas e equipamentos": {"maquinas": 1.0, "investimento": 0.7},
+    "Capital de giro": {"giro": 1.0},
+    "Inovação / P&D": {"inovacao": 1.0},
+    "Eficiência energética / Sustentabilidade": {"sustentabilidade": 1.0, "investimento": 0.5, "maquinas": 0.5},
+    "Infraestrutura": {"investimento": 1.0, "maquinas": 0.7},
+    "Comércio e serviços": {"investimento": 0.9, "maquinas": 0.7, "giro": 0.7},
+    "Agropecuário / Rural": {"investimento": 0.9, "maquinas": 0.7, "giro": 0.8},
+}
+_FINALIDADE_TERMOS = {
+    "giro": ("capital de giro", "custeio", " giro", "insumos", "materias-primas", "credito rotativo"),
+    "maquinas": ("maquinas", "equipamentos", "bens de capital", "leasing", "arrendamento"),
+    "inovacao": ("inovac", "p&d", "pesquisa", "base tecnologica", "startup"),
+    "sustentabilidade": ("sustentab", "eficiencia energetica", "ecoeficien", "baixo carbono", "renovave",
+                         "verde", "emissao", "clima", "minigeracao", "passivos ambientais"),
+    "investimento": ("investimento", "implantacao", "ampliacao", "expansao", "modernizacao", "construcao"),
 }
 
-_STOPWORDS_SUBSETOR = {"de", "da", "do", "das", "dos", "e", "em", "a", "o"}
+
+def _finalidades_da_linha(linha: dict) -> dict:
+    """{finalidade: fator} que a linha atende, pelo bucket destinacao_grupo +
+    termos do nome/descricao resumida (fonte oficial). Vazio = nao informado."""
+    fin = dict(_FINALIDADES_POR_GRUPO.get(linha.get("destinacao_grupo"), {}))
+    texto = " " + _norm(" ".join(filter(None, [linha.get("nome_oficial"), linha.get("nome_simplificado"),
+                                                linha.get("descricao_resumida")])))
+    for f, termos in _FINALIDADE_TERMOS.items():
+        if any(t in texto for t in termos):
+            teto = 1.0 if f != "investimento" else (0.6 if "inovacao" in fin else 0.9)
+            fin[f] = max(fin.get(f, 0), teto)
+    return fin
 
 
-def _termos_subsetor(subsetor: str):
-    """Deriva termos de correlacao a partir do texto do PROPRIO subsetor
-    informado (em vez de mais um dicionario fixo -- subsetor tem dezenas de
-    valores possiveis em operations.subsetor_bndes, curar um dicionario por
-    valor nao escala). Ex: subsetor='ENERGIA ELÉTRICA' -> ('energia', 'eletric')."""
-    if not subsetor:
-        return ()
-    texto = _sem_acento(subsetor).lower()
-    palavras = re.findall(r"[a-z]{4,}", texto)
-    return tuple(p for p in palavras if p not in _STOPWORDS_SUBSETOR)
+_SETORES_GENERICOS = ("capital de giro", "projetos de investimento", "maquinas e equipamentos",
+                      "projetos de inovacao", "projetos sustentaveis", "desenvolve mulher",
+                      "desenvolve agro")
 
 
-def _correlacao_textual_setor(linha: dict, setor: str, subsetor: str) -> bool:
-    """Sinal de correlacao textual: procura termos tipicos do setor (+ subsetor,
-    se informado) no CONTEUDO REAL da linha -- nome_oficial, destinacao,
-    criterios_elegibilidade, setores_elegiveis (nunca um campo inventado). So
-    chamada quando setor_padronizado da linha e NAO_INFORMADO (ver
-    _pontuar_linha) -- uma linha com setor_padronizado formal ja pontua pelo
-    dado curado, nao pelo texto."""
-    texto = _sem_acento(" ".join(filter(None, [
-        linha.get("nome_oficial"), linha.get("destinacao"),
-        linha.get("criterios_elegibilidade"), linha.get("setores_elegiveis"),
-    ]))).lower()
-    termos = list(_CORRELACAO_SETOR_TERMOS.get(setor, ())) + list(_termos_subsetor(subsetor))
-    return any(t in texto for t in termos)
+def _tem(termos, texto) -> bool:
+    """Match por INICIO de palavra (evita "industr" casar com "agroindustria")."""
+    return any(re.search(r"\b" + re.escape(t), texto) for t in termos)
 
 
-@router.get("/opcoes")
-def potenciais_opcoes():
-    """Opcoes pra popular o formulario -- nunca inclui uma opcao vazia (mesmo
-    padrao ja usado em /api/linhas/filtros)."""
-    conn = get_connection(pooled=True)
-    try:
-        cur = conn.cursor()
-
-        # Setores: as 4 categorias reais de linhas_incentivadas.setor_padronizado
-        # (exclui o sentinela "Não informado pela fonte" -- nao faz sentido o
-        # usuario "escolher" nao-informado como setor do proprio projeto). Mesmo
-        # vocabulario de operations.setor_bndes (ver linhas.js::
-        # SETORES_TAXONOMIA_BNDES), entao serve pros dois usos (match de linha E
-        # filtro de "Transações Semelhantes").
-        setores = [r[0] for r in cur.execute(
-            "SELECT DISTINCT setor_padronizado FROM linhas_incentivadas "
-            "WHERE setor_padronizado IS NOT NULL AND setor_padronizado != ? "
-            "ORDER BY setor_padronizado",
-            (NAO_INFORMADO,),
-        ).fetchall()]
-
-        # Sempre as 4 categorias -- nao depende do que ja existe em
-        # linhas_incentivadas.porte_grupo (esse e o bucket da LINHA, nao do
-        # input do usuario, ver comentario em _ORDEM_PORTE_INPUT acima); sao os
-        # mesmos 4 valores que operations.porte_cliente sempre pode assumir.
-        portes = list(_ORDEM_PORTE_INPUT)
-
-        usos = [r[0] for r in cur.execute(
-            "SELECT DISTINCT destinacao_grupo FROM linhas_incentivadas "
-            "WHERE destinacao_grupo IS NOT NULL AND destinacao_grupo != ? "
-            "ORDER BY destinacao_grupo",
-            (NAO_INFORMADO_GRUPO,),
-        ).fetchall()]
-
-        # Subsetor: so existe em `operations` (linhas_incentivadas nao tem essa
-        # granularidade, ver decisao ja registrada em Decisões.md/recon) -- serve
-        # so de sinal adicional pro filtro de "Transações Semelhantes", nunca pro
-        # score de aderencia de uma linha.
-        subsetores = [r[0] for r in cur.execute(
-            "SELECT DISTINCT subsetor_bndes FROM operations WHERE subsetor_bndes IS NOT NULL ORDER BY subsetor_bndes"
-        ).fetchall()]
-
-        return {
-            "setores": setores, "portes": portes, "usos": usos, "subsetores": subsetores,
-            "ufs": list(_UFS_BRASIL),
-        }
-    finally:
-        conn.close()
+def _avaliar_atividade(linha: dict, atividade: dict):
+    """(fator | None=exclui, motivo). Ordem: match especifico > linha aberta a
+    todos os setores > linha de OUTRO nicho (exclui) > lista multissetorial que
+    inclui a atividade > nicho nao reconhecido (exclui) > setor_padronizado >
+    sem dado (neutro)."""
+    setores_txt = _norm(linha.get("setores_elegiveis")) if _informado(linha.get("setores_elegiveis")) else ""
+    nome_txt = _norm(" ".join(filter(None, [linha.get("nome_oficial"), linha.get("nome_simplificado")])))
+    # "materiais industrializados"/"industrializacao de produtos agro" nao sao linhas PARA a industria.
+    nome_txt = nome_txt.replace("industrializ", "")
+    texto = " ".join([nome_txt, setores_txt, _norm(linha.get("descricao_resumida"))]).replace("industrializ", "")
+    if _tem(atividade["termos"], texto):
+        return 1.0, f"Linha voltada a {atividade['rotulo'].split(' (')[0].split(' /')[0].lower()}"
+    aberta = ("todos os setores" in setores_txt or "qualquer setor" in setores_txt
+              or ("nao rural" in setores_txt and atividade["setor"] != "AGROPECUÁRIA"))
+    if aberta:
+        return 0.6, "Aberta a todos os setores"
+    for outra in _ATIVIDADES:
+        if outra["id"] != atividade["id"] and (_tem(outra["termos"], nome_txt) or (
+                _tem(outra["termos"], setores_txt) and not _tem(atividade["amplos"], setores_txt))):
+            return None, f"Voltada a {outra['rotulo'].split(' (')[0].lower()}"
+    if setores_txt and _tem(atividade["amplos"], setores_txt):
+        return 0.8, "Setores elegíveis: " + _cortar(linha.get("setores_elegiveis"), 48)
+    nicho = setores_txt and not any(g in setores_txt for g in _SETORES_GENERICOS)
+    if nicho:
+        return None, f"Restrita a: {linha.get('setores_elegiveis')}"
+    setor_linha = linha.get("setor_padronizado")
+    if _informado(setor_linha):
+        if setor_linha == atividade["setor"]:
+            return 0.7, "Setor da linha compatível"
+        return None, f"Setor da linha: {setor_linha}"
+    for outra in _ATIVIDADES:
+        if outra["id"] != atividade["id"] and _tem(outra["termos"], texto):
+            return None, f"Voltada a {outra['rotulo'].split(' (')[0].lower()}"
+    return FATOR_NAO_INFORMADO, "Setores elegíveis não informados pela fonte"
 
 
-def _pontuar_linha(linha: dict, setor: str, porte: str, volume: float, uso: str,
-                    uf: str = None, subsetor: str = None):
-    """Score determinístico 0-100 por quantos criterios (dos que o usuario de fato
-    informou) a linha atende, cada um com peso fixo, RENORMALIZADO pela soma dos
-    pesos dos criterios informados (um usuario que so preenche 1 campo nao deveria
-    ter o score arbitrariamente baixado so por faltar os outros 3). "Não
-    informado pela fonte"/"Não informado" na linha nunca zera o criterio (nao ha
-    como confirmar OU descartar compatibilidade), mas tambem nunca vale igual a
-    um match confirmado -- credito parcial, sempre com o motivo deixando claro
-    que e uma suposicao, nao uma confirmacao.
+def _avaliar_tomador(linha: dict, tomador: str, porte: str, atividade: dict):
+    """(ok: bool, motivo_positivo | motivo_exclusao). Restricoes de publico-alvo
+    lidas do texto da fonte (porte_elegivel/setores/criterios)."""
+    pub = _norm(" ".join(filter(None, [linha.get("porte_elegivel"), linha.get("setores_elegiveis"),
+                                       linha.get("criterios_elegibilidade"), linha.get("nome_oficial")])))
+    porte_txt = _norm(linha.get("porte_elegivel")) if _informado(linha.get("porte_elegivel")) else ""
+    if "estudante" in pub:
+        return False, "Crédito estudantil (pessoa física)"
+    if re.search(r"familiar|pronaf|sem terra|minifundi|reforma agraria", pub):
+        if tomador in ("produtor_rural", "cooperativa") and porte in (None, "MICRO", "PEQUENA"):
+            return True, "Voltada à agricultura familiar"
+        return False, "Restrita à agricultura familiar (Pronaf)"
+    if porte_txt.strip() == "cooperativas":
+        return (True, "Voltada a cooperativas") if tomador == "cooperativa" else (False, "Restrita a cooperativas")
+    if "sem fins lucrativos ou publicos" in pub:
+        return (True, "Aceita entes públicos") if tomador == "ente_publico" else (False, "Restrita a entes públicos/sem fins lucrativos")
+    rural = re.search(r"produtor|agricultor|cafeicultor|cooperativa|associacoes rurais", porte_txt)
+    if rural and "empresa" not in porte_txt:
+        if tomador in ("produtor_rural", "cooperativa"):
+            return True, "Voltada a produtores rurais/cooperativas"
+        if tomador == "empresa" and atividade and atividade["setor"] == "AGROPECUÁRIA":
+            return True, "Aceita produtor rural pessoa jurídica"
+        return False, "Restrita a produtores rurais/cooperativas"
+    if tomador == "ente_publico" and re.search(r"direito privado|empresas privadas", pub):
+        return False, "Restrita a empresas privadas"
+    if tomador in ("produtor_rural", "cooperativa") and atividade and atividade["setor"] != "AGROPECUÁRIA":
+        return True, None
+    return True, None
 
-    Hierarquia de prioridade (gap-fix 2026-09-23, nao mexer): setor(peso 30) >
-    porte(25) = volume(25) > uso(20) > regiao/UF(15) -- geografia e SEMPRE o
-    menor peso dos criterios estruturados, nunca reordena a aderencia principal.
-    Correlacao textual (setor/subsetor pelo NOME/CONTEUDO da linha) NAO e um
-    criterio novo -- e um refinamento de QUANTO credito parcial o proprio
-    criterio de setor da (pontos entre 6 e 22, sempre abaixo dos 30 de um match
-    real), pra parar de dar o mesmo credito parcial generico pra uma linha
-    aberta a todos os setores (ex: BNDES Automático) e uma linha claramente FORA
-    de escopo mas sem setor_padronizado curado (ex: Finem Segurança Pública).
 
-    Geografia (UF) e o UNICO sinal novo que pode EXCLUIR a linha inteira (nunca
-    so penalizar) -- so quando regiao_elegivel descreve uma area regional
-    especifica que claramente NAO cobre a UF informada (ex: linha exclusiva do
-    BASA/Amazônia Legal pedida por uma empresa de SP). Excluir aqui e
-    equivalente a nao entrar no ranking, mesmo tratamento que peso_total==0 mais
-    abaixo -- por isso a checagem fica logo no topo da funcao."""
+def _cortar(texto, n: int) -> str:
+    t = str(texto or "").strip()
+    if len(t) <= n:
+        return t
+    c = t[:n].rsplit(" ", 1)[0]
+    return c.rstrip(" ,;:.(") + "…"
+
+
+def _fmt_mi(v: float) -> str:
+    if v >= 1e9:
+        return f"R$ {v / 1e9:.1f} bi".replace(".0 ", " ").replace(".", ",")
+    if v >= 1e6:
+        return f"R$ {v / 1e6:.1f} mi".replace(".0 ", " ").replace(".", ",")
+    return f"R$ {v / 1e3:.0f} mil"
+
+
+def _avaliar_linha(linha: dict, perfil: dict):
+    """Retorna dict com score/criterios, ou {'excluida': motivo}."""
+    atividade = perfil.get("atividade")
+    finalidade = perfil.get("finalidade")
+    porte = perfil.get("porte")
+    volume = perfil.get("volume")
+    uf = perfil.get("uf")
+    tomador = perfil.get("tomador") or "empresa"
+
+    if linha.get("status") and _norm(linha["status"]) not in ("aberta", "aberto", "ativa", "ativo"):
+        return {"excluida": "Linha não está aberta", "cat": "Status"}
+
+    criterios = []  # {chave, status: 'ok'|'na', texto}
+    pontos = peso_total = 0.0
+
+    def add(chave, fator, texto):
+        nonlocal pontos, peso_total
+        peso_total += _PESOS[chave]
+        pontos += _PESOS[chave] * fator
+        criterios.append({"chave": chave, "status": "ok" if fator > FATOR_NAO_INFORMADO else "na", "texto": texto})
+
+    ok, motivo_tomador = _avaliar_tomador(linha, tomador, porte, atividade)
+    if not ok:
+        return {"excluida": motivo_tomador, "cat": "Público-alvo"}
+
     if uf:
-        avaliacao_regiao = _avaliar_regiao_elegivel(linha.get("regiao_elegivel"), uf)
-        if avaliacao_regiao == "incompativel":
-            return None
-    else:
-        avaliacao_regiao = None
-
-    pontos = 0.0
-    peso_total = 0.0
-    motivos = []
-    criterios_avaliados = 0
-
-    if setor and setor != "Todos":
-        criterios_avaliados += 1
-        peso_total += 30
-        if linha.get("setor_padronizado") == setor:
-            pontos += 30
-            motivos.append(f"Setor do projeto compatível ({setor})")
-        elif linha.get("setor_padronizado") == NAO_INFORMADO:
-            setores_elegiveis_txt = _sem_acento(linha.get("setores_elegiveis") or "").lower()
-            if "todos os setores" in setores_elegiveis_txt:
-                pontos += 12
-                motivos.append("Linha genérica, aberta a todos os setores (não privilegia nem descarta compatibilidade)")
-            elif _correlacao_textual_setor(linha, setor, subsetor):
-                pontos += 22
-                alvo = f"{setor}/{subsetor}" if subsetor else setor
-                motivos.append(f"Setor elegível não informado formalmente, mas nome/destinação da linha têm forte correlação textual com {alvo}")
-            else:
-                pontos += 6
-                motivos.append(f"Setor elegível não informado pela fonte oficial e nome/destinação da linha não indicam relação clara com {setor} (compatibilidade incerta)")
+        reg = _avaliar_regiao_elegivel(linha.get("regiao_elegivel"), uf)
+        if reg == "incompativel":
+            return {"excluida": f"Atende só {_rotulo_regiao(linha.get('regiao_elegivel'))}", "cat": "Região"}
+        if reg == "nacional":
+            add("uf", 1.0, "Abrangência nacional")
+        elif reg == "compativel":
+            add("uf", 1.0, f"Linha regional que atende {uf} ({_rotulo_regiao(linha.get('regiao_elegivel'))})")
         else:
-            motivos.append(f"Setor da linha ({linha.get('setor_padronizado') or 'Não informado'}) diferente do informado")
+            add("uf", FATOR_NAO_INFORMADO, "Área de atuação não detalhada pela fonte")
 
-    if porte and porte != "Todos":
-        criterios_avaliados += 1
-        peso_total += 25
-        grupo = linha.get("porte_grupo")
-        # porte vem no vocabulario do SITE (MICRO/PEQUENA/MÉDIA/GRANDE) -- convertido
-        # pro bucket mais grosso de linhas_incentivadas.porte_grupo antes de comparar
-        # (ver _PORTE_INPUT_PARA_GRUPO_LINHA).
-        porte_equivalente = _PORTE_INPUT_PARA_GRUPO_LINHA.get(porte, porte)
-        if grupo == "Todos os portes":
-            pontos += 25
-            motivos.append("Linha aberta a todos os portes")
-        elif grupo == porte_equivalente:
-            pontos += 25
-            motivos.append(f"Porte do projeto compatível ({porte})")
-        elif grupo == NAO_INFORMADO_GRUPO:
-            pontos += 10
-            motivos.append("Porte elegível não informado pela fonte oficial")
+    if porte:
+        portes = _portes_da_linha(linha)
+        if portes is None:
+            add("porte", FATOR_NAO_INFORMADO, "Porte elegível não informado pela fonte")
+        elif porte not in portes:
+            ordem = [p for p in _ORDEM_PORTE_INPUT if p in portes]
+            return {"excluida": "Porte elegível: " + ", ".join(_PORTE_ROTULO[p] for p in ordem), "cat": "Porte"}
+        elif portes == _TODOS_PORTES:
+            add("porte", 0.9, "Aberta a todos os portes")
         else:
-            motivos.append(f"Porte elegível da linha ({grupo}) pode não incluir {porte}")
+            add("porte", 1.0, f"Aceita porte {_PORTE_ROTULO[porte].lower()}")
 
     if volume is not None:
-        criterios_avaliados += 1
-        peso_total += 25
         vmin, vmax = linha.get("valor_minimo"), linha.get("valor_maximo")
         if vmin is None and vmax is None:
-            pontos += 10
-            motivos.append("Faixa de valor financiável não informada pela fonte")
+            add("valor", FATOR_NAO_INFORMADO, "Faixa de valor não informada pela fonte")
+        elif vmin is not None and volume < vmin:
+            return {"excluida": f"Valor mínimo {_fmt_mi(vmin)}", "cat": "Valor"}
+        elif vmax is not None and volume > vmax:
+            return {"excluida": f"Valor máximo {_fmt_mi(vmax)}", "cat": "Valor"}
         else:
-            dentro = (vmin is None or volume >= vmin) and (vmax is None or volume <= vmax)
-            if dentro:
-                pontos += 25
-                motivos.append("Volume necessário dentro da faixa financiável informada")
-            else:
-                motivos.append("Volume necessário fora da faixa financiável informada pela fonte")
+            faixa = (f"de {_fmt_mi(vmin)} a {_fmt_mi(vmax)}" if vmin and vmax
+                     else f"a partir de {_fmt_mi(vmin)}" if vmin else f"até {_fmt_mi(vmax)}")
+            add("valor", 1.0, f"Valor dentro da faixa ({faixa})")
 
-    if uso and uso != "Todos":
-        criterios_avaliados += 1
-        peso_total += 20
-        grupo = linha.get("destinacao_grupo")
-        if grupo == uso:
-            pontos += 20
-            motivos.append(f"Uso dos recursos compatível ({uso})")
-        elif grupo in (NAO_INFORMADO_GRUPO, "Outros"):
-            pontos += 8
-            motivos.append("Destinação da linha não claramente classificada na fonte")
+    if atividade:
+        fator, motivo = _avaliar_atividade(linha, atividade)
+        if fator is None:
+            return {"excluida": motivo, "cat": "Setor/atividade"}
+        add("atividade", fator, motivo)
+
+    if finalidade:
+        fins = _finalidades_da_linha(linha)
+        if not fins:
+            add("finalidade", FATOR_NAO_INFORMADO, "Finalidade não classificada pela fonte")
+        elif finalidade not in fins:
+            return {"excluida": "Finalidade: " + ", ".join(_FINALIDADE_ROTULO[f].split(" (")[0] for f in fins), "cat": "Finalidade"}
         else:
-            motivos.append(f"Destinação típica da linha ({grupo}) diferente do uso informado")
-
-    if uf:
-        criterios_avaliados += 1
-        peso_total += 15
-        if avaliacao_regiao == "nacional":
-            pontos += 15
-            motivos.append("Linha de abrangência nacional, atende qualquer UF")
-        elif avaliacao_regiao == "compativel":
-            pontos += 15
-            motivos.append(f"UF do projeto ({uf}) está na área de atuação regional da linha")
-        else:  # "neutro" -- "incompativel" ja saiu por return None no topo da funcao
-            pontos += 6
-            motivos.append("Área de atuação regional não informada claramente pela fonte (não descarta compatibilidade)")
+            fator = fins[finalidade]
+            add("finalidade", fator, ("Financia " if fator >= 0.9 else "Pode financiar ")
+                + _FINALIDADE_ROTULO[finalidade].split(" (")[0].lower())
 
     if peso_total == 0:
         return None
-    score_pct = round(100 * pontos / peso_total)
-    return score_pct, motivos, criterios_avaliados
+    score = 100 * pontos / peso_total
+    alertas = []
+    if motivo_tomador:
+        criterios.insert(0, {"chave": "tomador", "status": "ok", "texto": motivo_tomador})
+    nome_norm = _norm(linha.get("nome_oficial"))
+    if "mulher" in nome_norm:
+        alertas.append("Requisito adicional: empresa liderada/controlada por mulheres")
+        score *= 0.85
+    if linha.get("fluxo") == "edital":
+        alertas.append("Depende de edital/chamada pública aberta")
+    score_pct = int(round(score))
+    return {"score_pct": score_pct, "criterios": criterios, "alertas": alertas}
 
 
 def _rotulo_score(score_pct: int) -> str:
-    if score_pct >= 70:
+    if score_pct >= LIMIAR_ALTA:
         return "Alta"
-    if score_pct >= 40:
+    if score_pct >= LIMIAR_PRINCIPAL:
         return "Média"
     return "Baixa"
 
 
-# Desempate por frequencia historica (item 4 do gap-fix 2026-09-22) -- SO entra
-# depois do score de aderencia (nunca compoe/sobrepoe o score em si, ver
-# `resultados.sort` em potenciais_buscar). Sem FK entre linhas_incentivadas e
-# operations -- casamento por aproximacao de texto (nome da linha contra
-# operations.produto/instrumento) via similarity() do pg_trgm (extensao ja
-# instalada, ver src/db.py). Limiar mais alto (conservador) que o generico de
-# busca (LIMIAR_SIMILARIDADE_TRGM = 0.25 em src/search_fts.py, usado pra nomes
-# de CLIENTE) -- aqui um falso-positivo contaria operacoes de um produto
-# diferente como se fossem da linha, o que e pior que simplesmente nao ter o
-# sinal (frequencia_historica vira None nesse caso, tratado como "sem dado").
-LIMIAR_SIMILARIDADE_TRGM_HISTORICO = 0.4
+def _perfil_de_parametros(atividade, setor, porte, volume, finalidade, uso, uf, tomador):
+    """Normaliza os parametros (inclusive os antigos setor/uso de links ja
+    compartilhados) num perfil. Retorna (perfil, erro)."""
+    ativ = _ATIVIDADE_POR_ID.get(atividade or "")
+    if not ativ and setor and setor != "Todos":
+        ativ = _ATIVIDADE_POR_ID.get(_SETOR_PARA_ATIVIDADE.get(setor, ""))
+    fin = finalidade if finalidade in _FINALIDADE_ROTULO else _USO_ANTIGO_PARA_FINALIDADE.get(uso or "")
+    porte = (porte or "").strip().upper() or None
+    if porte == "MEDIA":
+        porte = "MÉDIA"
+    if porte and porte not in _TODOS_PORTES:
+        return None, f"Porte inválido: {porte}"
+    uf = (uf or "").strip().upper() or None
+    if uf and uf not in _UF_NOME:
+        return None, f"UF inválida: {uf}"
+    if volume is not None and volume <= 0:
+        return None, "Valor deve ser maior que zero"
+    tomador = tomador if tomador in {t["id"] for t in _TOMADORES} else "empresa"
+    if not any([ativ, fin, porte, volume is not None]):
+        return None, "Informe ao menos atividade, finalidade, porte ou valor"
+    return {"atividade": ativ, "finalidade": fin, "porte": porte, "volume": volume,
+            "uf": uf, "tomador": tomador}, None
 
-# Restricao conhecida (ver CLAUDE.md/docs/linhas-incentivadas.md):
-# operations.agencia SO tem 'BNDES'/'FINEP' -- a base de transacoes reais NAO
-# cobre BNB/Desenvolve SP/BASA/BB/CEF (a maioria do catalogo). Linhas de
-# qualquer outra instituicao NUNCA entram no calculo de frequencia (ficam
-# sempre com frequencia_historica = None, nunca 0 -- 0 implicaria "confirmado
-# que nao e usada", o que nao podemos afirmar por limitacao de cobertura).
+
+def ranquear(candidatos: list, perfil: dict):
+    """Puro (sem banco) -- usado pela rota e pela avaliacao offline
+    (scripts/avaliar_potenciais.py)."""
+    resultados, exclusoes = [], {}
+    for linha in candidatos:
+        av = _avaliar_linha(linha, perfil)
+        if av is None:
+            continue
+        if "excluida" in av:
+            exclusoes[av["cat"]] = exclusoes.get(av["cat"], 0) + 1
+            continue
+        regional = perfil.get("uf") and _avaliar_regiao_elegivel(linha.get("regiao_elegivel"), perfil["uf"]) == "compativel"
+        resultados.append((linha, av, bool(regional)))
+    resultados.sort(key=lambda t: (-t[1]["score_pct"], not t[2],
+                                   -sum(c["status"] == "ok" for c in t[1]["criterios"]),
+                                   t[0].get("nome_simplificado") or t[0].get("nome_oficial") or ""))
+    return resultados, exclusoes
+
+
+# ---------------------------------------------------------------- frequencia historica (desempate)
+
+LIMIAR_SIMILARIDADE_TRGM_HISTORICO = 0.4
 _AGENCIAS_COM_OPERACOES_REAIS = ("BNDES", "FINEP", "BNB")
 
-# So vira motivo textual ("frequentemente utilizada...") acima deste piso --
-# 1-2 correspondencias por similaridade de texto sao ruido demais pra virar uma
-# frase de "uso frequente" no motivo exibido ao usuario.
-FREQUENCIA_HISTORICA_MOTIVO_MINIMO = 10
 
-
-def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
-    """Conta operacoes reais em `operations` que correspondem (por similaridade
-    de texto, pg_trgm) ao nome de cada linha do BNDES/FINEP -- usado SO como
-    desempate secundario no ranking (nunca como parte do score de aderencia).
-    Recebe so os candidatos cuja instituicao ja e BNDES/FINEP (filtrado pelo
-    chamador) -- os demais nunca chegam aqui, entao nunca tem seu
-    "nao aparece na base" mal-interpretado como "linha pouco usada" (ver
-    comentario da constante _AGENCIAS_COM_OPERACOES_REAIS acima).
-
-    Agrupa `operations` por agencia + COALESCE(produto, instrumento) ANTES de
-    comparar (poucas dezenas/centenas de termos distintos por agencia) em vez
-    de rodar similarity() linha a linha contra as ~59 mil operacoes -- mais
-    barato e nao exige nenhum indice novo (nenhuma mudanca de schema)."""
-    if not candidatos_bndes_finep:
+def _computar_frequencia_historica(cur, candidatos: list) -> dict:
+    """Conta operacoes reais em `operations` cujo produto/instrumento se parece
+    (pg_trgm) com o nome oficial da linha -- so informativo/desempate, nunca
+    entra no score. So BNDES/FINEP/BNB (unicas agencias em `operations`)."""
+    if not candidatos:
         return {}
-
-    linhas_values = []
-    params = []
-    for c in candidatos_bndes_finep:
-        linhas_values.append("(?, ?, ?)")
+    values, params = [], []
+    for c in candidatos:
+        values.append("(?, ?, ?)")
         params.extend([c["id"], c["instituicao"], c["nome"]])
-
     query = f"""
         WITH termos AS (
             SELECT agencia, COALESCE(produto, instrumento) AS termo, COUNT(*) AS n
@@ -447,9 +549,7 @@ def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
             WHERE agencia IN ('BNDES', 'FINEP', 'BNB') AND COALESCE(produto, instrumento) IS NOT NULL
             GROUP BY agencia, COALESCE(produto, instrumento)
         ),
-        candidatos(id, instituicao, nome) AS (
-            VALUES {", ".join(linhas_values)}
-        )
+        candidatos(id, instituicao, nome) AS (VALUES {", ".join(values)})
         SELECT c.id, SUM(t.n)
         FROM candidatos c
         JOIN termos t
@@ -457,117 +557,90 @@ def _computar_frequencia_historica(cur, candidatos_bndes_finep: list) -> dict:
          AND similarity(unaccent(lower(t.termo)), unaccent(lower(c.nome))) > {LIMIAR_SIMILARIDADE_TRGM_HISTORICO}
         GROUP BY c.id
     """
-    rows = cur.execute(query, params).fetchall()
-    return {r[0]: int(r[1]) for r in rows}
+    return {r[0]: int(r[1]) for r in cur.execute(query, params).fetchall()}
+
+
+# ---------------------------------------------------------------- rotas
+
+@router.get("/opcoes")
+def potenciais_opcoes():
+    """Opcoes do formulario. Subsetores (de `operations`) so refinam Transacoes
+    Semelhantes."""
+    conn = get_connection(pooled=True)
+    try:
+        cur = conn.cursor()
+        subsetores = [r[0] for r in cur.execute(
+            "SELECT DISTINCT subsetor_bndes FROM operations WHERE subsetor_bndes IS NOT NULL ORDER BY subsetor_bndes"
+        ).fetchall()]
+        return {
+            "atividades": [{"id": a["id"], "rotulo": a["rotulo"], "setor": a["setor"]} for a in _ATIVIDADES],
+            "finalidades": _FINALIDADES,
+            "tomadores": _TOMADORES,
+            "portes": list(_ORDEM_PORTE_INPUT),
+            "ufs": list(_UFS_BRASIL),
+            "subsetores": subsetores,
+        }
+    finally:
+        conn.close()
 
 
 @router.get("/buscar")
 def potenciais_buscar(
-    setor: str = None, porte: str = None, volume: float = None, uso: str = None,
-    uf: str = None, subsetor: str = None,
+    atividade: str = None, finalidade: str = None, tomador: str = None,
+    porte: str = None, volume: float = None, uf: str = None,
+    setor: str = None, uso: str = None, subsetor: str = None,  # compat. links antigos
     limit: int = 20,
 ):
-    """Motor de recomendacao: filtro estruturado (setor, quando informado, ja
-    reduz o SELECT pra so a categoria escolhida + linhas com setor não informado
-    -- essas ultimas continuam candidatas, so com credito parcial no score, ver
-    _pontuar_linha) + score determinístico em Python sobre os candidatos.
-
-    `uf`/`subsetor` sao OPCIONAIS e refinam so dentro do criterio de
-    setor/elegibilidade (correlacao textual + geografia, gap-fix 2026-09-23,
-    ver docstring de _pontuar_linha) -- nunca contam pro "informe ao menos um
-    critério" abaixo, que continua exigindo setor/porte/volume/uso (a hierarquia
-    de aderencia principal nao muda)."""
-    limit = max(1, min(limit, 100))
-    if not any([setor, porte, volume is not None, uso]):
-        return {"erro": "informe ao menos um critério (setor, porte, volume ou uso dos recursos)"}
-    uf = (uf or "").strip().upper() or None
-    if uf and uf not in _UF_NOME:
-        return {"erro": f"UF inválida: {uf}"}
+    limit = max(1, min(limit, 50))
+    perfil, erro = _perfil_de_parametros(atividade, setor, porte, volume, finalidade, uso, uf, tomador)
+    if erro:
+        return {"erro": erro}
 
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
-        where, params = "", []
-        if setor and setor != "Todos":
-            where = "WHERE setor_padronizado IN (?, ?)"
-            params = [setor, NAO_INFORMADO]
-        rows = cur.execute(
-            f"SELECT {', '.join(_COLS_CANDIDATO)} FROM linhas_incentivadas {where}", params
-        ).fetchall()
+        rows = cur.execute(f"SELECT {', '.join(_COLS_CANDIDATO)} FROM linhas_incentivadas").fetchall()
         candidatos = [dict(zip(_COLS_CANDIDATO, r)) for r in rows]
+        ranqueados, exclusoes = ranquear(candidatos, perfil)
 
-        resultados = []
-        for linha in candidatos:
-            pontuacao = _pontuar_linha(linha, setor, porte, volume, uso, uf=uf, subsetor=subsetor)
-            if pontuacao is None:
-                continue
-            score_pct, motivos, criterios_avaliados = pontuacao
-            resultados.append({
-                "id": linha["id"],
-                "instituicao": linha["instituicao"],
-                "nome": linha["nome_simplificado"] or linha["nome_oficial"],
-                "nome_oficial": linha["nome_oficial"],
-                "status": linha["status"],
-                "taxa_completa": linha["taxa_completa"],
-                "indexador": linha["indexador"],
-                "spread": linha["spread"],
-                "prazo_total": linha["prazo_total"],
-                "carencia": linha["carencia"],
-                "percentual_financiavel": linha["percentual_financiavel"],
-                "criterios_elegibilidade": linha["criterios_elegibilidade"],
-                "itens_financiaveis": linha["itens_financiaveis"],
-                "valor_minimo": linha["valor_minimo"],
-                "valor_maximo": linha["valor_maximo"],
-                "setor_padronizado": linha["setor_padronizado"],
-                "porte_grupo": linha["porte_grupo"],
-                "destinacao_grupo": linha["destinacao_grupo"],
-                "regiao_elegivel": linha["regiao_elegivel"],
-                "agente_financeiro": linha["agente_financeiro"],
-                "url_oficial": linha["url_oficial"],
-                "score_pct": score_pct,
-                "score_rotulo": _rotulo_score(score_pct),
-                "motivos": motivos,
-                "criterios_avaliados": criterios_avaliados,
-            })
+        principais = [t for t in ranqueados if t[1]["score_pct"] >= LIMIAR_PRINCIPAL][:limit]
+        outras = [t for t in ranqueados if t[1]["score_pct"] < LIMIAR_PRINCIPAL][:10]
 
-        # Frequencia historica (item 4): sinal SECUNDARIO de desempate, calculado
-        # so pros resultados de instituicao BNDES/FINEP (unicas cobertas por
-        # `operations`, ver _AGENCIAS_COM_OPERACOES_REAIS). Nunca influencia o
-        # score_pct em si -- so a ordem entre linhas empatadas nele. Usa
-        # `nome_oficial` (nunca `nome_simplificado`) pra comparar contra
-        # operations.produto/instrumento -- testado ao vivo contra a base real:
-        # o nome oficial preserva o prefixo "BNDES <categoria>" (ex: "BNDES
-        # Finame Agrícola") que da match de verdade com o produto agregado em
-        # `operations` (ex: "BNDES FINAME", similarity=0.59); o nome
-        # simplificado ("Finame Agrícola", sem o prefixo) cai pra 0.32 -- abaixo
-        # do limiar conservador -- e perderia sinais reais por causa so de um
-        # rotulo mais curto pensado pra exibicao, nao pra matching.
-        candidatos_bndes_finep = [
-            {"id": r["id"], "instituicao": r["instituicao"], "nome": r["nome_oficial"]}
-            for r in resultados if r["instituicao"] in _AGENCIAS_COM_OPERACOES_REAIS
-        ]
-        freq_por_id = _computar_frequencia_historica(cur, candidatos_bndes_finep)
-        for r in resultados:
-            freq = freq_por_id.get(r["id"])
-            r["frequencia_historica"] = freq
-            # So adiciona motivo textual quando o sinal e POSITIVO e real (nunca
-            # infere ausencia/None como "pouco utilizada" -- ver docstring de
-            # _computar_frequencia_historica).
-            if freq is not None and freq >= FREQUENCIA_HISTORICA_MOTIVO_MINIMO:
-                r["motivos"].append(
-                    f"Linha frequentemente utilizada em operações similares na base histórica "
-                    f"(~{freq} operação(ões) com produto/instrumento parecido)"
-                )
+        freq = _computar_frequencia_historica(cur, [
+            {"id": l["id"], "instituicao": l["instituicao"], "nome": l["nome_oficial"]}
+            for l, _, _ in principais + outras if l["instituicao"] in _AGENCIAS_COM_OPERACOES_REAIS
+        ])
 
-        resultados.sort(key=lambda r: (-r["score_pct"], -(r["frequencia_historica"] or 0), r["nome"] or ""))
+        def serializar(t):
+            l, av, _ = t
+            return {
+                "id": l["id"], "instituicao": l["instituicao"],
+                "nome": l["nome_simplificado"] or l["nome_oficial"], "nome_oficial": l["nome_oficial"],
+                "fluxo": l["fluxo"], "setor_padronizado": l["setor_padronizado"],
+                "taxa_completa": l["taxa_completa"], "indexador": l["indexador"], "spread": l["spread"],
+                "prazo_total": l["prazo_total"], "carencia": l["carencia"],
+                "percentual_financiavel": l["percentual_financiavel"],
+                "valor_minimo": l["valor_minimo"], "valor_maximo": l["valor_maximo"],
+                "url_oficial": l["url_oficial"],
+                "score_pct": av["score_pct"], "score_rotulo": _rotulo_score(av["score_pct"]),
+                "criterios": av["criterios"], "alertas": av["alertas"],
+                "frequencia_historica": freq.get(l["id"]),
+            }
+
+        atividade_obj = perfil["atividade"]
         return {
-            "criterios_informados": {
-                "setor": setor or None, "porte": porte or None,
-                "volume": volume, "uso": uso or None,
-                "uf": uf or None, "subsetor": subsetor or None,
+            "perfil": {
+                "atividade": atividade_obj["id"] if atividade_obj else None,
+                "setor": atividade_obj["setor"] if atividade_obj else None,
+                "finalidade": perfil["finalidade"], "porte": perfil["porte"],
+                "volume": perfil["volume"], "uf": perfil["uf"], "tomador": perfil["tomador"],
+                "subsetor": subsetor or None,
             },
             "total_candidatos": len(candidatos),
-            "resultados": resultados[:limit],
+            "total_compativeis": len(ranqueados),
+            "resultados": [serializar(t) for t in principais],
+            "outras_opcoes": [serializar(t) for t in outras],
+            "exclusoes": sorted(({"motivo": k, "n": v} for k, v in exclusoes.items()), key=lambda x: -x["n"])[:8],
         }
     finally:
         conn.close()

@@ -146,64 +146,115 @@ async function loadLinhas(pagina) {
   }
 }
 
-function _campoDetalhe(rotulo, valor) {
-  if (valor === null || valor === undefined || valor === "") return "";
-  return `<div class="meta" style="margin-top:6px;"><strong>${esc(rotulo)}:</strong> ${esc(valor)}</div>`;
+// ============ Helpers de texto das linhas (compartilhados com potenciais.js) ============
+// Regra (pedido do usuario 2026-09-25): nunca reescrever o texto da fonte -- no
+// modal o resumo e SO corte em fronteira de palavra + "ver mais" com o integral;
+// nos cards de Potenciais Linhas o resumo so extrai numeros literais do texto
+// ("até N anos/meses", "N%") e marca "(varia)" quando a fonte lista casos.
+const LN_NAO_INFORMADO = "Não informado pela fonte";
+function lnNaoInformado(v) {
+  return v === null || v === undefined || String(v).trim() === "" || v === LN_NAO_INFORMADO || v === "Não informado";
 }
 
-// Card mini de "resumo executivo" -- mesma classe .kpi-card ja usada no
-// Consolidado (grid de estatisticas), reaproveitada aqui em vez de criar CSS
-// novo. "-" quando o campo nao foi informado pela fonte (nunca esconde o card,
-// sempre mostra que o dado nao existe -- diferente de omitir a linha inteira).
-function _kpiMiniDetalhe(rotulo, valor, sub) {
-  const texto = (valor === null || valor === undefined || valor === "" || valor === "Não informado pela fonte")
-    ? "Não informado" : valor;
-  return `<div class="kpi-card">
-    <div class="label">${esc(rotulo)}</div>
-    <div class="value" style="font-size:16px;">${esc(texto)}</div>
-    ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
-  </div>`;
+function lnCortarNaPalavra(texto, n) {
+  const t = String(texto).trim();
+  if (t.length <= n) return t;
+  let c = t.slice(0, n);
+  const i = c.lastIndexOf(" ");
+  if (i > n * 0.6) c = c.slice(0, i);
+  return c.replace(/[\s,;:.(\-–]+$/, "") + "…";
 }
 
-// Texto completo expansivel (gap-fix 2026-09-22, item 2): Enquadramento
-// (criterios_elegibilidade) e "O que pode ser financiado" (itens_financiaveis)
-// so apareciam truncados em 80 caracteres no resumo executivo (ver
-// _kpiMiniDetalhe abaixo) -- sem NENHUM lugar com o texto integral. Acordeao
-// nativo <details>/<summary> (sem lib nova) nas secoes secundarias, junto de
-// descricao_completa/garantias/restricoes (que ja mostram texto integral) --
-// mesma classe .meta do resto do detalhe, so fica fechado por padrao.
-function _campoDetalheExpansivel(rotulo, valor) {
-  if (valor === null || valor === undefined || valor === "") return "";
-  return `<div class="meta" style="margin-top:6px;">
-    <details>
-      <summary style="cursor:pointer;"><strong>${esc(rotulo)}</strong> <span class="hint">(ver texto completo)</span></summary>
-      <div style="margin-top:6px;">${esc(valor)}</div>
-    </details>
-  </div>`;
+// Texto com "ver mais" inline -- o integral fica em data-full (escapado) e e
+// trocado no clique (delegacao em lnLigarVerMais). Nunca corta no meio de palavra.
+function lnTextoExpansivel(texto, n) {
+  const t = String(texto).trim();
+  if (t.length <= n + 20) return esc(t);
+  const curto = lnCortarNaPalavra(t, n);
+  return `<span class="ln-txt" data-full="${esc(t)}" data-curto="${esc(curto)}">${esc(curto)}</span> <button type="button" class="ln-mais-btn" aria-expanded="false">ver mais</button>`;
 }
 
-// Secao com titulo (reaproveita .card/.card-header, ja usados no resto do site)
-// -- so renderiza se tiver ao menos 1 campo preenchido, pra nao mostrar um card
-// vazio so com titulo.
-function _secaoDetalhe(titulo, camposHtml) {
-  const conteudo = camposHtml.filter(Boolean).join("");
+function lnLigarVerMais(container) {
+  if (container.dataset.verMaisLigado) return;
+  container.dataset.verMaisLigado = "1";
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest(".ln-mais-btn");
+    if (!btn) return;
+    const span = btn.previousElementSibling;
+    if (!span || !span.classList.contains("ln-txt")) return;
+    const abrir = btn.getAttribute("aria-expanded") !== "true";
+    span.textContent = abrir ? span.dataset.full : span.dataset.curto;
+    btn.textContent = abrir ? "ver menos" : "ver mais";
+    btn.setAttribute("aria-expanded", abrir ? "true" : "false");
+  });
+}
+
+// "até N anos" a partir do texto da fonte (so numeros literais). null = sem
+// numero reconhecivel (chamador cai pro corte simples).
+function lnResumoDuracao(texto) {
+  if (lnNaoInformado(texto)) return null;
+  const t = String(texto).trim();
+  if (t.length <= 26) return t.replace(/^Até/, "até").replace(/\.$/, "");
+  const achados = [...t.matchAll(/(\d+(?:[.,]\d+)?)\s*(anos?|mes(?:es)?)\b/gi)].map((m) => {
+    const n = parseFloat(m[1].replace(",", "."));
+    return /^m/i.test(m[2]) ? n : n * 12;
+  });
+  if (!achados.length) return null;
+  const maxMeses = Math.max(...achados);
+  const rot = maxMeses >= 24 && maxMeses % 12 === 0 ? `${maxMeses / 12} anos` : `${maxMeses} meses`;
+  return `até ${rot}${t.includes(";") ? " (varia)" : "…"}`;
+}
+
+function lnResumoPercentual(texto) {
+  if (lnNaoInformado(texto)) return null;
+  const t = String(texto);
+  const achados = [...t.matchAll(/(\d{1,3}(?:[.,]\d+)?)\s*%/g)]
+    .map((m) => parseFloat(m[1].replace(",", "."))).filter((v) => v <= 100);
+  if (!achados.length) return null;
+  const max = Math.max(...achados);
+  return `até ${String(max).replace(".", ",")}%${t.includes(";") ? " (varia)" : ""}`;
+}
+
+function lnResumoTaxa(texto, indexador) {
+  if (lnNaoInformado(texto)) return lnNaoInformado(indexador) ? null : String(indexador);
+  const t = String(texto).trim().replace(/^Taxa\s+(de\s+juros\s+)?/i, (m) => (/juros/i.test(m) ? "Juros " : ""));
+  const cmn = t.match(/CMN\)?\s*n?º?\s*(\d[\d.]*\d)/i);
+  if (cmn) {
+    const ano = (t.match(/\/(\d{4})/) || [])[1];
+    return `Conforme Res. CMN nº ${cmn[1]}${ano ? "/" + ano : ""}`;
+  }
+  if (t.length <= 44) return t.replace(/\.$/, "");
+  const idx = [...new Set((t.match(/\b(TLP|TJLP|Selic|IPCA|TR|CDI|TFC|prefixad[ao])\b/gi) || [])
+    .map((x) => (/^prefix/i.test(x) ? "prefixada" : x.toUpperCase() === "SELIC" ? "Selic" : x.toUpperCase())))];
+  if (idx.length) return `${idx.join(" ou ")} + encargos (varia)`;
+  return lnCortarNaPalavra(t, 44);
+}
+
+// ============ Modal de detalhe da linha (redesenho 2026-09-25) ============
+// Cabecalho limpo, 4 destaques em tipografia normal, resto em lista de definicao
+// 2 colunas, "Não informado" agrupado no rodape, textos longos com "ver mais".
+function _lnDlItem(rotulo, valor, naoInformados, limite) {
+  if (lnNaoInformado(valor)) { naoInformados.push(rotulo); return ""; }
+  return `<dt>${esc(rotulo)}</dt><dd>${lnTextoExpansivel(valor, limite || 220)}</dd>`;
+}
+
+function _lnSecao(titulo, itensHtml) {
+  const conteudo = itensHtml.filter(Boolean).join("");
   if (!conteudo) return "";
-  return `<div class="card" style="margin-top:14px;">
-    <div class="card-header">${titulo}</div>
-    <div class="card-body">${conteudo}</div>
-  </div>`;
+  return `<h3 class="ln-secao">${esc(titulo)}</h3><dl class="ln-dl">${conteudo}</dl>`;
 }
 
 async function openLinhaDetalhe(id) {
   document.getElementById("modal-title").textContent = "Linha incentivada";
-  const ordenarSelect = document.getElementById("modal-ordenar");
-  ordenarSelect.style.display = "none";
+  document.getElementById("modal-ordenar").style.display = "none";
   document.getElementById("modal-copiar-link-btn").style.display = "none";
   document.getElementById("modal-favoritar-btn").classList.add("hidden");
   document.getElementById("modal-nota-container").classList.add("hidden");
   const body = document.getElementById("modal-body");
   body.innerHTML = '<p class="empty-state">Carregando...</p>';
   modalOverlay().classList.add("open");
+  const fechar = document.getElementById("modal-close");
+  if (fechar) fechar.focus();
 
   let l;
   try {
@@ -218,96 +269,92 @@ async function openLinhaDetalhe(id) {
   }
   document.getElementById("modal-title").textContent = l.nome_oficial || "Linha incentivada";
 
-  // Reorganizacao (item 2 do pedido, revisada no gap-fix de 2026-09-22 item 1):
-  // "resumo executivo" no topo, pensado pra responder rapido "essa linha serve
-  // pro meu projeto?" -- ordem final: Taxa/Prazo/Carência/Participação no
-  // projeto/Volume-limites/Enquadramento/O que pode ser financiado/Porte
-  // elegível/Setores aplicáveis. Volume-limites, Porte elegível e Setores
-  // aplicáveis SUBIRAM pro destaque (antes so apareciam mais abaixo, em secoes
-  // secundarias) -- removidos de la pra nao duplicar (ver secoes "Setores e
-  // público-alvo"/"Condições adicionais" mais abaixo). Nenhum campo foi
-  // escondido, so reordenado/promovido.
-  const resumo = `
-    <div class="kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-top:10px;">
-      ${_kpiMiniDetalhe("Taxa", l.taxa_completa, [l.indexador, l.spread].filter((v) => v && v !== "Não informado pela fonte").join(" · ") || null)}
-      ${_kpiMiniDetalhe("Prazo", l.prazo_total)}
-      ${_kpiMiniDetalhe("Carência", l.carencia)}
-      ${_kpiMiniDetalhe("Participação no projeto", l.percentual_financiavel)}
-      ${_kpiMiniDetalhe("Volume/limites", fmtValorLinha(l.valor_minimo, l.valor_maximo))}
-      ${_kpiMiniDetalhe("Enquadramento", l.criterios_elegibilidade ? l.criterios_elegibilidade.slice(0, 80) + (l.criterios_elegibilidade.length > 80 ? "…" : "") : null)}
-      ${_kpiMiniDetalhe("O que pode ser financiado", l.itens_financiaveis ? l.itens_financiaveis.slice(0, 80) + (l.itens_financiaveis.length > 80 ? "…" : "") : null)}
-      ${_kpiMiniDetalhe("Porte elegível", l.porte_padronizado)}
-      ${_kpiMiniDetalhe("Setores aplicáveis", l.setores_elegiveis)}
-    </div>
-  `;
+  const naoInf = [];
+  const destaque = (rotulo, valor) => {
+    if (lnNaoInformado(valor)) { naoInf.push(rotulo); return ""; }
+    return `<div class="ln-destaque"><div class="rot">${esc(rotulo)}</div><div class="val">${lnTextoExpansivel(valor, 110)}</div></div>`;
+  };
+  const taxaTxt = [l.taxa_completa, [l.indexador, l.spread].filter((v) => !lnNaoInformado(v)).join(" · ")]
+    .filter((v) => !lnNaoInformado(v)).join(" — ");
+  const destaques = [
+    destaque("Taxa", taxaTxt),
+    destaque("Prazo", l.prazo_total),
+    destaque("Carência", l.carencia),
+    destaque("Participação", l.percentual_financiavel),
+  ].join("");
+
+  const descricao = !lnNaoInformado(l.descricao_completa) ? l.descricao_completa : l.descricao_resumida;
+  const cab = [
+    `<span class="badge neutro">${esc(l.instituicao)}</span>`,
+    l.status ? `<span>${esc(l.status.charAt(0).toUpperCase() + l.status.slice(1))}</span>` : "",
+    `<span>${l.fluxo === "edital" ? "Edital / chamada pública" : "Fluxo contínuo"}</span>`,
+    !lnNaoInformado(l.agente_financeiro) ? `<span>Agente: ${esc(lnCortarNaPalavra(l.agente_financeiro, 60))}</span>` : "",
+  ].filter(Boolean).join('<span aria-hidden="true">·</span>');
+
+  const secoes = [
+    _lnSecao("Quem pode acessar", [
+      _lnDlItem("Porte elegível", l.porte_padronizado, naoInf),
+      _lnDlItem("Setores elegíveis", l.setores_elegiveis, naoInf),
+      _lnDlItem("Setores não elegíveis", l.setores_nao_elegiveis, naoInf),
+      _lnDlItem("Região", l.regiao_elegivel, naoInf),
+      _lnDlItem("Faixa de receita", l.faixa_receita, naoInf),
+      _lnDlItem("Enquadramento", l.criterios_elegibilidade, naoInf),
+    ]),
+    _lnSecao("O que financia", [
+      _lnDlItem("Valor / limites", fmtValorLinha(l.valor_minimo, l.valor_maximo), naoInf),
+      _lnDlItem("Destinação", l.destinacao, naoInf),
+      _lnDlItem("Itens financiáveis", l.itens_financiaveis, naoInf),
+      _lnDlItem("Itens não financiáveis", l.itens_nao_financiaveis, naoInf),
+      _lnDlItem("Contrapartida", l.contrapartida, naoInf),
+    ]),
+    _lnSecao("Condições e contratação", [
+      _lnDlItem("Amortização", l.amortizacao, naoInf),
+      _lnDlItem("Garantias", l.garantias, naoInf),
+      _lnDlItem("Restrições", l.restricoes, naoInf),
+      _lnDlItem("Modalidade", l.modalidade, naoInf),
+      _lnDlItem("Tipo de apoio", l.tipo_apoio, naoInf),
+      _lnDlItem("Canal de contratação", l.canal_contratacao, naoInf),
+      _lnDlItem("Prazo de inscrição", l.prazo_inscricao, naoInf),
+      _lnDlItem("Documentos", l.documentos_necessarios, naoInf),
+      _lnDlItem("Vigência", l.data_vigencia, naoInf),
+    ]),
+  ].join("");
+
+  const dataBR = (d) => (d ? new Date(d).toLocaleDateString("pt-BR") : null);
+  const fonte = [
+    l.url_oficial ? `<a href="${escUrl(l.url_oficial)}" target="_blank" rel="noopener noreferrer">Fonte oficial ↗</a>` : "",
+    l.data_atualizacao ? `Atualizado em ${esc(dataBR(l.data_atualizacao))}` : "",
+    l.origem_dado === "curadoria_manual_verificada" ? "Curadoria manual verificada" : "Coleta automática da fonte oficial",
+  ].filter(Boolean).join(" · ");
 
   body.innerHTML = `
-    <div class="meta"><span class="badge neutro">${esc(l.instituicao)}</span> · ${esc(l.status || "Não informado pela fonte")} · ${l.fluxo === "edital" ? "Edital/chamada pública" : "Fluxo contínuo"}</div>
-    ${resumo}
-    ${_secaoDetalhe("Descrição", [
-      _campoDetalhe("Descrição completa", l.descricao_completa),
-      _campoDetalheExpansivel("Enquadramento (critérios de elegibilidade) -- texto completo", l.criterios_elegibilidade),
-      _campoDetalheExpansivel("O que pode ser financiado -- texto completo", l.itens_financiaveis),
-    ])}
-    ${_secaoDetalhe("Instituição", [
-      _campoDetalhe("Agente financeiro", l.agente_financeiro),
-      _campoDetalhe("Canal de contratação", l.canal_contratacao),
-      _campoDetalhe("Modalidade", l.modalidade),
-      _campoDetalhe("Tipo de apoio", l.tipo_apoio),
-    ])}
-    ${_secaoDetalhe("Setores e público-alvo", [
-      _campoDetalhe("Setores não elegíveis", l.setores_nao_elegiveis),
-      _campoDetalhe("Faixa de receita", l.faixa_receita),
-      _campoDetalhe("Região elegível", l.regiao_elegivel),
-      _campoDetalhe("Destinação", l.destinacao),
-    ])}
-    ${_secaoDetalhe("Condições adicionais", [
-      _campoDetalhe("Itens não financiáveis", l.itens_nao_financiaveis),
-      _campoDetalhe("Contrapartida", l.contrapartida),
-      _campoDetalhe("Amortização", l.amortizacao),
-      _campoDetalhe("Prazo de inscrição", l.prazo_inscricao),
-      _campoDetalhe("Documentos necessários", l.documentos_necessarios),
-    ])}
-    ${_secaoDetalhe("Garantias", [_campoDetalhe("Garantias", l.garantias)])}
-    ${_secaoDetalhe("Observações", [_campoDetalhe("Restrições", l.restricoes)])}
-    ${_secaoDetalhe("Fonte", [
-      _campoDetalhe("Data de vigência", l.data_vigencia),
-      _campoDetalhe("Capturado em", l.data_captura ? new Date(l.data_captura).toLocaleDateString("pt-BR") : null),
-      _campoDetalhe("Atualizado em", l.data_atualizacao ? new Date(l.data_atualizacao).toLocaleDateString("pt-BR") : null),
-      _campoDetalhe("Origem do dado", l.origem_dado === "curadoria_manual_verificada" ? "Curadoria manual verificada" : "Coleta automática (fonte oficial)"),
-      _campoDetalhe("Trecho da fonte", l.trecho_fonte),
-    ])}
-    ${l.url_oficial ? `<div class="meta" style="margin-top:10px;"><a href="${escUrl(l.url_oficial)}" target="_blank" rel="noopener noreferrer">Ver na fonte oficial ↗</a></div>` : ""}
+    <div class="ln-cab">${cab}</div>
+    ${!lnNaoInformado(descricao) ? `<p class="ln-desc">${lnTextoExpansivel(descricao, 320)}</p>` : ""}
+    ${destaques ? `<div class="ln-destaques">${destaques}</div>` : ""}
+    ${secoes}
+    <div id="ln-relacionadas-slot"></div>
+    <div class="ln-rodape">
+      ${naoInf.length ? `<div>Não informado pela fonte: ${esc(naoInf.join(", "))}</div>` : ""}
+      <div>${fonte}</div>
+      ${!lnNaoInformado(l.trecho_fonte) ? `<details><summary>Trecho da fonte</summary><div style="margin-top:4px;">${esc(l.trecho_fonte)}</div></details>` : ""}
+    </div>
   `;
+  lnLigarVerMais(body);
 
-  // Integracao transacoes <-> linhas incentivadas (item 8): so mostra quando o setor
-  // desta linha usa a MESMA taxonomia de `operations.setor_bndes` (as 4 categorias
-  // nativas do BNDES) -- setor_padronizado de linhas vindas de editais da FINEP usa
-  // o tema_principal da FINEP (outra taxonomia, incompativel), e cruzar as duas sem
-  // um de-para real produziria "0 encontrado" enganoso em vez de simplesmente nao
-  // mostrar a secao. Nunca confunde os dois tipos de resultado -- e so uma contagem
-  // + link pro modal generico de operacoes, rotulado como "potencialmente compativel"
-  // (nao elegibilidade confirmada -- ver item 8 do pedido).
+  // Integracao transacoes <-> linhas: so quando o setor da linha usa a mesma
+  // taxonomia de operations.setor_bndes (4 categorias BNDES) -- nunca e
+  // confirmacao de elegibilidade, so atalho pra referencias historicas.
   const SETORES_TAXONOMIA_BNDES = ["AGROPECUÁRIA", "COMERCIO/SERVICOS", "INDUSTRIA", "INFRAESTRUTURA"];
   if (l.setor_padronizado && SETORES_TAXONOMIA_BNDES.includes(l.setor_padronizado)) {
-    try {
-      const relacionadas = await fetchJSON("/api/operacoes?" + qs({ setor: l.setor_padronizado, limit: 1 }) + "&offset=0");
-      const contagemDiv = document.createElement("div");
-      contagemDiv.className = "card";
-      contagemDiv.style.marginTop = "14px";
-      contagemDiv.innerHTML = `
-        <div class="card-header">Transações potencialmente relacionadas <span class="hint">mesmo setor -- não é confirmação de elegibilidade</span></div>
-        <div class="card-body">
-          <p class="meta">Já existem operações de crédito classificadas no setor <strong>${esc(l.setor_padronizado)}</strong> na base deste app.</p>
-          <button class="acao-btn" id="ln-ver-operacoes-relacionadas">Ver operações deste setor</button>
-        </div>
-      `;
-      body.appendChild(contagemDiv);
+    const slot = document.getElementById("ln-relacionadas-slot");
+    if (slot) {
+      slot.innerHTML = `<div class="ln-relacionadas">
+        <span>Operações do setor <strong>${esc(l.setor_padronizado)}</strong> na base (referência, não confirma elegibilidade).</span>
+        <button type="button" class="pt-btn" id="ln-ver-operacoes-relacionadas">Ver operações do setor</button>
+      </div>`;
       document.getElementById("ln-ver-operacoes-relacionadas").addEventListener("click", () => {
         openOperacoesModal(`Setor: ${l.setor_padronizado} (potencialmente compatível com "${l.nome_simplificado || l.nome_oficial}")`, { setor: l.setor_padronizado });
       });
-    } catch (e) {
-      // integracao e um extra -- se a chamada falhar, so nao mostra a secao, sem quebrar o resto do detalhe.
     }
   }
 }
