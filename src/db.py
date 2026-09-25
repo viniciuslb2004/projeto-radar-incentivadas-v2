@@ -133,6 +133,18 @@ def _get_pool():
         from psycopg_pool import ConnectionPool
 
         database_url = _env_url("DATABASE_URL_POOLER") or _env_url("DATABASE_URL")
+        if os.environ.get("VERCEL"):
+            # Diagnostico sem expor segredo: so a estrutura de cada variavel.
+            import sys
+            from urllib.parse import urlsplit
+            for _nome in ("DATABASE_URL_POOLER", "DATABASE_URL"):
+                _v = _env_url(_nome)
+                if _v is None:
+                    print(f"[db] {_nome}: ausente", file=sys.stderr)
+                    continue
+                _u = urlsplit(_v)
+                print(f"[db] {_nome}: len={len(_v)} scheme={_u.scheme!r} host={bool(_u.hostname)} "
+                      f"porta={_u.port} tem_query={bool(_u.query)}", file=sys.stderr)
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
         # Incidente 2026-09-23 ("remaining connection slots"): 12 conexoes ociosas de
