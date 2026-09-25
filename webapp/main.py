@@ -530,6 +530,15 @@ def _warmup_busca():
         print(f"Aviso: motor de busca nao pode ser pre-carregado ({e}).")
 
 
+def _setor_expr(col):
+    """Normaliza uma coluna de setor/subsetor (setor_cnae/subsetor_cnae) tratando
+    'AMBÍGUO' (ver sector_taxonomy.py::AMBIGUO -- CNAE sem evidencia suficiente pra
+    classificar) como a MESMA categoria de setor nulo ("Não classificado" nas rotas
+    que agrupam por setor). Pedido explicito do usuario (2026-09-25): nao criar um
+    rotulo novo, so reaproveitar o "Não classificado" ja existente pra NULL."""
+    return f"NULLIF({col}, 'AMBÍGUO')"
+
+
 def _cols_setor(agencia=None, classificacao=None):
     """(coluna_setor, coluna_subsetor) conforme a classificacao pedida. Padrao
     (2026-09-23): setor PADRONIZADO por CNAE (setor_cnae/subsetor_cnae -- mesmo
@@ -539,6 +548,19 @@ def _cols_setor(agencia=None, classificacao=None):
     if classificacao == "nativo" and agencia == "BNDES":
         return "setor_bndes", "subsetor_bndes"
     return "setor_cnae", "subsetor_cnae"
+
+
+# Segmento (2026-09-25): a coluna mistura a descricao CNAE da planilha BNDES (CAIXA
+# ALTA sem acento, ex "GERACAO DE ENERGIA ELETRICA") com a descricao oficial IBGE/
+# Receita usada por FINEP/BNB ("Geração de energia elétrica") -- o MESMO segmento
+# aparecia como 2 itens distintos nos rankings. Agrupa/filtra pela forma normalizada
+# (sem acento/caixa, mesma funcao SQL do motor de busca) e exibe preferindo a grafia
+# com acento (a que NAO esta toda em maiuscula). Nao reescreve dado nenhum: variantes
+# abreviadas da BNDES ("TRANSP ROD CARGA ...") seguem distintas (casar exigiria
+# inferencia -- ver Backlog no Obsidian).
+SEGMENTO_CHAVE_SQL = "busca_normalizar_texto(segmento)"
+SEGMENTO_ROTULO_SQL = ("COALESCE(MAX(segmento) FILTER (WHERE segmento <> upper(segmento)), "
+                       "MAX(segmento), 'Não classificado')")
 
 
 def _filters_clause(
@@ -563,10 +585,10 @@ def _filters_clause(
         params.append(agencia)
     col_setor, col_subsetor = _cols_setor(agencia, classificacao)
     if setor and setor != "Todos":
-        clauses.append(f"{col_setor} = ?")
+        clauses.append(f"({_setor_expr(col_setor)}) = ?")
         params.append(setor)
     if subsetor and subsetor != "Todos":
-        clauses.append(f"{col_subsetor} = ?")
+        clauses.append(f"({_setor_expr(col_subsetor)}) = ?")
         params.append(subsetor)
     # Agente financeiro (repassador do Inovacred) -- filtro discreto, so faz
     # sentido com agencia=FINEP (ignorado nos demais casos).
@@ -574,7 +596,7 @@ def _filters_clause(
         clauses.append("agente_financeiro = ?")
         params.append(agente)
     if segmento and segmento != "Todos":
-        clauses.append("segmento = ?")
+        clauses.append(f"{SEGMENTO_CHAVE_SQL} = busca_normalizar_texto(?)")
         params.append(segmento)
     if uf and uf != "Todas":
         clauses.append("uf = ?")
@@ -722,8 +744,8 @@ def filtros():
         row = cur.execute(f"""
             SELECT
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT agencia AS x FROM operations WHERE agencia IS NOT NULL) t) AS agencias,
-              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT setor_cnae AS x FROM operations WHERE setor_cnae IS NOT NULL) t) AS setores,
-              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT subsetor_cnae AS x FROM operations WHERE subsetor_cnae IS NOT NULL) t) AS subsetores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT setor_cnae AS x FROM operations WHERE setor_cnae IS NOT NULL AND setor_cnae != 'AMBÍGUO') t) AS setores,
+              (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT subsetor_cnae AS x FROM operations WHERE subsetor_cnae IS NOT NULL AND subsetor_cnae != 'AMBÍGUO') t) AS subsetores,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT agente_financeiro AS x FROM operations WHERE agencia = 'FINEP' AND agente_financeiro IS NOT NULL) t) AS agentes_finep,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT uf AS x FROM operations WHERE uf IS NOT NULL) t) AS ufs,
               (SELECT array_agg(x ORDER BY x) FROM (SELECT DISTINCT instrumento AS x FROM operations WHERE instrumento IS NOT NULL) t) AS instrumentos,
@@ -739,7 +761,7 @@ def filtros():
         # crus de porte_cliente -- ordem de tamanho fixa (nao alfabetica), "Não
         # informado" so aparece se alguma operacao realmente cair nela.
         portes_presentes = set(portes_presentes or [])
-        portes = [p for p in PORTES_CANONICOS if p in portes_presentes or p == "MÉDIA OU GRANDE" and {"MÉDIA", "GRANDE"} & portes_presentes]
+        portes = [p for p in PORTES_CANONICOS if p in portes_presentes]
 
         return {
             "agencias": agencias or [],
@@ -850,9 +872,9 @@ def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_f
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE({col}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE({_setor_expr(col)}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
-            GROUP BY {col}
+            GROUP BY ({_setor_expr(col)})
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
@@ -876,9 +898,9 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE({col}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT COALESCE({_setor_expr(col)}, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
-            GROUP BY {col}
+            GROUP BY ({_setor_expr(col)})
             ORDER BY SUM(valor_contratado) DESC
             """,
             params,
@@ -902,9 +924,9 @@ def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: 
         cur = conn.cursor()
         rows = cur.execute(
             f"""
-            SELECT COALESCE(segmento, 'Não classificado'), COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
+            SELECT {SEGMENTO_ROTULO_SQL}, COUNT(*), SUM(valor_contratado), AVG(valor_contratado)
             FROM operations {where}
-            GROUP BY segmento
+            GROUP BY {SEGMENTO_CHAVE_SQL}
             ORDER BY SUM(valor_contratado) DESC
             LIMIT ?
             """,
@@ -1001,13 +1023,19 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
 
     def valor_por_grupo(d_ini, d_fim):
         where = where_base + (" AND " if where_base else "WHERE ") + "data_contratacao >= ? AND data_contratacao < ?"
+        if group_col == "segmento":
+            chave, rotulo = SEGMENTO_CHAVE_SQL, SEGMENTO_ROTULO_SQL
+        else:
+            expr = _setor_expr(group_col) if group_col in (col_setor, col_subsetor) else group_col
+            chave, rotulo = f"({expr})", f"COALESCE({expr}, 'Não classificado')"
         rows = cur.execute(
-            f"SELECT COALESCE({group_col}, 'Não classificado'), SUM(valor_contratado), COUNT(*) "
-            f"FROM operations {where} GROUP BY {group_col}",
+            f"SELECT {chave}, {rotulo}, SUM(valor_contratado), COUNT(*) "
+            f"FROM operations {where} GROUP BY {chave}",
             params_base + [d_ini, d_fim],
         ).fetchall()
-        total = sum(r[1] or 0 for r in rows)
-        return {r[0]: {"valor": r[1] or 0, "n": r[2], "part": (r[1] or 0) / total if total else 0} for r in rows}, total
+        total = sum(r[2] or 0 for r in rows)
+        return {r[0]: {"rotulo": r[1], "valor": r[2] or 0, "n": r[3], "part": (r[2] or 0) / total if total else 0}
+                for r in rows}, total
 
     atual, total_atual = valor_por_grupo(data_inicio, data_fim)
     anterior, total_anterior = valor_por_grupo(ant_inicio, ant_fim)
@@ -1035,13 +1063,21 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
     for g in grupos:
         a = atual.get(g, {"valor": 0, "n": 0, "part": 0})
         p = anterior.get(g, {"valor": 0, "n": 0, "part": 0})
+        # Rotulo: com segmento normalizado a chave nao e o texto exibido; prefere a
+        # grafia acentuada se so o outro periodo a tiver.
+        rotulos = [x["rotulo"] for x in (atual.get(g), anterior.get(g)) if x]
+        rotulo = next((r for r in rotulos if r != r.upper()), rotulos[0])
         out.append({
-            "grupo": g,
+            "grupo": rotulo,
             "participacao_atual_pct": a["part"] * 100,
             "participacao_anterior_pct": (p["part"] * 100) if comparavel else None,
             "variacao_pp": ((a["part"] - p["part"]) * 100) if comparavel else None,
             "valor_atual": a["valor"],
             "n_operacoes_atual": a["n"],
+            # Pro modal de drill-down (common.js::openOperacoesModal): quando o grupo
+            # caiu a 0 no periodo atual, oferece abrir as operacoes do periodo anterior.
+            "valor_anterior": p["valor"],
+            "n_operacoes_anterior": p["n"],
         })
     out.sort(key=lambda r: (r["variacao_pp"] if comparavel else r["valor_atual"]), reverse=True)
     return {
@@ -1261,6 +1297,10 @@ def operacao_detalhe(op_id: int, request: Request):
         if not row:
             return {"erro": "operacao nao encontrada"}
         raw_table, raw_id, agencia, instrumento, setor_bndes, cnpj, setor_cnae, subsetor_cnae, subsetor_bndes = row
+        if setor_cnae == 'AMBÍGUO':
+            setor_cnae = None
+        if subsetor_cnae == 'AMBÍGUO':
+            subsetor_cnae = None
 
         # Salvar/Notas (area interna, /interno-artica) -- so calculado quando quem
         # chama e' STAFF (ver webapp/salvos.py). Nunca pra lead publico: alem de ser

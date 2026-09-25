@@ -345,7 +345,7 @@ function _aplicarFiltrosBuscaDaURL() {
   if (params.has("valor_maximo")) document.getElementById("bu-f-valor-maximo").value = params.get("valor_maximo");
   if (params.has("regiao")) document.getElementById("bu-f-regiao").value = params.get("regiao");
   if (params.has("produto")) document.getElementById("bu-f-produto").value = params.get("produto");
-  if (params.has("porte")) document.getElementById("bu-f-porte").value = params.get("porte");
+  if (params.has("porte")) document.getElementById("bu-f-porte").value = normalizarPorteLegado(params.get("porte"));
   if (params.has("setor")) document.getElementById("bu-f-setor").value = params.get("setor");
   if (params.has("uf")) document.getElementById("bu-f-uf").value = params.get("uf");
 

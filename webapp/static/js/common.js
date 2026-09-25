@@ -2,6 +2,37 @@
 
 const AZUL_TONS = ["#223850", "#2E4A68", "#36587E", "#5878A0", "#7C93AC", "#A9BAC9", "#D3DCE3"];
 
+// Mapa FIXO categoria -> cor do grafico "Por porte do cliente" (Consolidado e
+// Tendencias, se algum dia ganhar o mesmo grafico) -- cor por indice/ordem foi
+// trocada por isto (2026-09-25) porque a ordem de chegada dos dados da API podia
+// variar (so entra no array quem tem operacao), o que fazia a MESMA categoria
+// pintar de cor diferente entre reloads/abas.
+const CORES_PORTE = {
+  "Pequena": "#36587E",
+  "Média": "#5878A0",
+  "Grande": "#223850",
+  "Não informado": "#A9BAC9",
+};
+
+// Valores antigos de porte salvos em URL (antes da consolidacao em 4 categorias,
+// 2026-09-25) -- mapeia pro canonico atual pra nao quebrar link/bookmark salvo.
+const PORTE_LEGADO_PARA_CANONICO = {
+  "MICRO": "Pequena",
+  "PEQUENA": "Pequena",
+  "MÉDIA": "Média",
+  "MEDIA": "Média",
+  "GRANDE": "Grande",
+  "MÉDIA OU GRANDE": "Não informado",
+  "MEDIA_OU_GRANDE": "Não informado",
+  "MEDIA OU GRANDE": "Não informado",
+  "NAO_INFORMADO": "Não informado",
+};
+
+function normalizarPorteLegado(valor) {
+  if (!valor) return valor;
+  return PORTE_LEGADO_PARA_CANONICO[valor] || valor;
+}
+
 // Escapa texto vindo da API antes de interpolar em innerHTML/template (texto E
 // atributos). null/undefined -> "".
 function esc(s) {
@@ -1184,8 +1215,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
-  if (!manterOrdenacao) modalExtraFilters = extraFilters || {};
+// opcoes.anterior = {inicio, fim, n} (rankings de Tendencias): se o item clicado nao
+// tem operacao no periodo filtrado (ex: queda para 0), o modal explica e oferece abrir
+// o periodo de comparacao -- em vez de "Nenhuma operacao encontrada" sem contexto.
+let modalOpcoes = {};
+async function openOperacoesModal(title, extraFilters, manterOrdenacao, opcoes) {
+  if (!manterOrdenacao) { modalExtraFilters = extraFilters || {}; modalOpcoes = opcoes || {}; }
   document.getElementById("modal-title").textContent = title;
   const body = document.getElementById("modal-body");
   const ordenarSelect = document.getElementById("modal-ordenar");
@@ -1209,11 +1244,24 @@ async function openOperacoesModal(title, extraFilters, manterOrdenacao) {
   if (token !== openOperacoesModal._token) return;
 
   if (!Array.isArray(ops) || !ops.length) {
-    body.innerHTML = '<p class="empty-state">Nenhuma operação encontrada para esse filtro.</p>';
+    const ant = modalOpcoes.anterior;
+    if (ant && ant.n > 0 && ant.inicio && ant.fim) {
+      body.innerHTML = `<p class="empty-state">Sem operações no período selecionado; no período anterior
+        (${esc(fmtPeriodo([ant.inicio, ant.fim]))}) houve ${ant.n} operaç${ant.n === 1 ? "ão" : "ões"} —
+        <a href="#" id="modal-ver-anterior">ver</a>.</p>`;
+      document.getElementById("modal-ver-anterior").addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openOperacoesModal(`${title} (período anterior)`,
+          Object.assign({}, modalExtraFilters, { data_inicio: ant.inicio, data_fim: ant.fim }));
+      });
+    } else {
+      body.innerHTML = '<p class="empty-state">Nenhuma operação encontrada para esse filtro.</p>';
+    }
     return;
   }
 
-  body.innerHTML = _renderTabelaOperacoesAgrupada(ops);
+  body.innerHTML = _renderTabelaOperacoesAgrupada(ops) +
+    (ops.length >= 300 ? '<p class="hint">Exibindo as 300 primeiras operações (conforme a ordenação escolhida).</p>' : "");
 
   body.querySelectorAll("tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => openOperacaoDetalhe(tr.dataset.id));

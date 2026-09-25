@@ -25,6 +25,16 @@ function trendListItem(row, sinal, dataAttr) {
   </li>`;
 }
 
+// Opcoes do modal pra um item de ranking alta/queda: periodo anterior + contagem, pro
+// caso "caiu a 0" (ver common.js::openOperacoesModal).
+function _opcoesModalTendencia(ranking, lista, campo, rotulo) {
+  const row = (lista || []).find((r) => r[campo] === rotulo);
+  const ant = ranking && ranking.periodo_anterior;
+  if (!row || !ant) return {};
+  return { anterior: { inicio: ant[0], fim: ant[1], n: row.n_operacoes_anterior || 0 } };
+}
+const _ehNaoClassificado = (v) => !v || v === "Nao classificado" || v === "Não classificado";
+
 async function loadTendenciasSetores(filters, token) {
   let data;
   try {
@@ -46,7 +56,7 @@ async function loadTendenciasSetores(filters, token) {
   document.getElementById("tend-header-alta").insertAdjacentHTML("beforeend", `<span class="hint">${periodoTxt}</span>`);
   document.getElementById("tend-header-queda").insertAdjacentHTML("beforeend", `<span class="hint">${periodoTxt}</span>`);
 
-  const setores = (data.setores || []).filter((s) => s.setor && s.setor !== "Nao classificado");
+  const setores = (data.setores || []).filter((s) => !_ehNaoClassificado(s.setor));
   const alta = setores.filter((s) => s.variacao_pp > 0).slice(0, 8);
   const queda = setores.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 8);
 
@@ -57,7 +67,8 @@ async function loadTendenciasSetores(filters, token) {
 
   [listaAlta, listaQueda].forEach((ul) => {
     ul.querySelectorAll("li[data-setor]").forEach((li) => {
-      li.addEventListener("click", () => openOperacoesModal(`Setor: ${li.dataset.setor}`, { setor: li.dataset.setor }));
+      li.addEventListener("click", () => openOperacoesModal(`Setor: ${li.dataset.setor}`, { setor: li.dataset.setor, subsetor: "Todos" }, false,
+        _opcoesModalTendencia(data, setores, "setor", li.dataset.setor)));
     });
   });
 
@@ -196,7 +207,7 @@ async function loadSubsetores(filters) {
   ranking = ranking || {};
   breakdown = Array.isArray(breakdown) ? breakdown : [];
 
-  const subsetoresValidos = (ranking.subsetores || []).filter((s) => s.subsetor && s.subsetor !== "Nao classificado");
+  const subsetoresValidos = (ranking.subsetores || []).filter((s) => !_ehNaoClassificado(s.subsetor));
   const alta = subsetoresValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = subsetoresValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
@@ -215,7 +226,8 @@ async function loadSubsetores(filters) {
 
   [listaAlta, listaQueda].forEach((ul) => {
     ul.querySelectorAll("li[data-subsetor]").forEach((li) => {
-      li.addEventListener("click", () => openOperacoesModal(`${setor} · ${li.dataset.subsetor}`, { setor, subsetor: li.dataset.subsetor }));
+      li.addEventListener("click", () => openOperacoesModal(`${setor} · ${li.dataset.subsetor}`, { setor, subsetor: li.dataset.subsetor }, false,
+        _opcoesModalTendencia(ranking, subsetoresValidos, "subsetor", li.dataset.subsetor)));
     });
   });
 
@@ -312,7 +324,7 @@ async function loadSegmentos(filters) {
   ranking = ranking || {};
   breakdown = Array.isArray(breakdown) ? breakdown : [];
 
-  const segmentosValidos = (ranking.segmentos || []).filter((s) => s.segmento && s.segmento !== "Nao classificado");
+  const segmentosValidos = (ranking.segmentos || []).filter((s) => !_ehNaoClassificado(s.segmento));
   const alta = segmentosValidos.filter((s) => s.variacao_pp > 0).slice(0, 6);
   const queda = segmentosValidos.filter((s) => s.variacao_pp < 0).sort((a, b) => a.variacao_pp - b.variacao_pp).slice(0, 6);
 
@@ -327,7 +339,8 @@ async function loadSegmentos(filters) {
 
   [listaAlta, listaQueda].forEach((ul) => {
     ul.querySelectorAll("li[data-segmento]").forEach((li) => {
-      li.addEventListener("click", () => openOperacoesModal(`${setor} · ${li.dataset.segmento}`, { setor, segmento: li.dataset.segmento }));
+      li.addEventListener("click", () => openOperacoesModal(`${setor} · ${li.dataset.segmento}`, { setor, segmento: li.dataset.segmento }, false,
+        _opcoesModalTendencia(ranking, segmentosValidos, "segmento", li.dataset.segmento)));
     });
   });
 
@@ -411,7 +424,9 @@ async function loadProdutos(filters) {
       onClick: (evt, els) => {
         if (!els.length) return;
         const valor = linhas[els[0].index][campo];
-        openOperacoesModal(`Destinação: ${valor}`, { produto_ou_instrumento: valor });
+        openOperacoesModal(`Destinação: ${valor}`, // /api/tendencias/produtos ignora setor/subsetor/instrumento -- o modal
+        // tambem, senao a contagem do grafico e a do modal divergem.
+        { produto_ou_instrumento: valor, setor: "Todos", subsetor: "Todos", instrumento: "Todos" });
       },
     },
   });

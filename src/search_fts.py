@@ -114,34 +114,54 @@ PALAVRAS_GENERICAS_QUERY = {
 # classificacao limpa" da RFB caem juntos em "Não informado", igual pedido.
 PORTE_NORMALIZADO_SQL = """
     CASE porte_cliente
-        WHEN 'Empresa de Pequeno Porte' THEN 'PEQUENA'
-        WHEN 'Micro Empresa' THEN 'MICRO'
-        WHEN 'Demais' THEN 'MÉDIA OU GRANDE'
-        WHEN 'GRANDE' THEN 'GRANDE'
-        WHEN 'MÉDIA' THEN 'MÉDIA'
-        WHEN 'PEQUENA' THEN 'PEQUENA'
-        WHEN 'MICRO' THEN 'MICRO'
+        WHEN 'Empresa de Pequeno Porte' THEN 'Pequena'
+        WHEN 'Micro Empresa' THEN 'Pequena'
+        WHEN 'Demais' THEN 'Não informado'
+        WHEN 'GRANDE' THEN 'Grande'
+        WHEN 'MÉDIA' THEN 'Média'
+        WHEN 'PEQUENA' THEN 'Pequena'
+        WHEN 'MICRO' THEN 'Pequena'
         ELSE 'Não informado'
     END
 """
 
-# Revisao 2026-09-24 (filtro de porte entre BNDES/FINEP/BNB): "Demais" da Receita
-# (FINEP e BNB, ~15 mil operacoes) deixou de cair em "Não informado" e virou
-# 'MÉDIA OU GRANDE' -- a Receita so separa Micro/EPP/Demais, entao media x grande
-# e indistinguivel ali (nao inventar). Filtro:
-#   MICRO/PEQUENA -> bate BNDES nativo + Receita (mesmo conceito)
-#   MÉDIA/GRANDE  -> so BNDES nativo (unica fonte que separa)
-#   MÉDIA OU GRANDE -> uniao: BNDES MÉDIA + BNDES GRANDE + Receita "Demais"
-# Proxy por valor da operacao foi TESTADO e rejeitado (acuracia 15-24% vs porte
-# nativo BNDES em 47 mil operacoes -- ver Decisões.md no Obsidian); tamanho da
-# transacao continua disponivel so como filtro separado de valor (min/max).
-PORTES_CANONICOS = ("MICRO", "PEQUENA", "MÉDIA", "GRANDE", "MÉDIA OU GRANDE", "Não informado")
+# Revisao 2026-09-25 (pedido explicito do usuario): consolidado em 4 categorias
+# finais -- "Pequena" (uniao Micro+Pequena de todas as bases), "Média", "Grande",
+# "Não informado". 'MÉDIA OU GRANDE' (uniao BNDES MÉDIA+GRANDE e Receita "Demais",
+# introduzida 2026-09-24) deixou de existir como categoria propria: nao da pra
+# adivinhar entre Media e Grande, entao cai toda em "Não informado" junto com o
+# residual da Receita. Proxy por valor da operacao foi TESTADO e rejeitado
+# (acuracia 15-24% vs porte nativo BNDES em 47 mil operacoes -- ver Decisões.md
+# no Obsidian); tamanho da transacao continua disponivel so como filtro separado
+# de valor (min/max).
+PORTES_CANONICOS = ("Pequena", "Média", "Grande", "Não informado")
+
+# Retrocompatibilidade com valores antigos salvos em URL/bookmarks (filtro de
+# porte na querystring de antes desta revisao).
+PORTE_LEGADO_PARA_CANONICO = {
+    "MICRO": "Pequena",
+    "PEQUENA": "Pequena",
+    "MÉDIA": "Média",
+    "MEDIA": "Média",
+    "GRANDE": "Grande",
+    "MÉDIA OU GRANDE": "Não informado",
+    "MEDIA_OU_GRANDE": "Não informado",
+    "MEDIA OU GRANDE": "Não informado",
+    "Não informado": "Não informado",
+    "NAO_INFORMADO": "Não informado",
+}
+
+
+def normalizar_porte_legado(porte):
+    """Mapeia um valor de porte (possivelmente antigo, de URL salva) pro canonico atual."""
+    if not porte:
+        return porte
+    return PORTE_LEGADO_PARA_CANONICO.get(porte, porte)
 
 
 def porte_clause(porte):
     """(sql, params) do filtro de porte canonico -- sempre AND, nunca ranking."""
-    if porte == "MÉDIA OU GRANDE":
-        return f"({PORTE_NORMALIZADO_SQL}) IN (?, ?, ?)", ["MÉDIA", "GRANDE", "MÉDIA OU GRANDE"]
+    porte = normalizar_porte_legado(porte)
     return f"({PORTE_NORMALIZADO_SQL}) = ?", [porte]
 
 

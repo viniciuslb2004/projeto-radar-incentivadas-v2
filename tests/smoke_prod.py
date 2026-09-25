@@ -3,6 +3,7 @@ Uso: python tests/smoke_prod.py [BASE_URL]   (sai com codigo 1 se algo falhar)."
 import json
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "https://projeto-radar-incentivadas.vercel.app").rstrip("/")
@@ -42,7 +43,31 @@ def checar(rota, valida):
     return ultimo
 
 
+def checar_consistencia_modal():
+    """Contagem do ranking de Tendencias == total do modal (/api/operacoes) pro 1o
+    segmento com operacoes no periodo (bug 2026-09-25: segmento em queda abria modal
+    vazio / rotulos duplicados por acento). Periodo fixo de 11 meses."""
+    q = "setor=INFRAESTRUTURA&data_inicio=2025-11-01&data_fim=2026-10-01"
+    try:
+        with urllib.request.urlopen(f"{BASE}/api/tendencias/segmentos?{q}", timeout=60) as r:
+            segs = json.loads(r.read())["segmentos"]
+        s = next(x for x in segs if 0 < x["n_operacoes_atual"] < 300)
+        seg = urllib.parse.quote(s["segmento"])
+        with urllib.request.urlopen(f"{BASE}/api/operacoes?{q}&segmento={seg}&limit=300", timeout=60) as r:
+            n = len(json.loads(r.read()))
+        if n != s["n_operacoes_atual"]:
+            return f"{s['segmento']}: ranking={s['n_operacoes_atual']} modal={n}"
+        if "n_operacoes_anterior" not in s:
+            return "ranking sem n_operacoes_anterior"
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
 falhas = 0
+erro = checar_consistencia_modal()
+print(("FALHA " if erro else "ok    ") + "consistencia ranking==modal (Tendencias/segmentos)" + (f" -> {erro}" if erro else ""))
+falhas += bool(erro)
 for rota, valida in ROTAS:
     erro = checar(rota, valida)
     print(("FALHA " if erro else "ok    ") + rota + (f" -> {erro}" if erro else ""))

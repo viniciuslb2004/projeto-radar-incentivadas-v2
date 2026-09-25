@@ -391,7 +391,7 @@ async function loadPorte(filters) {
     type: "doughnut",
     data: {
       labels: data.map((d) => d.porte),
-      datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: AZUL_TONS.slice(0, data.length) }],
+      datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: data.map((d) => CORES_PORTE[d.porte] || AZUL_TONS[5]) }],
     },
     options: {
       responsive: true,
