@@ -75,6 +75,13 @@ def _env_url(nome: str) -> str | None:
     for prefixo in ("DATABASE_URL_POOLER=", "DATABASE_URL="):
         if valor.startswith(prefixo):
             valor = valor[len(prefixo):].strip().strip('"').strip("'")
+    if valor and os.environ.get("VERCEL") and not valor.startswith(("postgres://", "postgresql://")):
+        # Diagnostico sem expor segredo: so formato, nunca conteudo.
+        import re, sys
+        forma = re.sub(r"[A-Za-z]", "a", re.sub(r"[0-9]", "9", valor[:12]))
+        print(f"[db] {nome} nao parece URL postgres: len={len(valor)} "
+              f"inicio_mascarado={forma!r} tem_arroba={'@' in valor} "
+              f"tem_barras={'//' in valor} linhas={valor.count(chr(10)) + 1}", file=sys.stderr)
     return valor or None
 
 def _get_pool():
