@@ -784,13 +784,14 @@ def filtros():
 def kpis(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
     data_inicio: str = None, data_fim: str = None, instrumento: str = None,
-    classificacao: str = None, agente: str = None,
+    classificacao: str = None, agente: str = None, produto: str = None,
 ):
     # subsetor: cascata Setor -> Subsetor do filterbar compartilhado (Consolidado/
     # Tendencias, ver common.js/consolidado.js) -- mesma posicao ja aceita por
-    # _filters_clause, so precisava ser exposta nesta rota tambem.
+    # _filters_clause, so precisava ser exposta nesta rota tambem. produto: filtro
+    # de Linha (cascata Agencia -> Linha, 2026-09-25), mesmo filterbar compartilhado.
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -833,13 +834,13 @@ GRANULARIDADES_SERIE = {
 def serie_temporal(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None, data_inicio: str = None,
     data_fim: str = None, instrumento: str = None, granularidade: str = "trimestral",
-    classificacao: str = None, agente: str = None,
+    classificacao: str = None, agente: str = None, produto: str = None,
 ):
     if granularidade not in GRANULARIDADES_SERIE:
         granularidade = "trimestral"
     periodo_expr = GRANULARIDADES_SERIE[granularidade]
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -863,9 +864,9 @@ def serie_temporal(
 
 @app.get("/api/setores")
 def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None,
-            classificacao: str = None, agente: str = None):
+            classificacao: str = None, agente: str = None, produto: str = None):
     where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim, instrumento,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     col, _ = _cols_setor(agencia, classificacao)
     conn = get_connection(pooled=True)
     try:
@@ -889,9 +890,9 @@ def setores(agencia: str = None, uf: str = None, data_inicio: str = None, data_f
 
 @app.get("/api/subsetores")
 def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None,
-               classificacao: str = None, agente: str = None):
+               classificacao: str = None, agente: str = None, produto: str = None):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     _, col = _cols_setor(agencia, classificacao)
     conn = get_connection(pooled=True)
     try:
@@ -915,10 +916,10 @@ def subsetores(setor: str = None, agencia: str = None, uf: str = None, data_inic
 
 @app.get("/api/segmentos")
 def segmentos(setor: str = None, subsetor: str = None, agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None, instrumento: str = None, limit: int = 20,
-              classificacao: str = None, agente: str = None):
+              classificacao: str = None, agente: str = None, produto: str = None):
     limit = max(1, min(limit, 500))
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, instrumento, subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -965,10 +966,10 @@ def produtos_por_agencia(agencia: str = None):
 def uf_breakdown(
     agencia: str = None, setor: str = None, subsetor: str = None,
     data_inicio: str = None, data_fim: str = None, instrumento: str = None,
-    classificacao: str = None, agente: str = None,
+    classificacao: str = None, agente: str = None, produto: str = None,
 ):
     where, params = _filters_clause(agencia, setor, None, data_inicio, data_fim, instrumento, subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -990,9 +991,10 @@ def uf_breakdown(
 def porte_breakdown(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
     data_inicio: str = None, data_fim: str = None, classificacao: str = None, agente: str = None,
+    produto: str = None,
 ):
     where, params = _filters_clause(agencia, setor, uf, data_inicio, data_fim, subsetor=subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -1011,14 +1013,14 @@ def porte_breakdown(
 
 
 def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai, data_inicio, data_fim, subsetor_pai=None,
-                      classificacao=None, agente=None):
+                      classificacao=None, agente=None, produto=None):
     """Ranking generico de variacao de participacao entre periodo atual e anterior, respeitando filtros.
     group_col "setor"/"subsetor" sao resolvidos pela classificacao (ver _cols_setor)."""
     col_setor, col_subsetor = _cols_setor(agencia, classificacao)
     group_col = {"setor": col_setor, "subsetor": col_subsetor}.get(group_col, group_col)
     data_inicio, data_fim, ant_inicio, ant_fim = _periodo_anterior(data_inicio, data_fim, conn)
     where_base, params_base = _filters_clause(agencia, setor_pai, uf, None, None, instrumento, subsetor_pai,
-                                              classificacao=classificacao, agente=agente)
+                                              classificacao=classificacao, agente=agente, produto=produto)
     cur = conn.cursor()
 
     def valor_por_grupo(d_ini, d_fim):
@@ -1090,12 +1092,12 @@ def _ranking_variacao(conn, group_col: str, agencia, uf, instrumento, setor_pai,
 
 @app.get("/api/tendencias/setores")
 def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
-                       classificacao: str = None, agente: str = None):
+                       classificacao: str = None, agente: str = None, produto: str = None):
     """Ranking de setores por variacao de participacao entre o periodo selecionado e o periodo anterior equivalente."""
     conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "setor", agencia, uf, instrumento, None, data_inicio, data_fim,
-                              classificacao=classificacao, agente=agente)
+                              classificacao=classificacao, agente=agente, produto=produto)
         return {
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
             "periodo_anterior": [r["data_inicio_anterior"], r["data_fim_anterior"]],
@@ -1108,12 +1110,12 @@ def tendencias_setores(agencia: str = None, uf: str = None, instrumento: str = N
 
 @app.get("/api/tendencias/subsetores")
 def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
-                          classificacao: str = None, agente: str = None):
+                          classificacao: str = None, agente: str = None, produto: str = None):
     """Ranking de subsetores (dentro de um setor) por variacao de participacao."""
     conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "subsetor", agencia, uf, instrumento, setor, data_inicio, data_fim,
-                              classificacao=classificacao, agente=agente)
+                              classificacao=classificacao, agente=agente, produto=produto)
         return {
             "setor": setor,
             "periodo_atual": [r["data_inicio"], r["data_fim"]],
@@ -1127,12 +1129,12 @@ def tendencias_subsetores(setor: str = Query(...), agencia: str = None, uf: str 
 
 @app.get("/api/tendencias/segmentos")
 def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia: str = None, uf: str = None, instrumento: str = None, data_inicio: str = None, data_fim: str = None,
-                         classificacao: str = None, agente: str = None):
+                         classificacao: str = None, agente: str = None, produto: str = None):
     """Ranking de segmentos CNAE (granularidade fina) dentro de um setor, por variacao de participacao."""
     conn = get_connection(pooled=True)
     try:
         r = _ranking_variacao(conn, "segmento", agencia, uf, instrumento, setor, data_inicio, data_fim, subsetor_pai=subsetor,
-                              classificacao=classificacao, agente=agente)
+                              classificacao=classificacao, agente=agente, produto=produto)
         return {
             "setor": setor,
             "subsetor": subsetor,
@@ -1147,9 +1149,9 @@ def tendencias_segmentos(setor: str = Query(...), subsetor: str = None, agencia:
 
 @app.get("/api/tendencias/produtos")
 def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = None, data_fim: str = None,
-                        classificacao: str = None, agente: str = None):
+                        classificacao: str = None, agente: str = None, produto: str = None):
     where, params = _filters_clause(agencia, None, uf, data_inicio, data_fim,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     conn = get_connection(pooled=True)
     try:
         cur = conn.cursor()
@@ -1181,7 +1183,7 @@ def tendencias_produtos(agencia: str = None, uf: str = None, data_inicio: str = 
 def tendencias_operadores(
     agencia: str = None, setor: str = None, subsetor: str = None, uf: str = None,
     data_inicio: str = None, data_fim: str = None, classificacao: str = None, agente: str = None,
-    limit: int = 10,
+    produto: str = None, limit: int = 10,
 ):
     """Operadores indiretos (agentes financeiros repassadores do Inovacred / credito
     descentralizado FINEP): valor contratado e n de operacoes, top `limit` + "Outros".
@@ -1189,7 +1191,7 @@ def tendencias_operadores(
     descentralizado, qualquer que seja o filtro de agencia recebido."""
     limit = max(1, min(limit, 30))
     where, params = _filters_clause("FINEP", setor, uf, data_inicio, data_fim, subsetor=subsetor,
-                                    classificacao=classificacao, agente=agente)
+                                    classificacao=classificacao, agente=agente, produto=produto)
     where = where + (" AND " if where else "WHERE ") + "instrumento = 'Credito Descentralizado' AND agente_financeiro IS NOT NULL"
     conn = get_connection(pooled=True)
     try:

@@ -591,6 +591,11 @@ function currentFilters() {
     setor: document.getElementById("f-setor").value,
     subsetor: document.getElementById("f-subsetor").value,
     uf: document.getElementById("f-uf").value,
+    // Linha/tipo de linha (produto): filtro estruturado AND, mesma cascata
+    // Entidade -> Tipo de linha ja usada na Busca (ver
+    // _repopularProdutoCascataCompartilhada abaixo). Afeta Consolidado e
+    // Tendencias, que compartilham este filterbar.
+    produto: document.getElementById("f-produto").value,
   };
   // Classificacao nativa BNDES (so com agencia=BNDES) e agente financeiro (so com
   // agencia=FINEP) -- fora desses casos nem vao pra query (backend tambem ignora).
@@ -1017,6 +1022,7 @@ async function _initFiltersAndTabsImpl() {
     if (paramsIniciais.has("uf")) document.getElementById("f-uf").value = paramsIniciais.get("uf");
     if (paramsIniciais.has("classificacao")) document.getElementById("f-classificacao").value = paramsIniciais.get("classificacao");
     if (paramsIniciais.has("agente")) document.getElementById("f-agente").value = paramsIniciais.get("agente");
+    if (paramsIniciais.has("produto")) document.getElementById("f-produto").value = paramsIniciais.get("produto");
     if (paramsIniciais.has("mes_ini")) document.getElementById("f-mes-ini").value = paramsIniciais.get("mes_ini");
     if (paramsIniciais.has("ano_ini")) document.getElementById("f-ano-ini").value = paramsIniciais.get("ano_ini");
     if (paramsIniciais.has("mes_fim")) document.getElementById("f-mes-fim").value = paramsIniciais.get("mes_fim");
@@ -1028,10 +1034,21 @@ async function _initFiltersAndTabsImpl() {
   }
 
   _atualizarFiltrosPorAgencia();
+  // Cascata Agencia -> Linha: narrowa #f-produto pra agencia ja resolvida nesse
+  // ponto (default "Todas", ou restaurada da URL acima), preservando o valor de
+  // #f-produto restaurado da URL se ainda for compativel (mesmo padrao de
+  // _repopularSubsetorCascata em consolidado.js).
+  await _repopularProdutoCascataCompartilhada(true);
   const CAMPOS_DATA = ["f-mes-ini", "f-ano-ini", "f-mes-fim", "f-ano-fim"];
-  ["f-agencia", "f-classificacao", "f-agente", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
+  ["f-agencia", "f-classificacao", "f-agente", "f-produto", "f-setor", "f-subsetor", "f-uf", ...CAMPOS_DATA].forEach((id) => {
     document.getElementById(id).addEventListener("change", async () => {
-      if (id === "f-agencia") _atualizarFiltrosPorAgencia();
+      if (id === "f-agencia") {
+        _atualizarFiltrosPorAgencia();
+        // Mesma ordem ja usada pra Setor -> Subsetor: repopula/reseta ANTES do
+        // notifyFiltersChange logo abaixo, senao os graficos disparariam por uma
+        // fracao de segundo com uma Linha incompativel com a nova Agencia.
+        await _repopularProdutoCascataCompartilhada(false);
+      }
       // Teto dinamico (item 5): #f-ano-fim mudar pode tornar meses ja desabilitados
       // validos de novo (ano anterior ao mais recente) ou invalidar o mes atual (ano
       // mais recente da base) -- reaplica ANTES de validarIntervaloDatas, que compara
@@ -1147,9 +1164,48 @@ function _atualizarFiltrosPorAgencia() {
   document.getElementById("f-agente-wrap").style.display = agencia === "FINEP" ? "" : "none";
 }
 
+// Cascata Agencia -> Linha (#f-agencia -> #f-produto, filterbar compartilhado
+// Consolidado/Tendencias): mesmo espirito de #f-setor -> #f-subsetor
+// (consolidado.js::_repopularSubsetorCascata) e da cascata Entidade -> Tipo de
+// linha da Busca (busca.js::_repopularProdutoCascataBusca, mesmo endpoint
+// /api/produtos?agencia=X). Escolher uma Agencia restringe #f-produto aos
+// produtos/instrumentos daquela agencia; ao trocar pra uma agencia sem a linha
+// ja selecionada, reseta pra "Todas" em vez de deixar um par incompativel
+// aplicado em silencio.
+async function _repopularProdutoCascataCompartilhada(preservarValorAtual) {
+  const agenciaSel = document.getElementById("f-agencia");
+  const produtoSel = document.getElementById("f-produto");
+  if (!agenciaSel || !produtoSel) return;
+  const agencia = agenciaSel.value;
+  const valorAnterior = produtoSel.value;
+
+  let produtos;
+  if (!agencia || agencia === "Todas") {
+    let filtros;
+    try {
+      filtros = await _fetchFiltrosCompartilhado();
+    } catch (e) {
+      filtros = {};
+    }
+    produtos = (filtros.produtos || []).filter(Boolean);
+  } else {
+    let data;
+    try {
+      data = await fetchJSON("/api/produtos?" + qs({ agencia }));
+    } catch (e) {
+      data = [];
+    }
+    produtos = Array.isArray(data) ? data.filter(Boolean) : [];
+  }
+
+  _preencherSelectFiltro("f-produto", produtos);
+  produtoSel.value = (preservarValorAtual && produtos.includes(valorAnterior)) ? valorAnterior : "Todos";
+}
+
 function _popularFiltrosCompartilhados(filtros) {
   _preencherSelectFiltro("f-agencia", filtros.agencias);
   _preencherSelectFiltro("f-agente", (filtros.agentes_finep || []).filter(Boolean));
+  _preencherSelectFiltro("f-produto", (filtros.produtos || []).filter(Boolean));
   _preencherSelectFiltro("f-setor", (filtros.setores || []).filter(Boolean));
   // Populacao inicial de #f-subsetor com a lista COMPLETA (todos os subsetores, de
   // qualquer setor) -- narrada pra so os do setor escolhido em consolidado.js
@@ -1172,6 +1228,7 @@ function _sincronizarFiltrosCompartilhadosNaURL() {
     uf: document.getElementById("f-uf").value,
     classificacao: currentFilters().classificacao,
     agente: currentFilters().agente,
+    produto: document.getElementById("f-produto").value,
     mes_ini: document.getElementById("f-mes-ini").value,
     ano_ini: document.getElementById("f-ano-ini").value,
     mes_fim: document.getElementById("f-mes-fim").value,

@@ -185,6 +185,13 @@
     <label for="f-agente">Agente financeiro</label>
     <select id="f-agente"><option value="Todos">Todos</option></select>
   </div>
+  <!-- Linha/tipo de linha (produto): cascata dependente de Agencia, mesmo conceito
+       e mesmo endpoint (/api/produtos?agencia=X) ja usados pela cascata Entidade ->
+       Tipo de linha da Busca (ver busca.js::_repopularProdutoCascataBusca). -->
+  <div>
+    <label for="f-produto">Linha</label>
+    <select id="f-produto"><option value="Todos">Todas</option></select>
+  </div>
   <div>
     <label for="f-setor">Setor</label>
     <select id="f-setor"><option value="Todos">Todos</option></select>
