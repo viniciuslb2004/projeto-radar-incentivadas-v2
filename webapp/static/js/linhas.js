@@ -135,9 +135,9 @@ async function loadLinhas(pagina) {
     pagContainer.innerHTML = "";
   } else {
     pagContainer.innerHTML = `
-      <button class="acao-btn" id="linhas-pag-anterior" ${linhasPaginaAtual === 0 ? "disabled" : ""}>‹ Anterior</button>
-      <span class="progress-label" style="align-self:center;">Página ${linhasPaginaAtual + 1} de ${totalPaginas}</span>
-      <button class="acao-btn" id="linhas-pag-proxima" ${linhasPaginaAtual + 1 >= totalPaginas ? "disabled" : ""}>Próxima ›</button>
+      <button class="pag-btn" id="linhas-pag-anterior" ${linhasPaginaAtual === 0 ? "disabled" : ""}>‹ Anterior</button>
+      <span class="progress-label pag-info">Página ${linhasPaginaAtual + 1} de ${totalPaginas}</span>
+      <button class="pag-btn" id="linhas-pag-proxima" ${linhasPaginaAtual + 1 >= totalPaginas ? "disabled" : ""}>Próxima ›</button>
     `;
     const btnAnt = document.getElementById("linhas-pag-anterior");
     const btnProx = document.getElementById("linhas-pag-proxima");
@@ -336,7 +336,7 @@ async function openLinhaDetalhe(id) {
     <div class="ln-rodape">
       ${naoInf.length ? `<div>Não informado pela fonte: ${esc(naoInf.join(", "))}</div>` : ""}
       <div>${fonte}</div>
-      ${!lnNaoInformado(l.trecho_fonte) ? `<details><summary>Trecho da fonte</summary><div style="margin-top:4px;">${esc(l.trecho_fonte)}</div></details>` : ""}
+      ${!lnNaoInformado(l.trecho_fonte) ? `<details><summary>Trecho da fonte</summary><div class="ln-trecho">${esc(l.trecho_fonte)}</div></details>` : ""}
     </div>
   `;
   lnLigarVerMais(body);

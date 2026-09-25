@@ -264,8 +264,8 @@ async function openEditalDetalhe(id) {
 
   let html = `<div class="detalhe-secoes">`;
   html += `<div class="detalhe-prazo-box ${corPrazo}">
-    <div style="font-size:20px; font-weight:800; white-space:nowrap;">${prazo.texto}</div>
-    <div style="font-size:12px; color:var(--text-muted);">Prazo de submissão: ${fmtDataCurta(edital.prazo_proposto)}${edital.vigencia_fim ? " · Vigência até: " + fmtDataCurta(edital.vigencia_fim) : ""}</div>
+    <div class="prazo-num">${prazo.texto}</div>
+    <div class="prazo-sub">Prazo de submissão: ${fmtDataCurta(edital.prazo_proposto)}${edital.vigencia_fim ? " · Vigência até: " + fmtDataCurta(edital.vigencia_fim) : ""}</div>
   </div>`;
 
   html += `<div class="detalhe-secao">
@@ -340,7 +340,7 @@ async function runEditaisEndgame(q) {
 
   let html = "";
   if (buscaResp.confianca_baixa) {
-    html += '<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para essa descrição -- os editais abaixo são os mais próximos disponíveis, mas com similaridade baixa.</div>';
+    html += '<div class="confianca-baixa-aviso">Não encontramos uma correspondência forte para essa descrição -- os editais abaixo são os mais próximos disponíveis, mas com similaridade baixa.</div>';
   }
   html += '<div id="editais-endgame-lista"></div>';
   container.innerHTML = html;

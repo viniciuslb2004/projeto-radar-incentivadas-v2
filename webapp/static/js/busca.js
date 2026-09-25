@@ -198,19 +198,16 @@ function renderPaginacaoBusca(totalItens, totalPaginas) {
     }
   }
 
-  const estiloDesativado = "opacity:0.4; cursor:not-allowed;";
-  const estiloInativa = "background:#fff; color:var(--navy); border:1px solid var(--border);";
-
-  let html = `<span class="progress-label" style="align-self:center; margin-right:6px;">Página ${buscaPaginaAtual} de ${totalPaginas} (${fmtNum(totalItens)} resultados)</span>`;
-  html += `<button class="acao-btn busca-pag-nav" data-p="${buscaPaginaAtual - 1}" style="padding:6px 12px; margin-top:0; ${buscaPaginaAtual === 1 ? estiloDesativado : ""}" ${buscaPaginaAtual === 1 ? "disabled" : ""}>‹ Anterior</button>`;
+  let html = `<span class="progress-label pag-info">Página ${buscaPaginaAtual} de ${totalPaginas} (${fmtNum(totalItens)} resultados)</span>`;
+  html += `<button class="pag-btn busca-pag-nav" data-p="${buscaPaginaAtual - 1}" ${buscaPaginaAtual === 1 ? "disabled" : ""}>‹ Anterior</button>`;
   html += paginas
     .map((p) => {
-      if (p === "...") return '<span style="padding:0 4px; color:var(--text-muted);">…</span>';
+      if (p === "...") return '<span class="pag-reticencias" aria-hidden="true">…</span>';
       const ativa = p === buscaPaginaAtual;
-      return `<button class="acao-btn busca-pag-nav" data-p="${p}" style="padding:6px 12px; margin-top:0; ${ativa ? "" : estiloInativa}" ${ativa ? "disabled" : ""}>${p}</button>`;
+      return `<button class="pag-btn busca-pag-nav${ativa ? " atual" : ""}" data-p="${p}" ${ativa ? 'disabled aria-current="page"' : ""}>${p}</button>`;
     })
     .join("");
-  html += `<button class="acao-btn busca-pag-nav" data-p="${buscaPaginaAtual + 1}" style="padding:6px 12px; margin-top:0; ${buscaPaginaAtual === totalPaginas ? estiloDesativado : ""}" ${buscaPaginaAtual === totalPaginas ? "disabled" : ""}>Próxima ›</button>`;
+  html += `<button class="pag-btn busca-pag-nav" data-p="${buscaPaginaAtual + 1}" ${buscaPaginaAtual === totalPaginas ? "disabled" : ""}>Próxima ›</button>`;
 
   container.innerHTML = html;
   container.querySelectorAll(".busca-pag-nav").forEach((btn) => {
@@ -224,10 +221,10 @@ function renderResultados(data) {
   let html = "";
 
   if (data.confianca_baixa) {
-    html += `<div class="confianca-baixa-aviso">⚠ Não encontramos uma correspondência forte para "${esc(data.query)}" na base do BNDES/FINEP/BNB. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round((data.melhor_score || 0) * 100)}%).</div>`;
+    html += `<div class="confianca-baixa-aviso">Não encontramos uma correspondência forte para "${esc(data.query)}" na base do BNDES/FINEP/BNB. Os resultados abaixo são os mais próximos disponíveis, mas com similaridade baixa (${Math.round((data.melhor_score || 0) * 100)}%).</div>`;
   }
   if (data.enriquecido_via_web) {
-    html += `<div class="confianca-baixa-aviso">🔎 Resultados ajustados depois de pesquisar sobre "${esc(data.query_original || data.query)}" na web, para tentar entender melhor do que se trata.</div>`;
+    html += `<div class="confianca-baixa-aviso">Resultados ajustados depois de pesquisar sobre "${esc(data.query_original || data.query)}" na web, para tentar entender melhor do que se trata.</div>`;
   }
 
   const prob = data.probabilidade_aprovacao;
@@ -248,10 +245,10 @@ function renderResultados(data) {
     }
   }
 
-  html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px;">
+  html += `<div class="resultados-toolbar">
     <span class="progress-label" id="busca-contagem">${fmtNum(ultimosResultados.length)} operações parecidas encontradas</span>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <select id="busca-ordenar" aria-label="Ordenar resultados da busca" class="header-select" style="color:var(--navy); border-color:var(--border); background:#fff;">
+    <div class="inline-controles">
+      <select id="busca-ordenar" aria-label="Ordenar resultados da busca" class="header-select header-select-light">
         <option value="relevancia">Mais relevante</option>
         <option value="data-desc">Mais recente</option>
         <option value="data-asc">Mais antiga</option>
@@ -263,11 +260,11 @@ function renderResultados(data) {
            de STAFF (ver _configurarExportarBuscaBtn abaixo, chamada apos renderizar
            os resultados). Gate de verdade e' o backend (Depends(exigir_staff) em
            POST /api/busca/exportar), isto aqui e' so' visibilidade de UI. -->
-      <button id="busca-exportar-btn" class="acao-btn hidden" style="margin-top:0;" title="Exportar estes resultados para Excel">⬇ Exportar Excel</button>
+      <button id="busca-exportar-btn" class="acao-btn acao-btn-sec hidden" title="Exportar estes resultados para Excel">Exportar Excel</button>
     </div>
   </div>`;
   html += '<div id="busca-lista"></div>';
-  html += '<div id="busca-paginacao" style="display:flex; gap:6px; justify-content:center; align-items:center; margin-top:16px; flex-wrap:wrap;"></div>';
+  html += '<nav id="busca-paginacao" class="paginacao" aria-label="Paginação dos resultados"></nav>';
 
   document.getElementById("busca-resultado").innerHTML = html;
   document.getElementById("busca-ordenar").addEventListener("change", () => {

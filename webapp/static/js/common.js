@@ -8,6 +8,13 @@ if (window.Chart) {
   Chart.defaults.font.size = 12;
   Chart.defaults.color = "#6B7684";
   Chart.defaults.borderColor = "#EBECED";
+  Chart.defaults.plugins.tooltip.backgroundColor = "#152534";
+  Chart.defaults.plugins.tooltip.titleColor = "#FFFFFF";
+  Chart.defaults.plugins.tooltip.bodyColor = "#D3DCE3";
+  Chart.defaults.plugins.tooltip.padding = 10;
+  Chart.defaults.plugins.tooltip.cornerRadius = 4;
+  Chart.defaults.plugins.tooltip.boxPadding = 4;
+  Chart.defaults.plugins.tooltip.titleFont = { weight: "600" };
 }
 
 // Mapa FIXO categoria -> cor do grafico "Por porte do cliente" (Consolidado e
@@ -65,12 +72,35 @@ function htmlErroCarga(msg) {
   return `<p class="empty-state">${esc(msg || MSG_ERRO_CARGA)}</p>`;
 }
 
+// Valor compacto em pt-BR: tri (2 casas), bi/mi (1 casa), mil (0 casa), com
+// separador de milhar. Se o arredondamento empurrar pra 1.000 da unidade (ex.:
+// 999,96 bi -> "1.000,0 bi"), sobe pra unidade seguinte ("R$ 1,00 tri").
+const _UNIDADES_BRL = [
+  { lim: 1e12, sufixo: " tri", casas: 2 },
+  { lim: 1e9, sufixo: " bi", casas: 1 },
+  { lim: 1e6, sufixo: " mi", casas: 1 },
+  { lim: 1e3, sufixo: " mil", casas: 0 },
+];
 function fmtBRL(v) {
   if (v === null || v === undefined || isNaN(v)) return "-";
-  if (Math.abs(v) >= 1e9) return "R$ " + (v / 1e9).toFixed(1).replace(".", ",") + " bi";
-  if (Math.abs(v) >= 1e6) return "R$ " + (v / 1e6).toFixed(1).replace(".", ",") + " mi";
-  if (Math.abs(v) >= 1e3) return "R$ " + (v / 1e3).toFixed(0) + " mil";
-  return "R$ " + Math.round(v);
+  v = Number(v);
+  const abs = Math.abs(v);
+  for (let i = 0; i < _UNIDADES_BRL.length; i++) {
+    const u = _UNIDADES_BRL[i];
+    if (abs < u.lim) continue;
+    const fator = Math.pow(10, u.casas);
+    const arred = Math.round((abs / u.lim) * fator) / fator;
+    if (arred >= 1000 && i > 0) {
+      const acima = _UNIDADES_BRL[i - 1];
+      const f2 = Math.pow(10, acima.casas);
+      const a2 = Math.round((abs / acima.lim) * f2) / f2;
+      return (v < 0 ? "-" : "") + "R$ " + a2.toLocaleString("pt-BR", { minimumFractionDigits: acima.casas, maximumFractionDigits: acima.casas }) + acima.sufixo;
+    }
+    return (v < 0 ? "-" : "") + "R$ " + arred.toLocaleString("pt-BR", { minimumFractionDigits: u.casas, maximumFractionDigits: u.casas }) + u.sufixo;
+  }
+  const inteiro = Math.round(abs);
+  if (inteiro >= 1000) return (v < 0 ? "-" : "") + "R$ 1 mil";
+  return (v < 0 ? "-" : "") + "R$ " + inteiro.toLocaleString("pt-BR");
 }
 
 function fmtBRLFull(v) {
@@ -777,6 +807,13 @@ function _viewInicialDaURL() {
 function _ativarView(view, empilharHistorico) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + view));
+  // So apresentacao: o CSS usa isto pra mostrar o hero (Consolidado) ou o
+  // cabecalho da aba (.page-head[data-view]) na faixa marinha.
+  document.body.dataset.view = view;
+  document.querySelectorAll(".tab-btn").forEach((b) => {
+    if (b.dataset.view === view) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
   document.getElementById("filterbar").style.display =
     view === "busca" || view === "editais" || view === "linhas" || view === "potenciais" ? "none" : "flex";
   const caminho = "/" + (_VIEW_PARA_SLUG[view] || "consolidado");
@@ -893,6 +930,17 @@ function _ligarBotoesDeAba() {
     _ativarView(_viewInicialDaURL(), false);
   });
   _ativarView(_viewInicialDaURL(), false);
+
+  // Barra de filtros colapsavel (so aparece no celular/tablet estreito, ver
+  // style.css .filtros-toggle): so alterna uma classe, nao mexe em filtro nenhum.
+  const toggleFiltros = document.getElementById("filtros-toggle");
+  if (toggleFiltros) {
+    toggleFiltros.addEventListener("click", () => {
+      const bar = document.getElementById("filterbar");
+      const aberto = bar.classList.toggle("aberto");
+      toggleFiltros.setAttribute("aria-expanded", aberto ? "true" : "false");
+    });
+  }
 
   const tabsEl = document.getElementById("tabs");
   if (tabsEl) tabsEl.addEventListener("scroll", _atualizarSombraAbas);
@@ -1434,12 +1482,12 @@ function _configurarBotaoCopiarLink(opId) {
   const btn = document.getElementById("modal-copiar-link-btn");
   if (!btn) return;
   btn.style.display = "inline-flex";
-  const textoOriginal = "🔗 Copiar link";
+  const textoOriginal = "Copiar link";
   btn.textContent = textoOriginal;
   btn.onclick = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      btn.textContent = "✓ Link copiado!";
+      btn.textContent = "Link copiado";
     } catch (e) {
       btn.textContent = "Não foi possível copiar";
     } finally {
@@ -1471,7 +1519,7 @@ function _configurarSalvarNotaInterna(opId, data) {
   const atualizarVisual = () => {
     favBtn.classList.remove("hidden");
     favBtn.classList.toggle("ativo", salva);
-    favBtn.textContent = salva ? "★ Salvo" : "☆ Salvar";
+    favBtn.textContent = salva ? "Salvo" : "Salvar";
     notaContainer.classList.toggle("hidden", !salva);
   };
   notaTexto.value = data.nota || "";

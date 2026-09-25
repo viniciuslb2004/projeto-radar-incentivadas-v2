@@ -689,7 +689,7 @@
             const selecionada = operacaoSelecionada && operacaoSelecionada.id === o.id;
             return `<div class="admin-correcao-resultado-item${selecionada ? " selecionada" : ""}">
               <span>#${o.id} — ${o.cliente || "(sem nome)"} — setor: ${o.setor_bndes || "--"} / ${o.subsetor_bndes || "--"} / ${o.segmento || "--"}</span>
-              <button type="button" class="admin-correcao-editar-btn" title="Editar esta operação" data-op='${opJson}'>✏️</button>
+              <button type="button" class="admin-correcao-editar-btn" title="Editar esta operação" data-op='${opJson}'>Editar</button>
             </div>`;
           })
           .join("");

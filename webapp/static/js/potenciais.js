@@ -123,7 +123,7 @@ function _ptCard(l) {
     const ok = c.status === "ok";
     return `<li class="${ok ? "ok" : "na"}"><span class="ic" aria-hidden="true">${ok ? "✓" : "–"}</span><span><span class="sr-only">${ok ? "Atende: " : "Não informado: "}</span>${esc(c.texto)}</span></li>`;
   }).join("");
-  const alertas = (l.alertas || []).map((a) => `<p class="pt-alerta">⚠ ${esc(a)}</p>`).join("");
+  const alertas = (l.alertas || []).map((a) => `<p class="pt-alerta">${esc(a)}</p>`).join("");
   const freq = l.frequencia_historica >= 10 ? ` · ~${fmtNum(l.frequencia_historica)} operações parecidas na base` : "";
   const detalhes = _ptDetalhesCondicoes(l);
   return `<article class="pt-card" data-id="${esc(l.id)}">

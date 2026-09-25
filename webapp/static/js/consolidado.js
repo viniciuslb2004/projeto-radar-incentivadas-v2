@@ -17,12 +17,23 @@ async function loadKPIs(filters, token) {
     return;
   }
   if (token !== undefined && token !== _consolidadoToken) return;
-  const porAgencia = (data.por_agencia || []).map((a) => `${a.agencia}: ${fmtBRL(a.valor_total)}`).join(" · ");
+  // Fatos do hero: os mesmos 4 numeros de sempre + valor por instituicao. title =
+  // valor por extenso (sem arredondamento), pra quem quiser o numero exato.
+  const agencias = (data.por_agencia || [])
+    .map((a) => `<li title="${esc(fmtBRLFull(a.valor_total))}"><i class="sw sw-${esc(String(a.agencia).toLowerCase())}" aria-hidden="true"></i>${esc(a.agencia)} <b>${esc(fmtBRL(a.valor_total))}</b></li>`)
+    .join("");
   document.getElementById("kpi-row").innerHTML =
-    kpiCard("Nº de operações", fmtNum(data.n_operacoes)) +
-    kpiCard("Volume contratado", fmtBRL(data.valor_contratado_total), porAgencia) +
-    kpiCard("Volume desembolsado/pago", fmtBRL(data.valor_desembolsado_total)) +
-    kpiCard("Cheque médio", fmtBRL(data.cheque_medio));
+    heroFato("contratados", fmtBRL(data.valor_contratado_total), fmtBRLFull(data.valor_contratado_total), "fato-principal") +
+    heroFato("operações", fmtNum(data.n_operacoes)) +
+    heroFato("cheque médio", fmtBRL(data.cheque_medio), fmtBRLFull(data.cheque_medio)) +
+    heroFato("desembolsados ou pagos", fmtBRL(data.valor_desembolsado_total), fmtBRLFull(data.valor_desembolsado_total)) +
+    (agencias ? `<ul class="fatos-agencias" aria-label="Valor contratado por instituição">${agencias}</ul>` : "");
+}
+
+const CORES_AGENCIA = { BNDES: "#223850", FINEP: "#5878A0", BNB: "#A9BAC9" };
+
+function heroFato(rotulo, valor, titulo, classe) {
+  return `<div class="fato${classe ? " " + classe : ""}"${titulo ? ` title="${esc(titulo)}"` : ""}><b>${esc(valor)}</b><span>${esc(rotulo)}</span></div>`;
 }
 
 // Item 4 (pedido 2026-09-23): o ano corrente (2026) ainda esta em andamento -- a base
@@ -109,11 +120,13 @@ async function loadSerieTemporal(filters) {
   const paresUnicos = [...new Map(data.map((d) => [`${d.ano}-${d.periodo}`, { ano: d.ano, periodo: d.periodo }])).values()];
   const periodos = _sequenciaCompletaPeriodos(granularidade, paresUnicos, anoMesMax).map((s) => s.label);
   const grupos = [...new Set(data.map((d) => d[agrupador]))];
-  const coresIncentivado = { BNDES: "#223850", FINEP: "#5878A0", BNB: "#A9BAC9" };
+  const coresIncentivado = CORES_AGENCIA;
 
   const datasets = grupos.map((g) => ({
     label: g,
     backgroundColor: coresIncentivado[g] || "#5878A0",
+    borderRadius: 2,
+    categoryPercentage: 0.82,
     data: periodos.map((p) => {
       const row = data.find((d) => _rotuloPeriodoSerie(granularidade, d.ano, d.periodo, anoMesMax) === p && d[agrupador] === g);
       return row ? row.valor_total : 0;
@@ -140,9 +153,15 @@ async function loadSerieTemporal(filters) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => fmtBRL(v) } } },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 14 } },
+        y: { stacked: true, border: { display: false }, ticks: { callback: (v) => fmtBRL(v) } },
+      },
       plugins: {
+        legend: { position: "top", align: "end", labels: { boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 2 } },
         tooltip: {
+          mode: "index",
+          filter: (ctx) => ctx.raw > 0,
           callbacks: {
             label: (ctx) => `${ctx.dataset.label}: ${fmtBRLFull(ctx.raw)}`,
             afterLabel: (ctx) => {
@@ -155,6 +174,10 @@ async function loadSerieTemporal(filters) {
     },
   });
 }
+
+// "Nao classificado"/"Nao informado" pintam em cinza-aco claro (ausencia de dado,
+// nao uma categoria real).
+const _ehSemClassificacao = (v) => !v || /^n[aã]o (classificado|informado)/i.test(String(v));
 
 // Ranking por setor_bndes (CNAE).
 async function loadSetores(filters) {
@@ -172,7 +195,12 @@ async function loadSetores(filters) {
     type: "bar",
     data: {
       labels: data.map((d) => d[campo]),
-      datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: AZUL_TONS[1] }],
+      datasets: [{
+        data: data.map((d) => d.valor_total),
+        backgroundColor: data.map((d) => (_ehSemClassificacao(d[campo]) ? "#D3DCE3" : "#223850")),
+        borderRadius: 3,
+        maxBarThickness: 24,
+      }],
     },
     options: {
       indexAxis: "y",
@@ -182,7 +210,10 @@ async function loadSetores(filters) {
         legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => fmtBRLFull(ctx.raw) } },
       },
-      scales: { x: { ticks: { callback: (v) => fmtBRL(v) } } },
+      scales: {
+        x: { border: { display: false }, ticks: { callback: (v) => fmtBRL(v), maxRotation: 0, maxTicksLimit: 5 } },
+        y: { grid: { display: false }, ticks: { color: "#1E2A36" } },
+      },
       onClick: (evt, els) => {
         if (!els.length) return;
         const valor = data[els[0].index][campo];
@@ -231,37 +262,72 @@ function _interpolaCor(corMin, corMax, t) {
 let _ufMapSvgPromise = null;
 let _ufMapDadosAtual = [];
 
-function _ligarEventosMapaUF(container) {
-  const tooltip = document.getElementById("uf-map-tooltip");
-  const wrap = container.closest(".chart-wrap");
+// Ficha fixa do mapa (hero): mostra a UF sob o cursor/foco, no lugar do tooltip
+// flutuante. Sem interacao, mostra a UF de maior valor no filtro atual (da API).
+let _ufAtiva = null;
+function _renderFichaUF(uf) {
+  const ficha = document.getElementById("uf-map-ficha");
+  if (!ficha) return;
+  if (!uf) { ficha.innerHTML = ""; return; }
+  const row = _ufMapDadosAtual.find((d) => d.uf === uf);
+  const nome = esc(NOME_UF[uf] || uf);
+  const nOps = row ? Number(row.n_operacoes) || 0 : 0;
+  ficha.innerHTML = row
+    ? `<strong>${nome}</strong><span title="${esc(fmtBRLFull(row.valor_total))}">${esc(fmtBRL(row.valor_total))} em ${esc(fmtNum(nOps))} ${nOps === 1 ? "operação" : "operações"}</span><small>Clique no estado para ver as operações</small>`
+    : `<strong>${nome}</strong><span>Sem operações no filtro atual</span>`;
+}
 
+function _marcarUFAtiva(container, uf) {
+  container.querySelectorAll(".uf-path.ativo, path.ativo").forEach((p) => p.classList.remove("ativo"));
+  const path = uf ? container.querySelector(`#state-${uf.toLowerCase()}`) : null;
+  if (path) path.classList.add("ativo");
+  _ufAtiva = uf;
+  _renderFichaUF(uf);
+}
+
+function _ufPadrao() {
+  if (!_ufMapDadosAtual.length) return null;
+  return _ufMapDadosAtual.reduce((m, d) => ((d.valor_total || 0) > (m.valor_total || 0) ? d : m)).uf;
+}
+
+function _ligarEventosMapaUF(container) {
   const _ufDoEvento = (evt) => {
     const path = evt.target.closest("path[id^='state-']");
     return path ? path.id.replace("state-", "").toUpperCase() : null;
   };
+  const abrir = (uf) => openOperacoesModal(`UF: ${NOME_UF[uf] || uf}`, { uf });
 
-  container.addEventListener("mousemove", (evt) => {
-    const uf = _ufDoEvento(evt);
-    if (!uf) { tooltip.hidden = true; return; }
-    const row = _ufMapDadosAtual.find((d) => d.uf === uf);
-    const valorHtml = row ? fmtBRLFull(row.valor_total) : "Sem operações no filtro atual";
-    tooltip.innerHTML = `<strong>${esc(NOME_UF[uf] || uf)}</strong><br><span class="valor">${esc(valorHtml)}</span>`;
-    const rect = wrap.getBoundingClientRect();
-    tooltip.style.left = `${evt.clientX - rect.left}px`;
-    tooltip.style.top = `${evt.clientY - rect.top}px`;
-    tooltip.hidden = false;
+  // Teclado: cada estado e' focavel e abre o drill-down com Enter/Espaco.
+  container.querySelectorAll("path[id^='state-']").forEach((path) => {
+    const uf = path.id.replace("state-", "").toUpperCase();
+    path.setAttribute("tabindex", "0");
+    path.setAttribute("role", "button");
+    path.setAttribute("aria-label", `${NOME_UF[uf] || uf}: ver operações`);
   });
-  container.addEventListener("mouseleave", () => { tooltip.hidden = true; });
 
+  container.addEventListener("mouseover", (evt) => {
+    const uf = _ufDoEvento(evt);
+    if (uf && uf !== _ufAtiva) _marcarUFAtiva(container, uf);
+  });
+  container.addEventListener("focusin", (evt) => {
+    const uf = _ufDoEvento(evt);
+    if (uf) _marcarUFAtiva(container, uf);
+  });
   container.addEventListener("click", (evt) => {
     const uf = _ufDoEvento(evt);
+    if (uf) abrir(uf);
+  });
+  container.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Enter" && evt.key !== " ") return;
+    const uf = _ufDoEvento(evt);
     if (!uf) return;
-    openOperacoesModal(`UF: ${NOME_UF[uf] || uf}`, { uf });
+    evt.preventDefault();
+    abrir(uf);
   });
 }
 
-// Troca o <canvas> (Chart.js) por um wrapper com o SVG do mapa + legenda + tooltip
-// -- so roda de verdade na 1a chamada (depois disso #chart-uf nao existe mais).
+// Troca o <canvas> por um wrapper com o SVG do mapa + ficha + legenda -- so roda de
+// verdade na 1a chamada (depois disso #chart-uf nao existe mais).
 function _garantirDomMapaUF() {
   const canvas = document.getElementById("chart-uf");
   if (!canvas) return;
@@ -269,15 +335,15 @@ function _garantirDomMapaUF() {
   wrap.innerHTML =
     '<div class="uf-map-wrap">' +
     '<div id="uf-map-svg" class="uf-map-svg"></div>' +
+    '<div id="uf-map-ficha" class="uf-map-ficha" aria-live="polite"></div>' +
     '<div class="uf-map-legend">' +
     '<span id="uf-map-legend-min"></span>' +
-    '<span class="barra"></span>' +
+    '<span class="barra" aria-hidden="true"></span>' +
     '<span id="uf-map-legend-max"></span>' +
     '<span class="sem-dado-chip"><span class="sem-dado-swatch"></span>Sem dado</span>' +
     "</div>" +
     '<div id="uf-map-fora" class="uf-map-fora"></div>' +
-    "</div>" +
-    '<div id="uf-map-tooltip" class="uf-map-tooltip" hidden></div>';
+    "</div>";
 }
 
 // Busca o SVG 1 unica vez (promise compartilhada -- se 2 chamadas de loadUF caírem
@@ -333,7 +399,9 @@ async function loadUF(filters) {
   const svg = document.getElementById("uf-map-svg");
   if (!svg) return; // usuario ja pode ter trocado de aba antes do fetch terminar
 
-  const raiz = getComputedStyle(document.documentElement);
+  // Tokens lidos do proprio mapa (a faixa marinha redefine a escala: menos = aco
+  // escuro, mais = nevoa clara).
+  const raiz = getComputedStyle(svg);
   const corMin = raiz.getPropertyValue("--map-escala-min").trim() || "#D3DCE3";
   const corMax = raiz.getPropertyValue("--map-escala-max").trim() || "#152534";
   const corSemDado = raiz.getPropertyValue("--map-sem-dado").trim() || "#D9D9D9";
@@ -357,6 +425,9 @@ async function loadUF(filters) {
     path.style.fill = cor;
   });
 
+  // Ficha: mantem a UF ativa se ela ainda estiver no mapa, senao a de maior valor.
+  _marcarUFAtiva(svg, _ufAtiva && NOME_UF[_ufAtiva] ? _ufAtiva : _ufPadrao());
+
   const legendaMin = document.getElementById("uf-map-legend-min");
   const legendaMax = document.getElementById("uf-map-legend-max");
   if (legendaMin && legendaMax) {
@@ -370,8 +441,8 @@ async function loadUF(filters) {
       const somaValor = foraDoMapa.reduce((acc, d) => acc + (d.valor_total || 0), 0);
       const somaOps = foraDoMapa.reduce((acc, d) => acc + (d.n_operacoes || 0), 0);
       foraEl.textContent =
-        `+ ${fmtBRL(somaValor)} (${fmtNum(somaOps)} operações) de abrangência nacional/interestadual ` +
-        "ou sem UF informada.";
+        `Fora do mapa: ${fmtBRL(somaValor)} em ${fmtNum(somaOps)} operações de abrangência nacional ` +
+        "ou interestadual, ou sem UF informada.";
     } else {
       foraEl.textContent = "";
     }
@@ -388,15 +459,30 @@ async function loadPorte(filters) {
   if (!Array.isArray(data)) data = [];
   if (chartPorte) chartPorte.destroy();
   chartPorte = new Chart(document.getElementById("chart-porte"), {
-    type: "doughnut",
+    // Barras horizontais (antes rosca): mesmos dados, mesma ordem da API -- comparar
+    // comprimentos e' mais preciso que comparar angulos.
+    type: "bar",
     data: {
       labels: data.map((d) => d.porte),
-      datasets: [{ data: data.map((d) => d.valor_total), backgroundColor: data.map((d) => CORES_PORTE[d.porte] || AZUL_TONS[5]) }],
+      datasets: [{
+        data: data.map((d) => d.valor_total),
+        backgroundColor: data.map((d) => CORES_PORTE[d.porte] || AZUL_TONS[5]),
+        borderRadius: 3,
+        maxBarThickness: 28,
+      }],
     },
     options: {
+      indexAxis: "y",
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)}` } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtBRLFull(ctx.raw)}` } },
+      },
+      scales: {
+        x: { border: { display: false }, ticks: { callback: (v) => fmtBRL(v), maxRotation: 0, maxTicksLimit: 5 } },
+        y: { grid: { display: false }, ticks: { color: "#1E2A36" } },
+      },
       onClick: (evt, els) => {
         if (!els.length) return;
         const porte = data[els[0].index].porte;

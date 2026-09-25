@@ -54,7 +54,7 @@
         permanentes das principais instituições de fomento, em um só lugar.
       </p>
       <ul class="landing-bullets">
-        <li>Milhares de operações de crédito incentivado, desde 2002</li>
+        <li>Operações do BNDES e da FINEP desde 2002 e do BNB desde 2016</li>
         <li>Tendências e rankings por setor, UF e agência de fomento</li>
         <li>Catálogo de linhas de crédito permanentes de 7 instituições</li>
         <li>Busca dedicada por empresa, CNPJ, setor ou produto</li>
@@ -63,7 +63,7 @@
 
     <div class="landing-acesso">
       <div class="landing-acesso-card">
-        <h2 id="landing-acesso-titulo">Quero Contatar</h2>
+        <h2 id="landing-acesso-titulo">Quero contatar</h2>
         <p class="landing-acesso-sub">Informe seu e-mail corporativo para continuar. Sem senha.</p>
 
         <form id="identificar-form">
@@ -139,6 +139,7 @@
   </div>
 </div>
 
+<div class="faixa" id="faixa">
 <div class="topbar">
   <div class="brand">
     <img src="/img/logo-artica.png" alt="Ártica" class="topbar-logo">
@@ -155,7 +156,7 @@
     </div>
   </div>
   <div id="topbar-cta-grupo" class="topbar-cta-grupo hidden" role="group" aria-label="Fale com a Ártica">
-    <button type="button" id="topbar-interesse-btn" class="topbar-interesse-btn" data-tipo="contato">Quero Contatar</button>
+    <button type="button" id="topbar-interesse-btn" class="topbar-interesse-btn" data-tipo="contato">Quero contatar</button>
     <button type="button" id="topbar-relatorio-btn" class="topbar-interesse-btn topbar-interesse-btn--outline" data-tipo="relatorio">Quero receber o relatório</button>
   </div>
   <!-- Area interna (/interno-artica) -- so aparecem quando /api/me devolve
@@ -163,10 +164,48 @@
        pedida no escopo. "Exportar salvos": Exportar Excel (item 3 do pedido) das
        operacoes salvas por esta conta -- ver webapp/salvos.py/exportar_excel.py. -->
   <span id="topbar-interno-badge" class="topbar-interno-badge hidden">Modo interno</span>
-  <button id="topbar-exportar-salvos-btn" class="topbar-interesse-btn hidden" title="Exportar Excel das operações salvas por você">⬇ Exportar salvos</button>
+  <button id="topbar-exportar-salvos-btn" class="topbar-interesse-btn hidden" title="Exportar Excel das operações salvas por você">Exportar salvos</button>
+</div>
+
+<!-- Hero do Consolidado (visivel so com body[data-view="consolidado"], ver
+     common.js::_ativarView). Fatos = /api/kpis (consolidado.js::loadKPIs, respeita
+     o filtro atual); mapa = /api/uf (consolidado.js::loadUF). Nenhum numero fixo aqui. -->
+<section class="hero" id="hero-consolidado" aria-labelledby="hero-titulo">
+  <div class="hero-texto">
+    <h1 id="hero-titulo">Quem financiou o quê, onde, com dinheiro de fomento.</h1>
+    <p class="hero-lead">Operações de crédito do BNDES e da FINEP desde 2002 e do BNB desde 2016, por setor, estado, porte e linha.</p>
+    <div class="fatos" id="kpi-row" aria-live="polite"></div>
+  </div>
+  <div class="hero-mapa">
+    <div class="chart-wrap mapa-wrap"><canvas id="chart-uf"></canvas></div>
+  </div>
+</section>
+
+<!-- Cabecalho das demais abas (mesma faixa marinha, so texto). -->
+<header class="page-head" data-view="tendencias">
+  <h1>Tendências</h1>
+  <p>Setores, subsetores e segmentos que mais ganharam e perderam participação no período filtrado.</p>
+</header>
+<header class="page-head" data-view="busca">
+  <h1>Busca de operações</h1>
+  <p>Descreva uma empresa, setor ou produto e veja operações parecidas já contratadas.</p>
+</header>
+<header class="page-head" data-view="editais">
+  <h1>Editais da FINEP</h1>
+  <p>Chamadas públicas abertas e encerradas, com prazo, tema e público-alvo.</p>
+</header>
+<header class="page-head" data-view="linhas">
+  <h1>Linhas Incentivadas</h1>
+  <p>Linhas de crédito permanentes das instituições de fomento, com as condições publicadas na fonte oficial.</p>
+</header>
+<header class="page-head" data-view="potenciais">
+  <h1>Potenciais Linhas</h1>
+  <p>Informe o perfil do seu projeto e veja quais linhas têm maior aderência.</p>
+</header>
 </div>
 
 <div class="filterbar" id="filterbar">
+  <button type="button" class="filtros-toggle" id="filtros-toggle" aria-expanded="false">Filtros</button>
   <div>
     <label id="f-agencia-label" for="f-agencia">Agência</label>
     <select id="f-agencia"><option value="Todas">Todas</option></select>
@@ -220,41 +259,36 @@
   </div>
   <div class="status-pill" id="status-pill" role="status" aria-live="polite">Carregando...</div>
 </div>
-<div id="filtro-data-aviso" class="confianca-baixa-aviso" style="display:none;">⚠ A data "De" não pode ser depois da data "Até" — ajustamos automaticamente.</div>
+<div id="filtro-data-aviso" class="confianca-baixa-aviso" style="display:none;">A data "De" não pode ser depois da data "Até" — ajustamos automaticamente.</div>
 
 <main>
 
   <!-- ===================== CONSOLIDADO ===================== -->
   <section id="view-consolidado" class="view active">
-    <div class="kpi-row" id="kpi-row"></div>
-
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-header">
-          <span><span id="chart-serie-titulo">Evolução temporal de emissões</span> <span class="hint" id="chart-serie-hint">R$ contratado por período</span></span>
-          <select id="serie-granularidade" aria-label="Granularidade da série" class="header-select">
-            <option value="mensal">Mensal</option>
-            <option value="trimestral" selected>Trimestral</option>
-            <option value="semestral">Semestral</option>
-            <option value="anual">Anual</option>
-          </select>
+    <div class="card card-destaque">
+      <div class="card-header">
+        <div class="card-titulo">
+          <h2 id="chart-serie-titulo">Contratações ao longo do tempo</h2>
+          <span class="hint" id="chart-serie-hint">Valor contratado por período e instituição, em R$ nominais</span>
         </div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-serie"></canvas></div><div id="chart-serie-dados-ate" class="hint" style="text-align:right;margin-top:4px;"></div></div>
+        <select id="serie-granularidade" aria-label="Granularidade da série" class="header-select">
+          <option value="mensal">Mensal</option>
+          <option value="trimestral" selected>Trimestral</option>
+          <option value="semestral">Semestral</option>
+          <option value="anual">Anual</option>
+        </select>
       </div>
-      <div class="card">
-        <div class="card-header"><span id="chart-setores-titulo">Ranking de setores</span> <span class="hint">clique para detalhar</span></div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-setores"></canvas></div></div>
-      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-serie" aria-label="Valor contratado por período e instituição"></canvas></div><div id="chart-serie-dados-ate" class="hint nota-grafico"></div></div>
     </div>
 
-    <div class="grid-2">
+    <div class="grid-2 grid-par">
       <div class="card">
-        <div class="card-header"><span id="chart-uf-titulo">Por UF</span> <span class="hint">clique para detalhar</span></div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-uf"></canvas></div></div>
+        <div class="card-header"><div class="card-titulo"><h2 id="chart-setores-titulo">Por setor</h2> <span class="hint">Dez maiores por valor contratado. Clique numa barra para ver as operações.</span></div></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-setores" aria-label="Valor contratado por setor"></canvas></div></div>
       </div>
       <div class="card">
-        <div class="card-header"><span id="chart-porte-titulo">Por porte do cliente</span> <span class="hint">clique para detalhar</span></div>
-        <div class="card-body"><div class="chart-wrap"><canvas id="chart-porte"></canvas></div></div>
+        <div class="card-header"><div class="card-titulo"><h2 id="chart-porte-titulo">Por porte da empresa</h2> <span class="hint">Valor contratado. Clique numa barra para ver as operações.</span></div></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chart-porte" aria-label="Valor contratado por porte da empresa"></canvas></div></div>
       </div>
     </div>
   </section>
@@ -569,14 +603,28 @@
 
 </main>
 
-<!-- Nota de fonte do BNB (decisao do usuario 2026-09-24): discreta, todas as abas.
-     Data preenchida por common.js a partir de /api/status (bnb_fonte_atualizada_em). -->
-<footer class="nota-fontes" id="nota-fontes">
-  Dados do BNB: operações de pessoas jurídicas acima de R$ 1 milhão publicadas pelo Banco do
-  Nordeste no painel
-  <a href="https://www.bnb.gov.br/acesso-a-informacao/dados-de-contratacoes/consulta-de-operacoes-de-credito" target="_blank" rel="noopener noreferrer">Consulta de Operações de Crédito</a>
-  (FNE e outros fundos), desde 2016<span id="nota-bnb-data"></span>. O painel não reúne todas as
-  operações contratadas pelo banco. Nomes de MEI publicados com CPF tiveram o CPF removido (LGPD).
+<!-- Rodape com as fontes dos dados. Data do BNB preenchida por common.js a partir
+     de /api/status (bnb_fonte_atualizada_em). URLs = as mesmas usadas pelo pipeline
+     (src/download.py, src/finep_editais.py, src/bnb.py). -->
+<footer class="rodape">
+  <div class="rodape-inner">
+    <div class="rodape-marca">
+      <img src="/img/logo-artica.png" alt="Ártica" class="rodape-logo">
+      <p>Radar de Crédito Incentivado. Dados públicos organizados pela Ártica para análise de mercado. Não é oferta de crédito.</p>
+    </div>
+    <div class="rodape-fontes">
+      <h2>Fontes dos dados</h2>
+      <ul>
+        <li>BNDES: <a href="https://www.bndes.gov.br/arquivos/central-downloads/operacoes_financiamento/naoautomaticas/naoautomaticas.xlsx" rel="noopener noreferrer">planilha pública de operações de financiamento não automáticas</a>.</li>
+        <li>FINEP: <a href="https://download.finep.gov.br/Contratacao.xlsx" rel="noopener noreferrer">planilha pública de contratações</a> e <a href="https://www.finep.gov.br/oportunidades" target="_blank" rel="noopener noreferrer">chamadas públicas</a>.</li>
+        <li id="nota-fontes" class="nota-fontes">BNB: operações de pessoas jurídicas acima de R$ 1 milhão publicadas pelo Banco do Nordeste no painel
+          <a href="https://www.bnb.gov.br/acesso-a-informacao/dados-de-contratacoes/consulta-de-operacoes-de-credito" target="_blank" rel="noopener noreferrer">Consulta de Operações de Crédito</a>
+          (FNE e outros fundos), desde 2016<span id="nota-bnb-data"></span>. O painel não reúne todas as
+          operações contratadas pelo banco. Nomes de MEI publicados com CPF tiveram o CPF removido (LGPD).</li>
+        <li>Receita Federal: CNAE, porte, UF e município das empresas, pelo CNPJ (<a href="https://arquivos.receitafederal.gov.br/" target="_blank" rel="noopener noreferrer">dados abertos do CNPJ</a>).</li>
+      </ul>
+    </div>
+  </div>
 </footer>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -596,8 +644,8 @@
            common.js::_configurarBotaoFavoritar. Publico NUNCA ve este botao (o
            backend so devolve "salva"/"nota" em GET /api/operacoes/{id} pra quem e'
            staff -- ver webapp/main.py::operacao_detalhe). -->
-      <button class="fav-btn hidden" id="modal-favoritar-btn" title="Salvar operação (Equipe Ártica)">☆ Salvar</button>
-      <button class="fav-btn" id="modal-copiar-link-btn" style="display:none;" title="Copiar link direto para esta operação">🔗 Copiar link</button>
+      <button class="fav-btn hidden" id="modal-favoritar-btn" title="Salvar operação (Equipe Ártica)">Salvar</button>
+      <button class="fav-btn" id="modal-copiar-link-btn" style="display:none;" title="Copiar link direto para esta operação">Copiar link</button>
       <button type="button" class="close-btn" id="modal-close" aria-label="Fechar" title="Fechar">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>

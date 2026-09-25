@@ -21,7 +21,7 @@ function trendListItem(row, sinal, dataAttr) {
   const label = row.setor || row.subsetor || row.segmento;
   return `<li data-${dataAttr}="${esc(label)}">
     <span>${esc(label)}</span>
-    <span class="badge ${badgeClass}">${seta} ${Math.abs(Number(row.variacao_pp) || 0).toFixed(1)} p.p.</span>
+    <span class="badge ${badgeClass}">${seta} ${Math.abs(Number(row.variacao_pp) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} p.p.</span>
   </li>`;
 }
 
