@@ -63,6 +63,20 @@ class _PooledConnection:
         setattr(self._conn, name, value)
 
 
+
+def _env_url(nome: str) -> str | None:
+    """Le uma URL de banco do ambiente tolerando erro comum de colagem no painel
+    da Vercel: linha inteira do .env ("DATABASE_URL=postgres://..."), aspas ou
+    espacos/quebra de linha nas pontas."""
+    valor = os.environ.get(nome)
+    if not valor:
+        return None
+    valor = valor.strip().strip('"').strip("'").strip()
+    for prefixo in ("DATABASE_URL_POOLER=", "DATABASE_URL="):
+        if valor.startswith(prefixo):
+            valor = valor[len(prefixo):].strip().strip('"').strip("'")
+    return valor or None
+
 def _get_pool():
     """Pool de conexoes de verdade para a webapp (`get_connection(pooled=True)`) --
     resolve o problema real de "max clients"/"remaining connection slots" que ja
@@ -111,7 +125,7 @@ def _get_pool():
     if _POOL is None:
         from psycopg_pool import ConnectionPool
 
-        database_url = os.environ.get("DATABASE_URL_POOLER") or os.environ.get("DATABASE_URL")
+        database_url = _env_url("DATABASE_URL_POOLER") or _env_url("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
         # Incidente 2026-09-23 ("remaining connection slots"): 12 conexoes ociosas de
@@ -165,7 +179,7 @@ def get_connection(pooled: bool = False):
             import time
             time.sleep(0.5)
             return _PooledConnection(pool, pool.getconn())
-    database_url = os.environ.get("DATABASE_URL")
+    database_url = _env_url("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL nao configurada. Defina essa variavel de ambiente com a "
@@ -195,7 +209,7 @@ def get_engine():
     if _ENGINE is None:
         from sqlalchemy import create_engine
 
-        database_url = os.environ.get("DATABASE_URL")
+        database_url = _env_url("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL nao configurada.")
         # SQLAlchemy precisa do dialeto explicito ("+psycopg") para usar o driver
